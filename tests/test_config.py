@@ -9,7 +9,9 @@ def test_defaults_without_environment() -> None:
 
     assert settings.llm_provider == "anthropic"
     assert settings.paperless_ref == "v3.4.2"
-    assert settings.paperless_api_url == "http://paperless:8000"
+    assert settings.paperless_api_url == "http://localhost:8000"
+    assert settings.qdrant_url == "http://localhost:6333"
+    assert settings.embedding_model == "voyage-4"
     assert settings.engineer_telegram_ids == frozenset()
     assert settings.escalation_chat_id is None
     assert settings.llm_api_key.get_secret_value() == ""

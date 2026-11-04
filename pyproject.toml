@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.162.0",
     "httpx2>=2.16.0",
     "pydantic-settings>=2.7",
+    "qdrant-client>=1.20.0",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -54,4 +55,6 @@ plugins = ["pydantic.mypy"]
 testpaths = ["tests"]
 # "." — чтобы тесты импортировали пакет evals из корня репозитория.
 pythonpath = ["scripts", "."]
+# Локальный режим Qdrant в тестах предупреждает, что payload-индексы в нём не работают.
+filterwarnings = ["ignore:Payload indexes have no effect in the local Qdrant"]
 addopts = "-ra --strict-markers"

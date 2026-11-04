@@ -32,12 +32,13 @@ class Settings(BaseSettings):
     embedding_model: str = "voyage-4"
     voyage_api_key: SecretStr = SecretStr("")
     voyage_api_url: str = "https://ai.mongodb.com/v1"
-    qdrant_url: str = "http://qdrant:6333"
+    # Умолчания рассчитаны на запуск с хоста; контейнеру ассистента адреса docker-сети задаёт compose.
+    qdrant_url: str = "http://localhost:6333"
     paperless_source_path: Path = Path("data/paperless-src")
     paperless_ref: str = "v3.4.2"
     paperless_repo_url: str = "https://github.com/MichaelZhdanov/paperless-ngx-rag"
     # Не PAPERLESS_URL: так называется переменная самого Paperless (его публичный адрес).
-    paperless_api_url: str = "http://paperless:8000"
+    paperless_api_url: str = "http://localhost:8000"
     paperless_token: SecretStr = SecretStr("")
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.

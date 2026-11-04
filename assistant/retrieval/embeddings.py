@@ -29,6 +29,7 @@ InputType = Literal["query", "document"]
 
 class Embedder(Protocol):
     model: str
+    stats: EmbeddingStats
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
 

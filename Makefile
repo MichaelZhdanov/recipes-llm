@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down test lint format
+.PHONY: help up down index test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -23,6 +23,14 @@ up: .env ## поднять Paperless, Valkey, Qdrant и ассистента
 
 down: ## остановить стек (данные в томах Docker сохраняются)
 	docker compose down
+
+# Утилиты ассистента работают на хосте через uv: им нужен только Qdrant из стека.
+# --env-file .env отдаёт им ключи; переменная из shell перекрывает значение из файла.
+RUN = uv run --env-file .env python -m assistant.cli
+
+index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги Voyage, Qdrant
+	docker compose up -d --wait qdrant
+	$(RUN) index
 
 test: ## unit-тесты (pytest)
 	uv run pytest

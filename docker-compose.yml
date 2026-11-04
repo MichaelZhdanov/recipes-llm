@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
-    # Все поля assistant/config.py. Пустое значение означает значение по умолчанию.
+    # Все поля assistant/config.py. Пустое значение означает значение по умолчанию из config.py.
     # Секрета Paperless и пароля администратора здесь нет: ассистенту они не нужны.
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
@@ -70,11 +70,12 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       VOYAGE_API_URL: ${VOYAGE_API_URL:-}
-      QDRANT_URL: ${QDRANT_URL:-}
+      # Адреса внутри docker-сети: единственные переменные ассистента не из .env.
+      QDRANT_URL: http://qdrant:6333
       PAPERLESS_SOURCE_PATH: ${PAPERLESS_SOURCE_PATH:-}
       PAPERLESS_REF: ${PAPERLESS_REF:-}
       PAPERLESS_REPO_URL: ${PAPERLESS_REPO_URL:-}
-      PAPERLESS_API_URL: ${PAPERLESS_API_URL:-}
+      PAPERLESS_API_URL: http://paperless:8000
       PAPERLESS_TOKEN: ${PAPERLESS_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
