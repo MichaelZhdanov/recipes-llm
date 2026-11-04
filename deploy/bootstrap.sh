@@ -4,13 +4,18 @@
 #   sudo bash bootstrap.sh <домен> <e-mail для Let's Encrypt> <файл публичного ключа деплоя>
 #
 # До запуска: A-запись домена указывает на сервер, порты 80 и 443 открыты.
-# Ключ деплоя создаётся на своей машине: ssh-keygen -t ed25519 -f deploy_key -N ''
-# (deploy_key.pub — сюда, deploy_key — в секрет GitHub DEPLOY_SSH_KEY).
+# Ключ деплоя — отдельный, только для GitHub Actions: ssh-keygen -t ed25519 -f ops -N ''
+# (ops.pub — сюда, ops — в секрет GitHub DEPLOY_SSH_KEY). Не тот ключ, которым
+# заходят на сервер руками: скрипт это проверяет.
+#
+# Деплой идёт от root (решение автора). Поэтому строка ключа деплоя в
+# /root/.ssh/authorized_keys ограничена одной командой, а сам файл только
+# дописывается: остальные ключи root не трогаются.
 #
 # Что делает:
 # 1. ставит Docker (из официального apt-репозитория Docker), nginx, certbot;
 # 2. берёт uv той же версии, что в Dockerfile, из того же образа;
-# 3. заводит пользователя deploy и клонирует репозиторий в /opt/paperless-assistant;
+# 3. клонирует репозиторий в /opt/paperless-assistant;
 # 4. разрешает ключу деплоя только deploy/deploy.sh (forced command);
 # 5. создаёт .env со случайными секретами;
 # 6. настраивает nginx и получает сертификат Let's Encrypt;
@@ -24,6 +29,8 @@ REPO_URL=https://github.com/MichaelZhdanov/paperless-assistant.git
 # Тот же образ, что в Dockerfile и Makefile (tests/test_deploy.py это проверяет).
 UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
 SITE=/etc/nginx/sites-available/paperless-assistant
+# Переменная, а не константа в функции: тест подставляет временный файл.
+AUTHORIZED_KEYS=/root/.ssh/authorized_keys
 
 main() {
     if [[ $# -ne 3 ]]; then
@@ -64,26 +71,14 @@ main() {
         docker rm "$container" >/dev/null
     fi
 
-    echo "== 3. пользователь deploy и репозиторий"
-    id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/bash deploy
-    # Группа docker — это фактически root на сервере. Поэтому ключ деплоя
-    # ограничен одной командой (шаг 4), а пароля у deploy нет.
-    usermod -aG docker deploy
-    if [[ ! -d "$APP_DIR/.git" ]]; then
-        install -d -o deploy -g deploy "$APP_DIR"
-        sudo -u deploy git clone --quiet "$REPO_URL" "$APP_DIR"
-    fi
+    echo "== 3. репозиторий"
+    [[ -d "$APP_DIR/.git" ]] || git clone --quiet "$REPO_URL" "$APP_DIR"
 
     echo "== 4. ключ деплоя: только deploy/deploy.sh"
-    local ssh_dir=/home/deploy/.ssh
-    install -d -m 700 -o deploy -g deploy "$ssh_dir"
-    # restrict: без пробросов портов, агента, X11 и терминала.
-    echo "restrict,command=\"$APP_DIR/deploy/deploy.sh\" $key" >"$ssh_dir/authorized_keys"
-    chown deploy:deploy "$ssh_dir/authorized_keys"
-    chmod 600 "$ssh_dir/authorized_keys"
+    add_deploy_key "$key"
 
     echo "== 5. .env со случайными секретами"
-    sudo -u deploy make -C "$APP_DIR" --no-print-directory .env
+    make -C "$APP_DIR" --no-print-directory .env
     local port
     port="$(grep -s '^ASSISTANT_PORT=' "$APP_DIR/.env" | cut -d= -f2 | tr -d "'\"" || true)"
 
@@ -109,7 +104,7 @@ main() {
     cat <<DONE
 
 Готово. Осталось:
-1. Вписать ключи API в $APP_DIR/.env (sudo -u deploy nano $APP_DIR/.env):
+1. Вписать ключи API в $APP_DIR/.env (nano $APP_DIR/.env):
    CLOUD_RU_API_KEY, GIGACHAT_API_KEY. NO_AUTH должен остаться 0.
 2. В GitHub → Settings → Environments → production:
    секреты DEPLOY_HOST=$domain, DEPLOY_SSH_KEY (приватный ключ деплоя),
@@ -121,4 +116,32 @@ main() {
 DONE
 }
 
-main "$@"
+# Строка ключа деплоя в authorized_keys root. Дописывается, а не перезаписывает
+# файл. Если тот же ключ уже стоит без ограничения, это ключ для ручного входа:
+# в GitHub он дал бы полный root, поэтому скрипт останавливается.
+add_deploy_key() {
+    local key="$1" body line
+    body="$(cut -d' ' -f2 <<<"$key")"
+    install -d -m 700 "$(dirname "$AUTHORIZED_KEYS")"
+    touch "$AUTHORIZED_KEYS"
+    chmod 600 "$AUTHORIZED_KEYS"
+    # restrict: без пробросов портов, агента, X11 и терминала.
+    line="restrict,command=\"$APP_DIR/deploy/deploy.sh\" $key"
+    if grep -qxF "$line" "$AUTHORIZED_KEYS"; then
+        echo "ключ деплоя уже добавлен"
+        return
+    fi
+    if grep -qF "$body" "$AUTHORIZED_KEYS"; then
+        echo "этот ключ уже есть в $AUTHORIZED_KEYS без ограничения: им заходят на сервер." >&2
+        echo "Для деплоя нужен отдельный ключ: ssh-keygen -t ed25519 -f ops -N ''" >&2
+        exit 2
+    fi
+    # Файл мог кончаться без перевода строки: тогда ключ склеился бы с последним.
+    [[ ! -s "$AUTHORIZED_KEYS" || -z "$(tail -c 1 "$AUTHORIZED_KEYS")" ]] || echo >>"$AUTHORIZED_KEYS"
+    echo "$line" >>"$AUTHORIZED_KEYS"
+}
+
+# main — только при запуске файла; при source (в тесте) доступны одни функции.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

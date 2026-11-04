@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=deploy
+# Деплой и таймер идут от root (решение автора): тот же владелец файлов, что у deploy.sh.
+User=root
 WorkingDirectory=/opt/paperless-assistant
 ExecStart=/opt/paperless-assistant/deploy/refresh.sh

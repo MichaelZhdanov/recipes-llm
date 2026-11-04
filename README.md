@@ -218,7 +218,7 @@ curl -s -b jar -X POST localhost:8080/ask -H 'Content-Type: application/json' \
 
 ```
 git push main / Actions → CI → Run workflow
-  └─ check (lint, тесты, сборка) ─► deploy: ssh deploy@сервер "deploy <SHA>"
+  └─ check (lint, тесты, сборка) ─► deploy: ssh root@сервер "deploy <SHA>"
         └─ deploy/deploy.sh: логин и пароль → .env, git checkout <SHA>, make up,
            исходники Paperless и индекс, если их нет, проверка /health
 
@@ -230,15 +230,21 @@ systemd-таймер раз в сутки ─► deploy/refresh.sh: исходн
 
 **Один раз на сервере** (Ubuntu или Debian, A-запись домена уже указывает на сервер, порты 22, 80 и 443 открыты):
 
-1. На своей машине создать ключ деплоя: `ssh-keygen -t ed25519 -f deploy_key -N ''`. Скопировать `deploy_key.pub` на сервер.
-2. На сервере: `sudo bash bootstrap.sh <домен> <e-mail> deploy_key.pub`, скрипт — [`deploy/bootstrap.sh`](deploy/bootstrap.sh). Он ставит Docker, nginx и certbot, заводит пользователя `deploy`, клонирует репозиторий в `/opt/paperless-assistant`, создаёт `.env`, получает сертификат и включает таймер. В конце печатает строку для `DEPLOY_KNOWN_HOSTS`.
+1. На своей машине создать отдельный ключ деплоя, не тот, которым заходишь на сервер: `ssh-keygen -t ed25519 -f ops -N ''`. Файлы `ops` и `ops.pub` в `.gitignore`. Скопировать на сервер `ops.pub` и `deploy/bootstrap.sh`.
+2. На сервере от root: `bash bootstrap.sh <домен> <e-mail> ops.pub`, скрипт — [`deploy/bootstrap.sh`](deploy/bootstrap.sh). Он:
+   - ставит Docker, nginx и certbot;
+   - клонирует репозиторий в `/opt/paperless-assistant`;
+   - дописывает ключ деплоя в `/root/.ssh/authorized_keys`, остальные ключи не трогает;
+   - создаёт `.env`, получает сертификат и включает таймер.
+
+   В конце печатает строку для `DEPLOY_KNOWN_HOSTS`.
 3. Вписать ключи API в `/opt/paperless-assistant/.env`: `CLOUD_RU_API_KEY` и `GIGACHAT_API_KEY`. В GitHub они не хранятся.
 4. В GitHub → Settings → Environments → `production` завести:
 
    | Что | Имя | Значение |
    |---|---|---|
    | секрет | `DEPLOY_HOST` | домен сервера |
-   | секрет | `DEPLOY_SSH_KEY` | содержимое `deploy_key` |
+   | секрет | `DEPLOY_SSH_KEY` | содержимое `ops`, целиком, вместе со строками `-----BEGIN…` и `-----END…` |
    | секрет | `DEPLOY_KNOWN_HOSTS` | строка, которую напечатал bootstrap |
    | секрет | `WEB_PASSWORD` | пароль входа в чат |
    | переменная | `WEB_LOGIN` | логин входа, по умолчанию `admin` |
@@ -246,7 +252,9 @@ systemd-таймер раз в сутки ─► deploy/refresh.sh: исходн
 5. Push в `main` или Actions → CI → Run workflow. Первый деплой строит индекс: около 27 ₽ на cloud.ru и пара минут.
 
 Почему так:
-- **Ключ деплоя ограничен одной командой.** В `authorized_keys` стоят `restrict,command="…/deploy.sh"`. Даже если ключ утечёт из GitHub, по нему можно только задеплоить коммит из `main`: shell, проброса портов и других команд нет. Это важно, потому что пользователь `deploy` в группе docker, а это фактически root.
+- **Деплой идёт от root, но ключ деплоя ограничен одной командой.** В `authorized_keys` у этого ключа стоят `restrict,command="…/deploy.sh"`. Даже если ключ утечёт из GitHub, по нему можно только задеплоить коммит из `main`: shell, проброса портов и других команд нет.
+  - Если тот же ключ уже записан у root без ограничения, `bootstrap.sh` останавливается: такой ключ в GitHub дал бы полный root.
+  - Отдельный пользователь не дал бы большой разницы: доступ к Docker — это фактически root.
 - **На сервер едет ровно тот SHA, который прошёл проверку,** а не «последний main на момент деплоя».
 - **Пароль входа уходит через stdin ssh,** а не аргументом команды: аргументы на сервере видны в `ps`. `scripts/set_env.py` пишет в `.env` только `WEB_LOGIN` и `WEB_PASSWORD`.
 - **Таймер следит только за текущим тегом** `PAPERLESS_REF`: скачивает исходники и строит индекс, если их нет. Новые релизы Paperless не подхватываются сами: тег меняется осознанно, вместе с прогоном eval.

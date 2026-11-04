@@ -77,4 +77,46 @@ def test_paths_agree_between_bootstrap_and_systemd() -> None:
     assert app_dir
     assert f"ExecStart={app_dir[1]}/deploy/refresh.sh" in service
     assert f"WorkingDirectory={app_dir[1]}" in service
-    assert "User=deploy" in service
+    assert "User=root" in service
+
+
+DEPLOY_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeployKeyDeployKeyDeployKeyDeployKey00 ops@bypass"
+ADMIN_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAdminKeyAdminKeyAdminKeyAdminKeyAdmin0 me@laptop"
+
+
+def add_deploy_key(authorized_keys: Path, key: str) -> subprocess.CompletedProcess[str]:
+    script = (
+        f'source "{DEPLOY / "bootstrap.sh"}"; '
+        f'AUTHORIZED_KEYS="{authorized_keys}"; add_deploy_key "$1"'
+    )
+    return subprocess.run(
+        ["bash", "-c", script, "bash", key], capture_output=True, text=True, check=False
+    )
+
+
+def test_deploy_key_is_appended_and_root_keys_stay(tmp_path: Path) -> None:
+    """Деплой идёт от root: перезаписать authorized_keys — значит закрыть себе вход."""
+    keys = tmp_path / ".ssh" / "authorized_keys"
+    keys.parent.mkdir()
+    keys.write_text(ADMIN_KEY)  # без перевода строки в конце
+
+    for _ in range(2):  # повторный запуск bootstrap ничего не дублирует
+        assert add_deploy_key(keys, DEPLOY_KEY).returncode == 0
+
+    lines = keys.read_text().splitlines()
+    assert lines == [
+        ADMIN_KEY,
+        f'restrict,command="/opt/paperless-assistant/deploy/deploy.sh" {DEPLOY_KEY}',
+    ]
+
+
+def test_key_that_already_gives_root_shell_is_refused(tmp_path: Path) -> None:
+    """Ключ для ручного входа в GitHub дал бы полный root: скрипт останавливается."""
+    keys = tmp_path / "authorized_keys"
+    keys.write_text(DEPLOY_KEY + "\n")
+
+    result = add_deploy_key(keys, DEPLOY_KEY)
+
+    assert result.returncode == 2
+    assert "отдельный ключ" in result.stderr
+    assert keys.read_text() == DEPLOY_KEY + "\n"

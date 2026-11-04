@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Деплой на сервере. Это forced command ключа деплоя в authorized_keys
-# пользователя deploy: по этому ключу нельзя выполнить ничего другого.
+# root: по этому ключу нельзя выполнить ничего другого.
 #
 # GitHub Actions вызывает его так:
-#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … | ssh deploy@<сервер> "deploy <sha>"
+#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … | ssh root@<сервер> "deploy <sha>"
 # Команда приходит в SSH_ORIGINAL_COMMAND, логин и пароль — в stdin:
 # аргументы видны в списке процессов, stdin — нет.
 #
