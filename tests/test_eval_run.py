@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
 from eval_helpers import case, result
 
+from assistant.config import Settings
 from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement
 from evals.answer_metrics import AnswerCase, AnswerRun
@@ -68,3 +70,27 @@ def test_rescore_report_name_has_one_date() -> None:
         == "gigachat-2-pro-rescore"
     )
     assert rescore_label(Path("raw/2026-11-04.json")) == "rescore"
+
+
+def test_revision_is_taken_before_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Правки во время долгого прогона не должны попасть в шапку его отчёта."""
+    import evals.run as run
+
+    calls: list[str] = []
+
+    def revision() -> str:
+        calls.append("revision")
+        return "abc"
+
+    monkeypatch.setattr(run, "git_revision", revision)
+
+    def stop(*_: object, **__: object) -> None:
+        calls.append("cases")
+        raise SystemExit
+
+    monkeypatch.setattr(run, "load_cases", stop)
+
+    with pytest.raises(SystemExit):
+        run._answer_stage(Settings(), 1, None, False, "dev")
+
+    assert calls == ["revision", "cases"]

@@ -252,6 +252,9 @@ def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
 
 
 def _retrieval_stage(settings: Settings, runs: int, label: str | None) -> int:
+    # Коммит запоминается до прогона: правки во время долгого прогона
+    # не должны попасть в его отчёт.
+    revision = git_revision()
     cases = [c for c in load_cases() if c.category in RETRIEVAL_CATEGORIES]
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
@@ -265,7 +268,7 @@ def _retrieval_stage(settings: Settings, runs: int, label: str | None) -> int:
     report = render_report(
         results,
         manifest=retriever.manifest,
-        revision=git_revision(),
+        revision=revision,
         provider=embedder.provider.name,
         query_template=embedder.query_template,
         stats=embedder.stats,
@@ -313,6 +316,7 @@ def _finish(
 def _answer_stage(
     settings: Settings, runs: int, label: str | None, judge: bool, split: str
 ) -> int:
+    revision = git_revision()
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
     cases = [c for c in load_cases(directory) if c.category in ANSWER_CATEGORIES]
     model = llm_model(settings)
@@ -330,7 +334,7 @@ def _answer_stage(
 
     meta = RunMeta(
         manifest=retriever.manifest,
-        revision=git_revision(),
+        revision=revision,
         provider=embedder.provider.name,
         query_template=embedder.query_template,
         embedding_stats=embedder.stats,
@@ -351,10 +355,11 @@ def rescore_label(raw_path: Path) -> str:
 
 def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool) -> int:
     """Метрики заново по сохранённым ответам модели: без генерации, ссылки — текущим кодом."""
+    revision = git_revision()
     data = json.loads(raw_path.read_text(encoding="utf-8"))
     cases = {c.id: c for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
     results = load_answer_cases(data["records"], cases)
-    meta = load_meta(data["meta"], revision=git_revision(), rescored_from=str(raw_path))
+    meta = load_meta(data["meta"], revision=revision, rescored_from=str(raw_path))
     judging = None
     if judge:
         with make_http_client() as llm_http:
