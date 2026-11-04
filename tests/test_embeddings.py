@@ -47,7 +47,7 @@ def make(
     return VoyageEmbedder(
         api_key=SecretStr(key),
         model="voyage-4",
-        base_url="https://ai.mongodb.com/v1/",
+        base_url="https://api.voyageai.com/v1/",
         client=httpx2.Client(transport=httpx2.MockTransport(fake)),
         sleep=(sleeps.append if sleeps is not None else lambda _: None),
     )
@@ -76,7 +76,7 @@ def test_request_shape_and_auth_header() -> None:
     make(fake).embed_documents(["a", "b"])
 
     request = fake.requests[0]
-    assert str(request.url) == "https://ai.mongodb.com/v1/embeddings"
+    assert str(request.url) == "https://api.voyageai.com/v1/embeddings"
     assert request.headers["Authorization"] == f"Bearer {KEY}"
     assert fake.bodies()[0] == {
         "input": ["a", "b"],
@@ -124,13 +124,26 @@ def test_rate_limit_is_retried_after_retry_after() -> None:
     assert sleeps == [3.0]
 
 
-def test_api_error_is_clear_and_does_not_leak_key() -> None:
-    fake = FakeVoyage(statuses=[401])
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_error_is_clear_and_does_not_leak_key(status: int) -> None:
+    fake = FakeVoyage(statuses=[status])
 
-    with pytest.raises(EmbeddingError, match="HTTP 401") as error:
+    with pytest.raises(EmbeddingError, match=f"HTTP {status}") as error:
         make(fake).embed_query("x")
 
+    # 403 бывает, когда ключ из одного кабинета, а адрес от другого.
+    assert "VOYAGE_API_URL" in str(error.value)
+    assert "ai.mongodb.com" in str(error.value)
     assert KEY not in str(error.value)
+
+
+def test_other_errors_have_no_auth_hint() -> None:
+    fake = FakeVoyage(statuses=[400])
+
+    with pytest.raises(EmbeddingError, match="HTTP 400") as error:
+        make(fake).embed_query("x")
+
+    assert "VOYAGE_API_URL" not in str(error.value)
 
 
 def test_missing_key_gives_clear_error() -> None:

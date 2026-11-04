@@ -15,6 +15,12 @@ LlmProvider = Literal["anthropic", "openai", "gigachat", "yandexgpt", "local"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
+# Адреса API Voyage для ключей из dash.voyageai.com и из MongoDB Atlas.
+# Ключ, отправленный не на свой адрес, получает 403.
+VOYAGE_API_URL = "https://api.voyageai.com/v1"
+VOYAGE_ATLAS_API_URL = "https://ai.mongodb.com/v1"
+
+
 class Settings(BaseSettings):
     """Все настройки сервиса. Секреты хранятся как SecretStr и не видны в repr и логах."""
 
@@ -28,10 +34,10 @@ class Settings(BaseSettings):
     llm_provider: LlmProvider = "anthropic"
     llm_model: str = ""
     llm_api_key: SecretStr = SecretStr("")
-    # Эмбеддинги Voyage AI; ключ создаётся в MongoDB Atlas → AI Model APIs.
+    # Эмбеддинги Voyage AI; адрес должен соответствовать кабинету, где создан ключ.
     embedding_model: str = "voyage-4"
     voyage_api_key: SecretStr = SecretStr("")
-    voyage_api_url: str = "https://ai.mongodb.com/v1"
+    voyage_api_url: str = VOYAGE_API_URL
     # Умолчания рассчитаны на запуск с хоста; контейнеру ассистента адреса docker-сети задаёт compose.
     qdrant_url: str = "http://localhost:6333"
     paperless_source_path: Path = Path("data/paperless-src")

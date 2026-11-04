@@ -20,11 +20,18 @@ from typing import Literal, Protocol
 import httpx2
 from pydantic import SecretStr
 
-from assistant.config import Settings
+from assistant.config import VOYAGE_API_URL, VOYAGE_ATLAS_API_URL, Settings
 from assistant.http import request_with_retries
 from assistant.security.pii import mask_pii
 
 InputType = Literal["query", "document"]
+
+# Ключ из одного кабинета на адресе другого даёт 403: подсказываем, что проверить.
+AUTH_STATUSES = frozenset({401, 403})
+AUTH_HINT = (
+    ". Проверьте VOYAGE_API_KEY и VOYAGE_API_URL: ключи dash.voyageai.com работают "
+    f"с {VOYAGE_API_URL}, ключи MongoDB Atlas — с {VOYAGE_ATLAS_API_URL}"
+)
 
 
 class Embedder(Protocol):
@@ -79,7 +86,7 @@ class VoyageEmbedder:
     ) -> None:
         if not api_key.get_secret_value():
             raise EmbeddingError(
-                "не задан VOYAGE_API_KEY: создайте ключ в MongoDB Atlas → AI Model APIs "
+                "не задан VOYAGE_API_KEY: создайте ключ на dash.voyageai.com "
                 "и добавьте строку VOYAGE_API_KEY=… в .env"
             )
         self.model = model
@@ -116,9 +123,12 @@ class VoyageEmbedder:
         self.stats.requests += 1
         if response.status_code != 200:
             # Тело ответа обрезаем: нам нужна причина, а не простыня.
-            raise EmbeddingError(
+            message = (
                 f"Voyage ответил HTTP {response.status_code}: {response.text[:300]}"
             )
+            if response.status_code in AUTH_STATUSES:
+                message += AUTH_HINT
+            raise EmbeddingError(message)
         data = response.json()
         items = sorted(data["data"], key=lambda item: item["index"])
         if len(items) != len(inputs):
