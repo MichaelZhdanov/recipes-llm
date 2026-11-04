@@ -16,6 +16,8 @@ ChunkKind = Literal["doc", "code"]
 
 # site_url из zensical.toml на v3.4.2.
 DOCS_SITE_URL = "https://docs.paperless-ngx.com/"
+# История изменений: записи о версиях, а не описание текущего состояния.
+CHANGELOG_PATH = "docs/changelog.md"
 
 
 class Chunk(BaseModel):

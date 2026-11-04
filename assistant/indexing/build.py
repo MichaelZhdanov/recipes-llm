@@ -15,7 +15,7 @@ import httpx2
 
 from assistant import __version__
 from assistant.config import Settings
-from assistant.indexing.chunks import Chunk
+from assistant.indexing.chunks import CHANGELOG_PATH, Chunk
 from assistant.indexing.code import chunk_code, message_coverage
 from assistant.indexing.docs import chunk_docs
 from assistant.indexing.sources import SourceTree, ensure_sources
@@ -56,7 +56,7 @@ def estimate_cost(model: str, tokens: int) -> str | None:
 
 def chunk_kind(chunk: Chunk) -> str:
     """Для статистики changelog считается отдельно: это больше половины кусков документации."""
-    if chunk.path == "docs/changelog.md":
+    if chunk.path == CHANGELOG_PATH:
         return "changelog"
     return chunk.kind
 
