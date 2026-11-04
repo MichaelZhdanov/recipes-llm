@@ -112,16 +112,18 @@ DEFAULT_MODELS: dict[EmbeddingProvider, str] = {
     "voyage": "voyage-4",
 }
 
-# Instruct-модели лучше ищут, если к вопросу дописать задачу; документы
-# кодируются без неё. Формат — из карточек моделей на Hugging Face.
-# Voyage вместо этого получает input_type, у bge-m3 инструкции нет.
+# Instruct-модели могут лучше искать, если к вопросу дописать задачу;
+# документы кодируются без неё. Формат — из карточки модели на Hugging Face,
+# а включается инструкция, только если помогает на eval. Qwen3-Embedding
+# на cloud.ru с инструкцией из своей карточки ищет хуже, чем без неё
+# (recall@5 0.35 против 0.75), поэтому его вопрос уходит как есть.
+# Voyage вместо инструкции получает input_type.
 RETRIEVAL_TASK = (
     "Given a user question about Paperless-ngx, "
     "retrieve documentation sections or source code that answer it"
 )
 _QUERY_TEMPLATES = {
     "ai-sage/Giga-Embeddings-instruct": "Instruct: {task}\nQuery: {query}",
-    "Qwen/Qwen3-Embedding": "Instruct: {task}\nQuery:{query}",
 }
 
 

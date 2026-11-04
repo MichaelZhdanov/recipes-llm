@@ -211,7 +211,7 @@ def test_cloudru_documents_go_without_instruction() -> None:
     ("model", "expected"),
     [
         ("ai-sage/Giga-Embeddings-instruct-480M", "Instruct: {task}\nQuery: {query}"),
-        ("Qwen/Qwen3-Embedding-0.6B", "Instruct: {task}\nQuery:{query}"),
+        ("Qwen/Qwen3-Embedding-0.6B", None),
         ("BAAI/bge-m3", None),
         ("voyage-4", None),
     ],
