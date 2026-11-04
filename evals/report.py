@@ -9,7 +9,7 @@ import math
 import statistics
 import subprocess
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -260,13 +260,14 @@ def answer_gates(
     if retrieval:
         recall = statistics.mean(recall_per_run(retrieval))
         gates["recall@5"] = recall >= THRESHOLDS["recall@5"]
-    gates |= {
-        "citation_accuracy": citation_accuracy(results).value
-        >= ANSWER_THRESHOLDS["citation_accuracy"],
-        "abstention": abstention(results).value >= ANSWER_THRESHOLDS["abstention"],
-        "false_refusal": false_refusal(results).value
-        <= ANSWER_THRESHOLDS["false_refusal"],
-    }
+    gates["citation_accuracy"] = (
+        citation_accuracy(results).value >= ANSWER_THRESHOLDS["citation_accuracy"]
+    )
+    # Прогон по части категорий (--categories): у метрики без кейсов порога нет.
+    if (abstain := abstention(results)).n:
+        gates["abstention"] = abstain.value >= ANSWER_THRESHOLDS["abstention"]
+    if (refusal := false_refusal(results)).n:
+        gates["false_refusal"] = refusal.value <= ANSWER_THRESHOLDS["false_refusal"]
     localization = error_localization(results)
     if localization.n:
         gates["error_localization"] = (
@@ -343,17 +344,38 @@ def _outcome_cell(run: AnswerRun) -> str:
     return "ответ" if run.answer.reason is None else run.answer.reason
 
 
-def _dataset_lines(split: str) -> list[str]:
+def _dataset_lines(split: str, categories: Iterable[str]) -> list[str]:
+    names = ", ".join(sorted(categories))
     if split == "holdout":
         return [
-            "Этап 2: ответы со ссылками на **отложенной выборке**",
-            "`evals/dataset/holdout/holdout.yaml`. Её прогоняют один раз, когда модель,",
-            "промпт и проверка уже выбраны на dev; кейсы писал независимый субагент.",
+            f"Ответы со ссылками на **отложенной выборке** (`evals/dataset/holdout/`): {names}.",
+            "Её прогоняют один раз, когда модель, промпт и проверка уже выбраны на dev.",
         ]
     return [
-        "Этап 2: ответы со ссылками. Наборы: `evals/dataset/howto_config.yaml` и",
-        "`out_of_scope.yaml`, их писали независимые субагенты (`evals/dataset/README.md`).",
+        f"Ответы со ссылками. Категории: {names}; наборы в `evals/dataset/`,",
+        "кто и как их составлял — `evals/dataset/README.md`.",
     ]
+
+
+def _prompts_cell(runs: Sequence[AnswerRun], default: str) -> str:
+    """Версии промптов из самих ответов: роутер выбирает промпт по типу вопроса."""
+    used = Counter(
+        f"`{run.answer.prompt_version}` ({run.answer.question_type})"
+        for run in runs
+        if run.answer.prompt_version
+    )
+    if not used:
+        return f"`{default}`"
+    return ", ".join(f"{name} — {n}" for name, n in sorted(used.items()))
+
+
+# Группы для таблиц исходов и score: только те, где есть кейсы.
+_GROUPS = (
+    ("howto, config", IN_SCOPE),
+    ("out_of_scope", frozenset({"out_of_scope"})),
+    ("error", frozenset({"error"})),
+    ("changelog", frozenset({"changelog"})),
+)
 
 
 def render_answer_report(
@@ -380,7 +402,7 @@ def render_answer_report(
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
         "",
-        *_dataset_lines(meta.split),
+        *_dataset_lines(meta.split, categories),
         "",
         "| Параметр | Значение |",
         "|---|---|",
@@ -398,7 +420,7 @@ def render_answer_report(
         f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
         f"| LLM | {llm_model}; по ответам API: {', '.join(api_models) or '—'} |",
         f"| Температура | {meta.temperature} (GigaChat не принимает 0) |",
-        f"| Промпт | `{meta.prompt_version}` |",
+        f"| Промпт | {_prompts_cell(runs, meta.prompt_version)} |",
         f"| Судья | {f'{judging.model}, рубрика `{judging.prompt_version}`' if judging else 'не запускался'} |",
         *_sample_row(meta.sample),
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
@@ -420,10 +442,22 @@ def render_answer_report(
         ),
         f"| citation accuracy | {accuracy} {_spread(per_run(results, citation_accuracy))} | "
         f"≥ {ANSWER_THRESHOLDS['citation_accuracy']:.2f} | {_status(gates['citation_accuracy'])} |",
-        f"| abstention (out_of_scope) | {abstain} {_spread(per_run(results, abstention))} | "
-        f"≥ {ANSWER_THRESHOLDS['abstention']:.2f} | {_status(gates['abstention'])} |",
-        f"| false refusal (howto, config) | {refusal} {_spread(per_run(results, false_refusal))} | "
-        f"≤ {ANSWER_THRESHOLDS['false_refusal']:.2f} | {_status(gates['false_refusal'])} |",
+        *(
+            [
+                f"| abstention (out_of_scope) | {abstain} {_spread(per_run(results, abstention))} | "
+                f"≥ {ANSWER_THRESHOLDS['abstention']:.2f} | {_status(gates['abstention'])} |"
+            ]
+            if "abstention" in gates
+            else []
+        ),
+        *(
+            [
+                f"| false refusal (howto, config) | {refusal} {_spread(per_run(results, false_refusal))} | "
+                f"≤ {ANSWER_THRESHOLDS['false_refusal']:.2f} | {_status(gates['false_refusal'])} |"
+            ]
+            if "false_refusal" in gates
+            else []
+        ),
         *_error_rows(results, gates),
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
@@ -453,11 +487,10 @@ def render_answer_report(
         "| Группа | ответ | model_not_found | filtered_out | format_error | blacklist | length |",
         "|---|---|---|---|---|---|---|",
     ]
-    for label, group in (
-        ("howto, config", IN_SCOPE),
-        ("out_of_scope", {"out_of_scope"}),
-    ):
+    for label, group in _GROUPS:
         counts = outcomes(results, group)
+        if not counts:
+            continue
         lines.append(
             f"| {label} | "
             + " | ".join(
@@ -483,10 +516,7 @@ def render_answer_report(
         "| Группа | min | медиана | max |",
         "|---|---|---|---|",
     ]
-    for label, group in (
-        ("howto, config", IN_SCOPE),
-        ("out_of_scope", {"out_of_scope"}),
-    ):
+    for label, group in _GROUPS:
         scores = top1_scores(results, group)
         if scores:
             lines.append(

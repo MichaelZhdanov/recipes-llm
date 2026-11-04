@@ -356,6 +356,7 @@ def error_run(
                 for n, (a, b) in enumerate(links, start=1)
             ],
             "question_type": question_type,
+            "prompt_version": "error_v1" if question_type == "error" else "answer_v1",
         }
     )
     return dataclasses.replace(
@@ -411,4 +412,15 @@ def test_report_with_only_error_cases_renders() -> None:
         "| error localization (ответ указывает на функцию с ошибкой) | 1.00 (1/1,"
         in report
     )
+    assert "Категории: error;" in report
+    assert "| Промпт | `error_v1` (error) — 1 |" in report
+    assert "| error | 1 |" in report
+    # Кейсов out_of_scope, howto и config нет — нет и их метрик с порогами.
+    assert "abstention (out_of_scope)" not in report
+    assert "false refusal" not in report
+    assert set(answer_gates(results)) == {
+        "recall@5",
+        "citation_accuracy",
+        "error_localization",
+    }
     assert answer_gates(results)["error_localization"] is True
