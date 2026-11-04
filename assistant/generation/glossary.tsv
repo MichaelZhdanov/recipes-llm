@@ -12,7 +12,7 @@ inbox tag	входящий тег	is inbox tag
 storage path	путь к хранилищу	storage path
 custom field	Пользовательское поле	custom field
 workflow	рабочий процесс	workflow
-trigger	пусковой механизм	workflow trigger	триггер рабочего процесса
+trigger	пусковой механизм	workflow trigger	в рабочем процессе (workflow trigger)
 matching algorithm	алгоритм сопоставления	matching algorithm
 archive serial number	архивный номер (АН)	archive serial number
 mail account	почтовый ящик	mail account

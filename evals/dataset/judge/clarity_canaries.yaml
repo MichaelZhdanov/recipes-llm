@@ -1,0 +1,80 @@
+# Канарейки для проверки модели-судьи (clear: грамотность текста ответа).
+# statement — утверждение на русском, как в ответе ассистента; quote — дословный фрагмент
+# документации Paperless-ngx v3.4.2 (переносы строк исходного markdown заменены пробелами).
+# Во всех записях смысл утверждения подтверждается фрагментом: оценивается только текст.
+# clear: false — смысл верный, но текст плохой (неверный перевод термина, грамматика,
+# обрывок разметки, непереведённый английский); судья должен это поймать.
+# clear: true — грамотно, термины по assistant/generation/glossary.tsv, имена параметров
+# в обратных кавычках.
+
+- id: clarity-001
+  statement: "По умолчанию документы хранятся в Docker-объёме `paperless_media`. Docker управляет этим объёмом сам, и данные в нём сохраняются, пока вы явно его не удалите."
+  quote: "By default, your documents are stored inside the docker volume `paperless_media`. Docker manages this volume automatically for you. It is a persistent storage and will persist as long as you don't explicitly delete it."
+  clear: false
+  notes: "Неверный перевод термина: «Docker-объём», «объёмом» вместо «том Docker» (глоссарий: volume → том). Остальной текст грамотный. docs/faq.md:19-22."
+
+- id: clarity-002
+  statement: "Сделайте резервную копию томов Docker: обычно они лежат на хосте в `/var/lib/docker/volumes`, а для доступа к ним нужны права root."
+  quote: "Backup the docker volumes. These usually reside within `/var/lib/docker/volumes` on the host and you need to be root in order to access them."
+  clear: true
+  notes: "Грамотно: «резервная копия» и «том» по глоссарию, путь в обратных кавычках. Пара к clarity-001 с тем же термином. docs/administration.md:32-34."
+
+- id: clarity-003
+  statement: "По умолчанию `PAPERLESS_CONSUMER_POLLING_INTERVAL` равен `0`, и Paperless узнаёт о новых файлах из уведомлений файловой системы. Если задать положительное число, Paperless будет опрашивать каталог потребления с этим интервалом в секундах; опрос нужен для сетевых файловых систем (NFS, SMB/CIFS), где уведомления могут работать ненадёжно."
+  quote: "When set to `0` (default), paperless uses native filesystem notifications for efficient, immediate detection of new files. When set to a positive number, paperless polls the consumption directory at that interval in seconds. Use polling for network filesystems (NFS, SMB/CIFS) where native notifications may not work reliably."
+  clear: false
+  notes: "Неверный перевод термина: «каталог потребления» — калька с consumption, по глоссарию «папка поступления» (consumption directory). Остальной текст грамотный, параметр в обратных кавычках. docs/configuration.md:1551-1553 (PAPERLESS_CONSUMER_POLLING_INTERVAL)."
+
+- id: clarity-004
+  statement: "В Docker не меняйте `PAPERLESS_CONSUMPTION_DIR`: параметр меняет путь только внутри контейнера. Чтобы сменить папку поступления на хосте, поправьте `docker-compose.yml`."
+  quote: "Don't change this when using docker, as it only changes the path within the container. Change the local consumption directory in the docker-compose.yml file instead."
+  clear: true
+  notes: "Грамотно: «папка поступления» и «контейнер» по глоссарию, параметр и имя файла в обратных кавычках. Пара к clarity-003 с тем же термином. docs/configuration.md:345-347 (PAPERLESS_CONSUMPTION_DIR)."
+
+- id: clarity-005
+  statement: "У рабочего процесса может быть несколько спусковых крючков и действий. Спусковой крючок — это событие (при необходимости с правилами фильтрации), которое запускает рабочий процесс, а действия применяются последовательно."
+  quote: "Workflows can have multiple 'triggers' and 'actions'. Triggers are events (with optional filtering rules) that will cause the workflow to be run and actions are the set of sequential actions to apply."
+  clear: false
+  notes: "Неверный перевод термина: «спусковой крючок» — буквальный перевод trigger, по глоссарию «пусковой механизм» (триггер рабочего процесса). «Рабочий процесс» переведён верно. docs/usage.md:484-486."
+
+- id: clarity-006
+  statement: 'Рабочие процессы и их действия применяются по порядку сортировки. For "assignment" actions, subsequent workflow actions will override previous assignments, кроме назначений с несколькими значениями: теги, пользовательские поля и права доступа объединяются.'
+  quote: 'In general, workflows and any actions they contain are applied sequentially by sort order. For "assignment" actions, subsequent workflow actions will override previous assignments, except for assignments that accept multiple items e.g. tags, custom fields and permissions, which will be merged.'
+  clear: false
+  notes: "Непереведённый кусок английского текста посреди русского предложения (про действия назначения). Термины в переведённых частях по глоссарию. docs/usage.md:488-490."
+
+- id: clarity-007
+  statement: "Ссылка для обмена открывается без входа в систему и ведёт прямо на файл или на архив для скачивания."
+  quote: "Share links do not require a user to login and thus link directly to a file or bundled download."
+  clear: true
+  notes: "Грамотно: «ссылка для обмена» по глоссарию (share link). docs/usage.md:357."
+
+- id: clarity-008
+  statement: "Выполните `docker compose pull`: по умолчанию команда скачивает изображение из реестра контейнеров GitHub. Чтобы скачивать его с Docker Hub, замените строку `image` на `image: paperlessngx/paperless-ngx:latest`."
+  quote: "Run `docker compose pull`. This pulls the image from the GitHub container registry by default, but you can pull from Docker Hub by changing the `image` line to `image: paperlessngx/paperless-ngx:latest`."
+  clear: false
+  notes: "Неуместный перевод термина: «изображение» вместо «образ» (глоссарий: image → образ Docker; «изображение» — только для скана). Команды и строки конфигурации в обратных кавычках, остальной текст грамотный. docs/setup.md:124-126."
+
+- id: clarity-009
+  statement: "!!! note Если Paperless работает за реверс-прокси вроде Traefik или Nginx на подпути, например example.com/paperlessngx, нужно также задать `PAPERLESS_FORCE_SCRIPT_NAME`."
+  quote: "When hosting paperless behind a reverse proxy like Traefik or Nginx at a subpath e.g. example.com/paperlessngx you will also need to set `PAPERLESS_FORCE_SCRIPT_NAME` (see above)."
+  clear: false
+  notes: "Обрывок разметки: в начале ответа осталась метка блока-примечания Zensical «!!! note» из исходного markdown. Сам текст грамотный, «реверс-прокси» и «подпуть» по глоссарию. docs/configuration.md:584-586 (примечание к PAPERLESS_STATIC_URL)."
+
+- id: clarity-010
+  statement: "Если включить `PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS`, Paperless при обработке назначит файлу теги по именам подкаталогов: например, файл `<CONSUMPTION_DIR>/foo/bar/file.pdf` получит теги «foo» и «bar». Теги, которых ещё нет, будут созданы автоматически."
+  quote: "Set the names of subdirectories as tags for consumed files. E.g. `<CONSUMPTION_DIR>/foo/bar/file.pdf` will add the tags \"foo\" and \"bar\" to the consumed file. Paperless will create any tags that don't exist yet."
+  clear: true
+  notes: "Грамотно: «тег» и «обработка» по глоссарию, параметр и путь в обратных кавычках. docs/configuration.md:1397-1400 (PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS)."
+
+- id: clarity-011
+  statement: "По умолчанию почта проверяются каждые десять минут со смещением в минутах, свои для каждой установки. Если задать для `PAPERLESS_EMAIL_TASK_CRON` строку `disable`, письма автоматически загружаться не будет."
+  quote: "If set to the string \"disable\", no emails will be fetched automatically. Defaults to every ten minutes, with an installation-specific minute offset."
+  clear: false
+  notes: "Грамматические ошибки согласования: «почта проверяются» вместо «проверяется», «смещением…, свои» вместо «своим», «письма… не будет» вместо «не будут». Термины и параметр оформлены верно. docs/configuration.md:1256-1258 (PAPERLESS_EMAIL_TASK_CRON)."
+
+- id: clarity-012
+  statement: "Можно завести в почтовом счёте отдельную папку для Paperless, переносить в неё письма для обработки вручную или автоматически своим почтовым клиентом и настроить Paperless так, чтобы после обработки он перекладывал их в другую папку."
+  quote: "You can also setup a special folder in your mail account for paperless and use your favorite mail client to move to be consumed mails into that folder automatically or manually and tell paperless to move them to yet another folder after consumption."
+  clear: false
+  notes: "Неверный перевод термина: «почтовый счёт» — ложный перевод account, по глоссарию «почтовый ящик» (mail account). Остальной текст грамотный. docs/usage.md:255-258."

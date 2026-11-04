@@ -168,6 +168,7 @@ def test_dataset_in_repository_follows_the_schema() -> None:
     assert load_cases()
     assert load_cases(HOLDOUT_DIR)
     assert load_canaries()
+    assert load_clarity_canaries()
 
 
 CLARITY = """\
