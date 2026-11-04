@@ -50,8 +50,9 @@ from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-# v1 — без глоссария; v2 добавила блок «Термины» (glossary.py).
-PROMPT_VERSION = "answer_v2"
+# v1 — без глоссария; v2 добавила блок «Термины» (glossary.py), но модель стала
+# хуже цитировать; v3 — строгое правило цитаты последним, термины до источников.
+PROMPT_VERSION = "answer_v3"
 K = 5
 # Сколько найденных кусков приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -181,10 +182,12 @@ def user_message(
         f'title="{_attribute(s.chunk.breadcrumb)}">\n{s.text}\n</source>'
         for s in sources
     ]
-    parts = [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
+    # Термины — до источников: модель читает их раньше, чем начинает переводить.
+    parts = []
     terms = terms_in((s.text for s in sources), glossary)
     if terms:
         parts.append("Термины (переводи только так):\n" + render_terms(terms))
+    parts += [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
     parts.append(f"Вопрос пользователя: {question}")
     return "\n\n".join(parts)
 

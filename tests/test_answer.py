@@ -326,7 +326,12 @@ def test_glossary_terms_from_sources_go_into_the_prompt(retriever: Retriever) ->
     assert "- mail account — почтовый ящик" in user
     # Термина, которого нет в источниках, в промпте нет.
     assert "реверс-прокси" not in user
-    assert user.index("Термины") < user.index("Вопрос пользователя")
+    # Термины идут до источников, вопрос — последним.
+    assert (
+        user.index("Термины")
+        < user.index("Источники")
+        < user.index("Вопрос пользователя")
+    )
 
 
 def test_no_terms_block_without_matching_terms(retriever: Retriever) -> None:
