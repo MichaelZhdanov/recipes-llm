@@ -42,10 +42,13 @@ ignore = [
 
 [tool.mypy]
 strict = true
-files = ["assistant", "tests"]
+files = ["assistant", "tests", "scripts"]
+# Скрипты не пакет: тесты импортируют их как модули верхнего уровня (`import init_env`).
+mypy_path = "scripts"
 # Плагин понимает модели pydantic: проверяет аргументы конструктора Settings(...) по полям.
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["scripts"]
 addopts = "-ra --strict-markers"
