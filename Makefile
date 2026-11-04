@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index test lint format
+.PHONY: help up down index ask test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -31,6 +31,12 @@ RUN = uv run --env-file .env python -m assistant.cli
 index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги Voyage, Qdrant
 	docker compose up -d --wait qdrant
 	$(RUN) index
+
+# Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
+# выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
+ask: .env ## найти куски по вопросу: make ask Q="как включить OCR на русском"
+	@test -n "$$Q" || { echo 'Укажите вопрос: make ask Q="как включить OCR на русском"'; exit 2; }
+	$(RUN) ask "$$Q"
 
 test: ## unit-тесты (pytest)
 	uv run pytest
