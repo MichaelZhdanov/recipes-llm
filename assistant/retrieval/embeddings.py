@@ -105,8 +105,9 @@ CLOUD_RU = Provider(
     },
 )
 PROVIDERS: dict[EmbeddingProvider, Provider] = {"cloudru": CLOUD_RU, "voyage": VOYAGE}
-# Модель, если EMBEDDING_MODEL пустой. Для cloud.ru пока старшая модель Сбера,
-# окончательный выбор — по eval. Voyage — модель из документации Anthropic.
+# Модель, если EMBEDDING_MODEL пустой. Для cloud.ru выбрана по eval: лучшие
+# recall@5 и MRR из четырёх моделей (evals/reports/2026-11-04-models.md).
+# Voyage — модель из документации Anthropic.
 DEFAULT_MODELS: dict[EmbeddingProvider, str] = {
     "cloudru": "ai-sage/Giga-Embeddings-instruct-3B",
     "voyage": "voyage-4",
