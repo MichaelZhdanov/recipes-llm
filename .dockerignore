@@ -1,0 +1,17 @@
+# В контекст сборки не попадают секреты, локальные заметки и данные.
+.env
+.env.*
+CLAUDE.md
+QUESTIONS.md
+PLAN.md
+data/
+evals/reports/raw/
+
+# Не нужно для образа
+.git
+.github
+.venv
+**/__pycache__
+.ruff_cache
+.mypy_cache
+.pytest_cache

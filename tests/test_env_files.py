@@ -1,16 +1,28 @@
 """Переменные окружения описаны в нескольких местах, тесты не дают им разойтись.
 
-Источник правды — поля `Settings`. Каждое поле должно быть в `.env.example`,
-а секреты в `.env.example` должны быть пустыми.
+Источник правды — поля `Settings`. Каждое поле должно быть в `.env.example`
+и в `environment` сервиса assistant в `docker-compose.yml`. Секреты в
+`.env.example` пустые, а секреты demo-Paperless ассистенту не передаются.
 """
 
 from pathlib import Path
+from typing import Any
 
+import yaml
 from pydantic import SecretStr
 
 from assistant.config import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Переменные самого Paperless: ассистенту они не нужны и не должны к нему попадать.
+PAPERLESS_ONLY_SECRETS = {"PAPERLESS_SECRET_KEY", "PAPERLESS_ADMIN_PASSWORD"}
+
+
+def load_compose() -> dict[str, Any]:
+    with (ROOT / "docker-compose.yml").open(encoding="utf-8") as compose_file:
+        compose: dict[str, Any] = yaml.safe_load(compose_file)
+    return compose
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -48,3 +60,36 @@ def test_env_example_has_no_secret_values() -> None:
     filled = {name for name in secret_env_names() if example.get(name)}
 
     assert not filled, f"в .env.example заполнены секреты: {sorted(filled)}"
+
+
+def test_assistant_gets_exactly_its_settings_in_compose() -> None:
+    environment = load_compose()["services"]["assistant"]["environment"]
+
+    assert set(environment) == setting_env_names()
+    for name, value in environment.items():
+        # Пустое значение по умолчанию: тогда Settings берёт своё значение по умолчанию.
+        assert value == f"${{{name}:-}}", name
+
+
+def test_assistant_does_not_receive_paperless_secrets() -> None:
+    environment = load_compose()["services"]["assistant"]["environment"]
+
+    assert not PAPERLESS_ONLY_SECRETS & set(environment)
+
+
+def test_no_service_loads_whole_env_file() -> None:
+    services = load_compose()["services"]
+
+    with_env_file = [
+        name for name, service in services.items() if "env_file" in service
+    ]
+
+    assert not with_env_file, f"env_file отдаёт сервису все секреты: {with_env_file}"
+
+
+def test_ports_are_published_only_on_localhost() -> None:
+    services = load_compose()["services"]
+
+    for name, service in services.items():
+        for port in service.get("ports", []):
+            assert port.startswith("127.0.0.1:"), f"{name}: {port}"

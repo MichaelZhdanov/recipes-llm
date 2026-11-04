@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help test lint format
+.PHONY: help up down test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -12,6 +12,17 @@ help: ## показать список команд
 # текущему пользователю, а не root.
 .env: ## создать .env со случайными секретами для demo-Paperless
 	docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)" $(UV_IMAGE) python scripts/init_env.py
+
+# --wait ждёт, пока все healthcheck станут зелёными; первый старт Paperless
+# (миграции базы) занимает до пары минут.
+up: .env ## поднять Paperless, Valkey, Qdrant и ассистента
+	docker compose up -d --build --wait --wait-timeout 300
+	@echo "Paperless:  http://localhost:8000 (логин и пароль в .env)"
+	@echo "Ассистент:  http://localhost:8080/health"
+	@echo "Qdrant:     http://localhost:6333/dashboard"
+
+down: ## остановить стек (данные в томах Docker сохраняются)
+	docker compose down
 
 test: ## unit-тесты (pytest)
 	uv run pytest
