@@ -210,6 +210,7 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         completion,
         prompt_version=record["answer"]["prompt_version"],
         ref=record["answer"]["paperless_ref"],
+        question_type=record["answer"].get("question_type", "general"),
         retrieval_seconds=record["retrieval_seconds"],
         generation_seconds=record["generation_seconds"],
         glossary=load_glossary(),

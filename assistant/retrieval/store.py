@@ -47,6 +47,8 @@ class Hit:
     score: float
     # Кусок найден точным поиском: в нём лежит шаблон сообщения, совпавший с вопросом.
     exact: bool = False
+    # Строка файла, где задан совпавший текст ошибки (только у точных).
+    line: int | None = None
 
 
 def point_id(chunk: Chunk) -> str:

@@ -56,7 +56,7 @@ class Retriever:
         self, question: str, k: int = 5, kinds: Collection[str] | None = None
     ) -> list[Hit]:
         exact = [
-            Hit(chunk=found.chunk, score=1.0, exact=True)
+            Hit(chunk=found.chunk, score=1.0, exact=True, line=found.message.line)
             for found in self.messages.search(question, limit=MAX_EXACT)
             if kinds is None or found.chunk.kind in kinds
         ]

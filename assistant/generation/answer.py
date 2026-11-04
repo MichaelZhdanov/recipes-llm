@@ -53,6 +53,7 @@ from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, VectorStore
+from assistant.router import QuestionType, route
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -62,6 +63,8 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 # (fix_terms), а блок терминов идёт только в промпты, которые его ждут.
 PROMPT_VERSION = "answer_v1"
 PROMPTS_WITH_TERMS = frozenset({"answer_v2", "answer_v3"})
+# Разбор ошибки (этап 3): включается, когда точный поиск нашёл текст ошибки в коде.
+ERROR_PROMPT_VERSION = "error_v1"
 K = 5
 # Сколько найденных кусков приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -121,6 +124,8 @@ class Answer(BaseModel):
     model: str
     prompt_version: str
     paperless_ref: str
+    # error — в вопросе текст ошибки из кода (router.py), general — обычный вопрос.
+    question_type: QuestionType = "general"
 
 
 @dataclass(frozen=True)
@@ -185,8 +190,9 @@ def user_message(
     sources: Sequence[SourceText],
     ref: str,
     glossary: Sequence[Term] = (),
+    error_lines: Sequence[str] = (),
 ) -> str:
-    """Источники, термины из них (если есть в глоссарии) и вопрос."""
+    """Источники, термины из них (если есть в глоссарии), подсказка о месте ошибки и вопрос."""
     blocks = [
         f'<source id="{s.number}" path="{s.chunk.path}" '
         f'lines="{s.chunk.start_line}-{s.chunk.end_line}" '
@@ -199,6 +205,14 @@ def user_message(
     if terms:
         parts.append("Термины (переводи только так):\n" + render_terms(terms))
     parts += [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
+    if error_lines:
+        # Подсказка, где совпал текст ошибки. Цитату из этого куска модель всё равно
+        # должна привести сама: проверка ссылок та же.
+        parts.append(
+            "Текст ошибки из вопроса совпал со строкой кода: "
+            + ", ".join(error_lines)
+            + "."
+        )
     parts.append(f"Вопрос пользователя: {question}")
     return "\n\n".join(parts)
 
@@ -295,6 +309,7 @@ def assemble(
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
     glossary: Sequence[Term] = (),
+    question_type: QuestionType = "general",
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
     if completion is None:
@@ -315,6 +330,7 @@ def assemble(
         model=completion.model if completion else "",
         prompt_version=prompt_version,
         paperless_ref=ref,
+        question_type=question_type,
     )
     trace = Trace(
         hits=hits,
@@ -355,11 +371,20 @@ class Answerer:
         hits = self._retriever.search(question, k=self._k)
         retrieved = self._clock()
         sources = prepare_sources(hits)
+        question_type = route(hits)
+        prompt_version = (
+            ERROR_PROMPT_VERSION if question_type == "error" else self.prompt_version
+        )
+        error_lines = [
+            f"`{hit.chunk.path}:{hit.line}` (источник {number})"
+            for number, hit in enumerate(hits, start=1)
+            if hit.exact
+        ]
         completion = None
         if sources:
             completion = self._llm.chat(
                 [
-                    {"role": "system", "content": load_prompt(self.prompt_version)},
+                    {"role": "system", "content": load_prompt(prompt_version)},
                     {
                         "role": "user",
                         "content": user_message(
@@ -367,8 +392,9 @@ class Answerer:
                             sources,
                             self._ref,
                             self._glossary
-                            if self.prompt_version in PROMPTS_WITH_TERMS
+                            if prompt_version in PROMPTS_WITH_TERMS
                             else (),
+                            error_lines,
                         ),
                     },
                 ],
@@ -385,11 +411,12 @@ class Answerer:
             hits,
             sources,
             completion,
-            prompt_version=self.prompt_version,
+            prompt_version=prompt_version,
             ref=self._ref,
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
             glossary=self._glossary,
+            question_type=question_type,
         )
 
 
