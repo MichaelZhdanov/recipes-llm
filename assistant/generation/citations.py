@@ -11,11 +11,19 @@
 - в цитате не меньше MIN_QUOTE_WORDS слов и MIN_QUOTE_CHARS символов
   (короткий фрагмент вроде «the» найдётся где угодно) и не больше
   MAX_QUOTE_CHARS, иначе ссылка на строки теряет смысл;
-- фрагмент найден в тексте, который видела модель. Пробелы и переводы
-  строк между словами любые, регистр не важен, а типографские кавычки
-  и тире, `**`, обратные кавычки и разметка ссылок `[текст](адрес)`
-  выравниваются с обеих сторон. Подчёркивание не трогается: в
-  `PAPERLESS_OCR_LANGUAGE` оно часть имени;
+- фрагмент найден в тексте, который видела модель. Сравниваются слова,
+  а оформление выравнивается с обеих сторон одинаково (`normalize`):
+  - пробелы и переводы строк между словами любые, регистр не важен;
+  - типографские тире приводятся к `-`, кавычки любого вида не
+    учитываются;
+  - разметка Markdown не учитывается: `**`, курсив `_x_` и `*x*`,
+    обратные кавычки, ссылки `[текст](адрес)`, в том числе разбитые
+    переносом строки;
+  - знаки препинания по краям цитаты не учитываются: модель ставит
+    точку после обрезанного предложения;
+  - подчёркивание внутри слова не трогается: в `PAPERLESS_OCR_LANGUAGE`
+    оно часть имени.
+  Слова, числа, имена и их порядок должны совпасть;
 - у документации совпадение не может целиком лежать в строке заголовка:
   заголовок только называет тему, а не подтверждает утверждение.
 
@@ -150,19 +158,28 @@ class CheckedStatement:
 
 _TRANSLATE = str.maketrans(
     {
-        "“": '"',
-        "”": '"',
-        "„": '"',
-        "«": '"',
-        "»": '"',
-        "‘": "'",
-        "’": "'",
         "–": "-",
         "—": "-",
-        " ": " ",
+        "\u00a0": " ",
+        # Кавычки не несут смысла для проверки: модель их то добавляет, то теряет.
+        "“": None,
+        "”": None,
+        "„": None,
+        "«": None,
+        "»": None,
+        "‘": None,
+        "’": None,
+        '"': None,
+        "'": None,
+        "`": None,
     }
 )
-_MARKDOWN_LINK = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
+# Текст ссылки может переноситься на следующую строку, адрес — нет.
+_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)\s]*\)")
+# Курсив: `_слово_` или `*слово*` на границе слова. Подчёркивание внутри
+# слова (PAPERLESS_OCR_LANGUAGE) сюда не попадает.
+_EMPHASIS = re.compile(r"(?<![\w*])([_*])(?=\S)(.+?)(?<=\S)\1(?![\w*])")
+_EDGE_PUNCTUATION = ".,;:!?"
 
 
 def normalize(text: str) -> str:
@@ -170,15 +187,21 @@ def normalize(text: str) -> str:
 
     Переводы строк не добавляются и не удаляются: по ним считаются строки.
     """
-    text = _MARKDOWN_LINK.sub(r"\1", text.translate(_TRANSLATE))
-    return text.replace("**", "").replace("`", "")
+    text = text.translate(_TRANSLATE).replace("**", "")
+    text = _MARKDOWN_LINK.sub(r"\1", text)
+    return _EMPHASIS.sub(r"\2", text)
 
 
 def _quote_pattern(quote: str) -> re.Pattern[str] | None:
-    words = normalize(quote).split()
+    words = normalize(quote).strip().strip(_EDGE_PUNCTUATION).split()
     if not words:
         return None
-    return re.compile(r"\s+".join(re.escape(word) for word in words), re.IGNORECASE)
+    body = r"\s+".join(re.escape(word) for word in words)
+    # Цитата начинается и кончается на границе слова: «false» не совпадёт
+    # с началом «falsehood», а «anguage» — с серединой «language».
+    start = r"(?<!\w)" if re.match(r"\w", words[0]) else ""
+    end = r"(?!\w)" if re.search(r"\w$", words[-1]) else ""
+    return re.compile(start + body + end, re.IGNORECASE)
 
 
 _DOC_HEADING = re.compile(r"^\s{0,3}(#{1,6}\s|<h[1-6][\s>])")

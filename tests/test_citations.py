@@ -261,3 +261,57 @@ def test_json_schema_for_gigachat_matches_the_model() -> None:
     statement = ANSWER_SCHEMA["properties"]["statements"]["items"]  # type: ignore[index]
     same(statement, Statement)
     same(statement["properties"]["citations"]["items"], Citation)
+
+
+FORMATTED = """\
+## Duplicates
+
+As of version 3.0 Paperless-ngx allows duplicate documents to be consumed by
+default, _except_ when this setting is enabled. "Share links" are public links
+to files, see the [document
+exporter](#exporter) for backups. The setting value is falsehood-proof.
+"""
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        # Курсив _except_ модель передала без подчёркиваний.
+        "allows duplicate documents to be consumed by default, except when",
+        # Кавычки вокруг «Share links» модель потеряла.
+        "Share links are public links to files",
+        # Ссылка разбита переносом строки внутри текста ссылки.
+        "see the document exporter for backups",
+        # Точка после обрезанного предложения.
+        "allows duplicate documents to be consumed.",
+    ],
+)
+def test_formatting_differences_do_not_matter(quote: str) -> None:
+    sources = [SourceText(number=1, chunk=chunk(FORMATTED), text=FORMATTED)]
+
+    assert check_citation(cite(1, quote), sources).valid
+
+
+def test_link_across_lines_keeps_line_numbers() -> None:
+    sources = [SourceText(number=1, chunk=chunk(FORMATTED, start=10), text=FORMATTED)]
+
+    checked = check_citation(cite(1, "see the document exporter for backups"), sources)
+
+    assert (checked.start_line, checked.end_line) == (14, 15)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        # Слова должны совпасть целиком: «false» — не начало «falsehood».
+        "The setting value is false.",
+        # И с начала: «llows» — не середина «allows».
+        "llows duplicate documents to be consumed",
+        # Другое слово — не цитата, сколько ни выравнивай оформление.
+        "allows duplicate documents to be deleted",
+    ],
+)
+def test_words_must_still_match(quote: str) -> None:
+    sources = [SourceText(number=1, chunk=chunk(FORMATTED), text=FORMATTED)]
+
+    assert check_citation(cite(1, quote), sources).error == "фрагмента нет в источнике"
