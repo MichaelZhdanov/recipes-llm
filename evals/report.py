@@ -595,14 +595,14 @@ def _judge_sections(
         if mark is not c.supported
     ]
     unclear = [
-        f"- {r.case.id}, прогон {number + 1}: «{text}» — {comment}"
+        f"- {r.case.id}, прогон {number + 1}: «{text}» — {'; '.join(problems)}"
         for r in results
         for number, run in enumerate(r.runs)
         if (verdict := judging.verdicts.get((r.case.id, number))) is not None
-        for text, mark, comment in zip(
+        for text, mark, problems in zip(
             [s.text for s in run.checked if s.kept],
             verdict.clear,
-            verdict.comments or [""] * len(verdict.clear),
+            verdict.problems or [[]] * len(verdict.clear),
             strict=False,
         )
         if mark is False

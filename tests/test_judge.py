@@ -20,6 +20,7 @@ from evals.judge import (
     clarity,
     clarity_canary_scores,
     groundedness,
+    judge_canaries,
     judge_clarity_canaries,
     judge_message,
     judge_results,
@@ -53,16 +54,29 @@ class FakeJudgeLlm:
 
 
 def reply(statements: list[bool], facts: list[bool] | None = None) -> str:
+    """Ответ судьи на вызов «смысл»."""
     return json.dumps(
         {
             "statements": [
-                {"number": n, "comment": "…", "supported": ok, "clear": ok}
+                {"number": n, "comment": "…", "supported": ok}
                 for n, ok in enumerate(statements, start=1)
             ],
             "facts": [
                 {"number": n, "present": ok}
                 for n, ok in enumerate(facts or [], start=1)
             ],
+        }
+    )
+
+
+def clarity_reply(*problems: list[str]) -> str:
+    """Ответ судьи на вызов «грамотность»: проблемы по утверждениям."""
+    return json.dumps(
+        {
+            "statements": [
+                {"number": n, "problems": found}
+                for n, found in enumerate(problems, start=1)
+            ]
         }
     )
 
@@ -86,69 +100,6 @@ def test_judge_message_numbers_statements_and_facts() -> None:
     assert '<statement number="2">' in message
     assert "<text>Проверка раз в десять минут.</text>" in message
     assert message.endswith("Факты, которые должны быть в ответе:\n1. почтовый аккаунт")
-
-
-def test_verdicts_are_matched_by_number_and_missing_is_none() -> None:
-    llm = FakeJudgeLlm(
-        [
-            json.dumps(
-                {
-                    "statements": [
-                        {
-                            "number": 2,
-                            "comment": "нет",
-                            "supported": False,
-                            "clear": True,
-                        }
-                    ],
-                    "facts": [],
-                }
-            )
-        ]
-    )
-
-    verdict = Judge(llm).judge("?", claims_of(RUN), [])
-
-    assert verdict.supported == [None, False]
-    assert verdict.clear == [None, True]
-    assert llm.calls[0][0]["content"].startswith("Ты проверяешь ответы ассистента")
-
-
-def test_unparsed_judge_reply_is_counted_and_gives_no_verdict() -> None:
-    judge = Judge(FakeJudgeLlm(["не JSON"]))
-
-    verdict = judge.judge("?", [Claim("a", ["b"])], ["факт"])
-
-    assert verdict == Verdict([None], [None], [], [None])
-    assert judge.failures == 1
-
-
-def test_refusal_means_facts_absent_without_calling_judge() -> None:
-    llm = FakeJudgeLlm([reply([True, True], [True])])
-    refused = AnswerRun.from_result(
-        assemble(
-            [Hit(CHUNK, 0.6)],
-            SOURCES,
-            Completion(
-                '{"status": "not_found", "statements": []}',
-                "stop",
-                "m",
-                Usage(1, 1, 0, 2),
-            ),
-            prompt_version="answer_v1",
-            ref="v3.4.2",
-        )
-    )
-    howto = case("howto-001", ["docs/usage.md#mail"]).model_copy(
-        update={"must_include": ["почтовый аккаунт"]}
-    )
-
-    verdicts = judge_results([AnswerCase(howto, [RUN, refused])], Judge(llm))
-
-    assert verdicts[("howto-001", 1)] == Verdict([], [False], [], [])
-    assert len(llm.calls) == 1
-    assert groundedness(verdicts) == Rate(2, 2)
-    assert must_include_judged(verdicts) == Rate(1, 2)
 
 
 def test_canary_scores_count_missing_verdict_as_miss() -> None:
@@ -178,61 +129,97 @@ def test_rescore_rebuilds_answers_from_raw_data() -> None:
     assert rebuilt.runs[0].cited_source_ids() == {"docs/usage.md#mail"}
 
 
-def test_clarity_is_judged_separately_from_support() -> None:
+def test_verdicts_are_matched_by_number_and_missing_is_none() -> None:
     llm = FakeJudgeLlm(
         [
             json.dumps(
                 {
-                    "statements": [
-                        {
-                            "number": 1,
-                            "comment": "ок",
-                            "supported": True,
-                            "clear": True,
-                        },
-                        {
-                            "number": 2,
-                            "comment": "обрывок разметки",
-                            "supported": True,
-                            "clear": False,
-                        },
-                    ],
+                    "statements": [{"number": 2, "comment": "нет", "supported": False}],
                     "facts": [],
                 }
-            )
+            ),
+            clarity_reply([], ["обрывок разметки"]),
         ]
     )
 
     verdict = Judge(llm).judge("?", claims_of(RUN), [])
 
-    assert verdict.supported == [True, True]
+    assert verdict.supported == [None, False]
     assert verdict.clear == [True, False]
-    assert clarity({("howto-001", 0): verdict}) == Rate(1, 2)
+    assert verdict.problems == [[], ["обрывок разметки"]]
+    # Два вызова с разными рубриками: смысл и грамотность.
+    assert llm.calls[0][0]["content"].startswith("Ты проверяешь ответы ассистента")
+    assert llm.calls[1][0]["content"].startswith("Ты редактор русского текста")
 
 
-def test_judge_sees_glossary_terms_from_fragments() -> None:
+def test_unparsed_judge_reply_is_counted_and_gives_no_verdict() -> None:
+    judge = Judge(FakeJudgeLlm(["не JSON", "тоже не JSON"]))
+
+    verdict = judge.judge("?", [Claim("a", ["b"])], ["факт"])
+
+    assert verdict == Verdict([None], [None], [], [None])
+    assert judge.failures == 2
+
+
+def test_refusal_means_facts_absent_without_calling_judge() -> None:
+    llm = FakeJudgeLlm([reply([True, True], [True]), clarity_reply([], [])])
+    refused = AnswerRun.from_result(
+        assemble(
+            [Hit(CHUNK, 0.6)],
+            SOURCES,
+            Completion(
+                '{"status": "not_found", "statements": []}',
+                "stop",
+                "m",
+                Usage(1, 1, 0, 2),
+            ),
+            prompt_version="answer_v1",
+            ref="v3.4.2",
+        )
+    )
+    howto = case("howto-001", ["docs/usage.md#mail"]).model_copy(
+        update={"must_include": ["почтовый аккаунт"]}
+    )
+
+    verdicts = judge_results([AnswerCase(howto, [RUN, refused])], Judge(llm))
+
+    assert verdicts[("howto-001", 0)].present == [True]
+    assert verdicts[("howto-001", 1)] == Verdict([], [False], [], [])
+    assert len(llm.calls) == 2  # смысл и грамотность только для ответа по существу
+    assert groundedness(verdicts) == Rate(2, 2)
+    assert clarity(verdicts) == Rate(2, 2)
+    assert must_include_judged(verdicts) == Rate(1, 2)
+
+
+def test_clarity_sees_glossary_terms_from_fragments() -> None:
     glossary = parse_glossary(
         "volume\tтом\t-\tтом Docker, не «объём»\nimage\tобраз\t-\t\n"
     )
-    llm = FakeJudgeLlm([reply([True])])
+    llm = FakeJudgeLlm([clarity_reply(["Docker-объём — том"])])
     claim = Claim(
         "Документы лежат в Docker-объёме.",
         ["docs/faq.md:19-19\nstored inside the docker volume"],
     )
 
-    Judge(llm, glossary=glossary).judge("где файлы", [claim], [])
+    clear, problems = Judge(llm, glossary=glossary).clarity([claim])
 
     message = llm.calls[0][1]["content"]
-    assert (
-        "Термины (как их нужно переводить):\n- volume — том (том Docker, не «объём»)"
-        in message
-    )
+    assert message.startswith("Термины (как их нужно переводить):\n- volume — том")
     # «image» во фрагменте нет — и в блоке его нет.
     assert "образ" not in message
-    assert llm.calls[0][0]["content"].startswith("Ты проверяешь ответы")
+    assert clear == [False]
+    assert problems == [["Docker-объём — том"]]
 
 
-def test_clarity_canaries_are_scored_by_clear_verdict() -> None:
+def test_support_canaries_skip_the_clarity_call() -> None:
+    llm = FakeJudgeLlm([reply([False])])
+    canaries = [Canary(id="canary-001", statement="a", quote="b", supported=False)]
+
+    assert judge_canaries(canaries, Judge(llm)) == [False]
+    assert len(llm.calls) == 1
+
+
+def test_clarity_canaries_are_scored_by_found_problems() -> None:
     canaries = [
         ClarityCanary(
             id="clarity-001", statement="Docker-объём", quote="volume", clear=False
@@ -242,24 +229,7 @@ def test_clarity_canaries_are_scored_by_clear_verdict() -> None:
         ),
     ]
     llm = FakeJudgeLlm(
-        [
-            json.dumps(
-                {
-                    "statements": [
-                        {"number": 1, "comment": "", "supported": True, "clear": False}
-                    ],
-                    "facts": [],
-                }
-            ),
-            json.dumps(
-                {
-                    "statements": [
-                        {"number": 1, "comment": "", "supported": True, "clear": False}
-                    ],
-                    "facts": [],
-                }
-            ),
-        ]
+        [clarity_reply(["объём — том"]), clarity_reply(["лишняя придирка"])]
     )
 
     marks = judge_clarity_canaries(canaries, Judge(llm))
