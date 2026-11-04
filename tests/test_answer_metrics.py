@@ -397,3 +397,18 @@ def test_multiline_message_counts_with_slack() -> None:
     results = [AnswerCase(error_case_for(478), [error_run([(479, 479)])])]
 
     assert error_localization(results, exact_line=True) == Rate(1, 1)
+
+
+def test_report_with_only_error_cases_renders() -> None:
+    """Прогон --categories error: поиск в отчёте считается по строке ошибки, без падения."""
+    results = [AnswerCase(error_case_for(478), [error_run([(476, 479)])])]
+
+    report = render_answer_report(
+        results, meta=meta(LlmStats()), judging=None, today=date(2026, 11, 4)
+    )
+
+    assert (
+        "| error localization (ответ указывает на функцию с ошибкой) | 1.00 (1/1,"
+        in report
+    )
+    assert answer_gates(results)["error_localization"] is True

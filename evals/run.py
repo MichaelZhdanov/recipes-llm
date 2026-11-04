@@ -277,12 +277,16 @@ def run_answers(
     return results
 
 
-def _write(path: Path, report: str, raw: object) -> None:
+def _write_raw(path: Path, raw: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report, encoding="utf-8")
     raw_path = REPORTS_DIR / "raw" / f"{path.stem}.json"
     raw_path.parent.mkdir(parents=True, exist_ok=True)
     raw_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write(path: Path, report: str, raw: object) -> None:
+    _write_raw(path, raw)
+    path.write_text(report, encoding="utf-8")
 
 
 def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
@@ -362,10 +366,13 @@ def _finish(
     label: str | None,
 ) -> int:
     today = date.today()
-    report = render_answer_report(results, meta=meta, judging=judging, today=today)
     path = report_path(REPORTS_DIR, today, label)
+    # Сначала сырые данные: если отчёт упадёт, дорогая генерация не пропадёт,
+    # и отчёт можно собрать заново через --rescore.
     raw = {"meta": meta_record(meta), "records": answer_records(results, judging)}
-    _write(path, report, raw)
+    _write_raw(path, raw)
+    report = render_answer_report(results, meta=meta, judging=judging, today=today)
+    path.write_text(report, encoding="utf-8")
     gates = answer_gates(results, judging)
     failed = [name for name, passed in gates.items() if not passed]
     print(f"не прошли порог: {', '.join(failed)}" if failed else "все пороги пройдены")

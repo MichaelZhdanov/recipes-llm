@@ -247,7 +247,7 @@ def retrieval_results(results: Sequence[AnswerCase]) -> list[CaseResult]:
             ],
         )
         for r in results
-        if r.case.category in IN_SCOPE
+        if has_expectation(r.case)
     ]
 
 
@@ -255,9 +255,12 @@ def answer_gates(
     results: Sequence[AnswerCase], judging: Judging | None = None
 ) -> dict[str, bool]:
     """Метрики с порогом и прошли ли они его: по ним считается код выхода."""
-    recall = statistics.mean(recall_per_run(retrieval_results(results)))
-    gates = {
-        "recall@5": recall >= THRESHOLDS["recall@5"],
+    retrieval = retrieval_results(results)
+    gates: dict[str, bool] = {}
+    if retrieval:
+        recall = statistics.mean(recall_per_run(retrieval))
+        gates["recall@5"] = recall >= THRESHOLDS["recall@5"]
+    gates |= {
         "citation_accuracy": citation_accuracy(results).value
         >= ANSWER_THRESHOLDS["citation_accuracy"],
         "abstention": abstention(results).value >= ANSWER_THRESHOLDS["abstention"],
@@ -362,7 +365,7 @@ def render_answer_report(
 ) -> str:
     manifest, llm_stats, llm_model = meta.manifest, meta.llm_stats, meta.llm_model
     retrieval = retrieval_results(results)
-    recall = recall_per_run(retrieval)
+    recall = recall_per_run(retrieval) if retrieval else []
     gates = answer_gates(results, judging)
     runs = [run for r in results for run in r.runs]
     api_models = sorted({run.answer.model for run in runs if run.answer.model})
@@ -407,8 +410,14 @@ def render_answer_report(
         "",
         "| Метрика | Значение | Порог | Статус |",
         "|---|---|---|---|",
-        f"| recall@{K} (howto, config) | {_mean_std(recall)} | ≥ {THRESHOLDS['recall@5']:.2f} | "
-        f"{_status(gates['recall@5'])} |",
+        *(
+            [
+                f"| recall@{K} (все кейсы с ожидаемым источником) | {_mean_std(recall)} | "
+                f"≥ {THRESHOLDS['recall@5']:.2f} | {_status(gates['recall@5'])} |"
+            ]
+            if recall
+            else []
+        ),
         f"| citation accuracy | {accuracy} {_spread(per_run(results, citation_accuracy))} | "
         f"≥ {ANSWER_THRESHOLDS['citation_accuracy']:.2f} | {_status(gates['citation_accuracy'])} |",
         f"| abstention (out_of_scope) | {abstain} {_spread(per_run(results, abstention))} | "
