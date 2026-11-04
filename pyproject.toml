@@ -44,7 +44,7 @@ ignore = [
 
 [tool.mypy]
 strict = true
-files = ["assistant", "tests", "scripts"]
+files = ["assistant", "tests", "scripts", "evals"]
 # Скрипты не пакет: тесты импортируют их как модули верхнего уровня (`import init_env`).
 mypy_path = "scripts"
 # Плагин понимает модели pydantic: проверяет аргументы конструктора Settings(...) по полям.
@@ -52,5 +52,6 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["scripts"]
+# "." — чтобы тесты импортировали пакет evals из корня репозитория.
+pythonpath = ["scripts", "."]
 addopts = "-ra --strict-markers"

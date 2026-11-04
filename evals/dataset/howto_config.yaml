@@ -1,0 +1,242 @@
+# Эталонные кейсы howto и config для оценки поиска по документации Paperless-ngx v3.4.2.
+# expected_sources — идентификаторы разделов; любой из них годится как источник ответа.
+
+- id: howto-001
+  category: howto
+  role: user
+  question: "как сделать чтобы вложения из писем сами падали в paperless счета приходят на почту"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#incoming-mail
+  must_include: ["почтовый аккаунт в настройках почты", "правила почты (mail rules)"]
+  must_not_include: []
+  notes: "Раздел описывает приём вложений из почты: учётная запись, правила, действия над письмом."
+
+- id: howto-002
+  category: howto
+  role: user
+  question: "Хочу, чтобы всем счетам от «Ростелекома» автоматически ставился тег «Связь». Как это настроить?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/advanced_usage.md#matching
+    - docs/advanced_usage.md#automatic-matching
+    - docs/usage.md#workflow-action-assignment
+  must_include: ["у тега задаются match и алгоритм сопоставления"]
+  must_not_include: []
+  notes: "Автоназначение тегов делается через сопоставление (Any/All/Exact/Auto); воркфлоу с действием Assignment — альтернативный путь."
+
+- id: howto-003
+  category: howto
+  role: user
+  question: "как найти все доки которые я добавил на прошлой неделе"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#searching-by-date
+  must_include: ["added:"]
+  must_not_include: []
+  notes: "Раздел даёт синтаксис поиска по дате добавления: added:\"previous week\" и added:[-1 week to now]."
+
+- id: howto-004
+  category: howto
+  role: user
+  question: "Я загрузил договор, а коллега в своём аккаунте его не видит. Как открыть ему доступ?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#permissions
+    - docs/usage.md#object-permissions
+  must_include: ["вкладка Permissions в документе", "права view или edit для пользователя или группы"]
+  must_not_include: []
+  notes: "По умолчанию документ видит только владелец; доступ выдаётся объектными правами на вкладке Permissions."
+
+- id: howto-005
+  category: howto
+  role: user
+  question: "надо скинуть документ бухгалтеру у него нет аккаунта в пейперлесс. можно как то ссылку дать?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#share-links
+    - docs/usage.md#sharing-documents-from-paperless-ngx
+  must_include: ["share link через кнопку Send", "вход по ссылке не нужен"]
+  must_not_include: []
+  notes: "Share links — публичная ссылка без логина, создаётся кнопкой Send на странице документа, можно задать срок."
+
+- id: howto-006
+  category: howto
+  role: user
+  question: "Случайно удалил нужный документ. Его ещё можно вернуть?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#document-trash
+  must_include: ["документ попадает в корзину", "30 дней по умолчанию"]
+  must_not_include: []
+  notes: "Удалённые документы лежат в корзине и восстанавливаются, пока не истёк срок PAPERLESS_EMPTY_TRASH_DELAY."
+
+- id: howto-007
+  category: howto
+  role: user
+  question: "в документе одна страница вверх ногами как ее перевернуть"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#pdf-actions
+  must_include: ["PDF Editor на странице документа", "поворот меняет оригинальный файл"]
+  must_not_include: []
+  notes: "Поворот, удаление и перестановка страниц делаются в PDF-редакторе документа или массовым редактированием."
+
+- id: howto-008
+  category: howto
+  role: engineer
+  question: "Как правильно настроить регулярный бэкап paperless в docker, чтобы потом можно было поднять всё на другом сервере?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/administration.md#backup
+    - docs/administration.md#exporter
+  must_include: ["document_exporter", "цель ../export внутри контейнера"]
+  must_not_include: []
+  notes: "Раздел про бэкапы рекомендует document_exporter; в разделе экспортёра есть пример для cron с флагом -T."
+
+- id: howto-009
+  category: howto
+  role: engineer
+  question: "как обновить paperless на новую версию? ставил через docker compose, боюсь всё сломать"
+  expected_behavior: answer
+  expected_sources:
+    - docs/administration.md#docker-updating
+    - docs/administration.md#updating
+  must_include: ["сделать бэкап перед обновлением", "docker compose pull"]
+  must_not_include: []
+  notes: "Docker-путь обновления: бэкап, docker compose down, pull, up; миграции применяются при запуске."
+
+- id: howto-010
+  category: howto
+  role: engineer
+  question: "Переносим paperless на новый сервер. Экспорт со старого уже сделан — как загрузить его в новую установку?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/administration.md#importer
+    - docs/administration.md#migrating-restoring
+  must_include: ["document_importer", "импорт в полностью пустую установку"]
+  must_not_include: []
+  notes: "Восстановление из экспорта делается document_importer; установка должна быть пустой, версии лучше совпадать."
+
+- id: howto-011
+  category: howto
+  role: user
+  question: "Я сканирую пачку разных бумаг одним файлом. Может ли paperless сам разрезать такой скан на отдельные документы?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/advanced_usage.md#barcodes
+    - docs/advanced_usage.md#document-splitting
+    - docs/configuration.md#PAPERLESS_CONSUMER_ENABLE_BARCODES
+  must_include: ["лист-разделитель со штрихкодом (PATCH-T)", "PAPERLESS_CONSUMER_ENABLE_BARCODES"]
+  must_not_include: []
+  notes: "Автоматическое разделение скана выполняется по страницам-разделителям со штрихкодом, включается настройкой."
+
+- id: howto-012
+  category: howto
+  role: user
+  question: "я запустил всё в докере, а где мои файлы физичиски лежат на диске?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/faq.md#im-using-docker-where-are-my-documents
+    - docs/administration.md#backup
+  must_include: ["том paperless_media", "/var/lib/docker/volumes"]
+  must_not_include: []
+  notes: "FAQ прямо отвечает: документы в томе paperless_media; список томов есть и в разделе про бэкапы."
+
+- id: config-001
+  category: config
+  role: user
+  question: "документы на русском распозноются криво, вместо текста каша. как включить русский? paperless в докере"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_OCR_LANGUAGE
+    - docs/configuration.md#PAPERLESS_OCR_LANGUAGES
+  must_include: ["PAPERLESS_OCR_LANGUAGE", "PAPERLESS_OCR_LANGUAGES", "rus"]
+  must_not_include: []
+  notes: "Русского нет в образе по умолчанию: его нужно доустановить и выбрать языком OCR."
+
+- id: config-002
+  category: config
+  role: user
+  question: "Как выставить в paperless московский часовой пояс?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_TIME_ZONE
+  must_include: ["PAPERLESS_TIME_ZONE"]
+  must_not_include: []
+  notes: "Часовой пояс задаётся одной настройкой, по умолчанию UTC."
+
+- id: config-003
+  category: config
+  role: user
+  question: "можно раскладывать сканы по подпапкам в папке consume чтоб название папки становилось тегом"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS
+    - docs/configuration.md#PAPERLESS_CONSUMER_RECURSIVE
+  must_include: ["PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS", "PAPERLESS_CONSUMER_RECURSIVE"]
+  must_not_include: []
+  notes: "Подпапки как теги работают только вместе с рекурсивным просмотром папки consume."
+
+- id: config-004
+  category: config
+  role: engineer
+  question: "Хотим перевести paperless с SQLite на наш PostgreSQL-сервер. Какие переменные окружения нужно задать для подключения?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#database
+    - docs/configuration.md#PAPERLESS_DBENGINE
+    - docs/configuration.md#PAPERLESS_DBHOST
+  must_include: ["PAPERLESS_DBENGINE=postgresql", "PAPERLESS_DBHOST"]
+  must_not_include: []
+  notes: "В v3 движок БД задаётся явно, а для PostgreSQL обязателен хост; остальные параметры имеют умолчания."
+
+- id: config-005
+  category: config
+  role: engineer
+  question: "Файлы в каталоге media называются вроде 0000123.pdf. Как сделать, чтобы они раскладывались по папкам «год/корреспондент» с понятными именами?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/advanced_usage.md#file-name-handling
+    - docs/configuration.md#PAPERLESS_FILENAME_FORMAT
+    - docs/advanced_usage.md#storage-paths
+  must_include: ["PAPERLESS_FILENAME_FORMAT", "document_renamer для уже загруженных файлов"]
+  must_not_include: []
+  notes: "Раздел описывает шаблон имени с плейсхолдерами и запуск document_renamer после смены формата."
+
+- id: config-006
+  category: config
+  role: engineer
+  question: "папка consume смонтирована с NAS по SMB и новые файлы подхватываются только после перезапуска контейнера. что не так"
+  expected_behavior: answer
+  expected_sources:
+    - docs/troubleshooting.md#consumer-fails-to-pickup-any-new-files
+    - docs/configuration.md#PAPERLESS_CONSUMER_POLLING_INTERVAL
+  must_include: ["PAPERLESS_CONSUMER_POLLING_INTERVAL"]
+  must_not_include: []
+  notes: "На сетевых ФС уведомления о новых файлах не работают, нужен опрос папки по интервалу."
+
+- id: config-007
+  category: config
+  role: user
+  question: "Поставил paperless на Raspberry Pi 4, при загрузке документов всё дико тормозит. Какие настройки можно поменять, чтобы стало полегче?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/setup.md#less-powerful-devices
+    - docs/faq.md#will-paperless-ngx-run-on-raspberry-pi
+  must_include: ["PAPERLESS_OCR_PAGES", "PAPERLESS_TASK_WORKERS"]
+  must_not_include: []
+  notes: "В setup есть список настроек для слабых устройств; FAQ про Raspberry Pi ссылается на него."
+
+- id: config-008
+  category: config
+  role: user
+  question: "Один и тот же счёт загрузился два раза и теперь висит двумя документами. Можно настроить, чтобы повторы не принимались?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/faq.md#are-duplicate-documents-rejected
+    - docs/usage.md#duplicate-documents
+    - docs/configuration.md#PAPERLESS_CONSUMER_DELETE_DUPLICATES
+  must_include: ["PAPERLESS_CONSUMER_DELETE_DUPLICATES"]
+  must_not_include: []
+  notes: "С v3 дубликаты по умолчанию принимаются и помечаются; отклонять их можно отдельной настройкой."
