@@ -67,7 +67,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
+      CLOUD_RU_API_URL: ${CLOUD_RU_API_URL:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       VOYAGE_API_URL: ${VOYAGE_API_URL:-}
       # Адреса внутри docker-сети: единственные переменные ассистента не из .env.

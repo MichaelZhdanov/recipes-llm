@@ -47,11 +47,7 @@ def _index(settings: Settings) -> int:
             settings, http=http, store=store, embedder=embedder, log=_log
         )
     manifest = report.manifest
-    cost = (
-        f"${report.cost_usd:.4f}"
-        if report.cost_usd is not None
-        else "цена модели неизвестна"
-    )
+    cost = report.cost or "цена модели неизвестна"
     masked = ", ".join(f"{k} {v}" for k, v in sorted(report.masked.items())) or "нет"
     print(
         f"Индекс построен: {manifest.ref} ({manifest.commit}), модель {manifest.embedding_model}, "

@@ -12,6 +12,7 @@ from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 LlmProvider = Literal["anthropic", "openai", "gigachat", "yandexgpt", "local"]
+EmbeddingProvider = Literal["cloudru", "voyage"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -19,6 +20,9 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 # Ключ, отправленный не на свой адрес, получает 403.
 VOYAGE_API_URL = "https://api.voyageai.com/v1"
 VOYAGE_ATLAS_API_URL = "https://ai.mongodb.com/v1"
+# Evolution Foundation Models: OpenAI-совместимый API, ключ — API-ключ сервисного
+# аккаунта уровня «Проект» (аккаунт уровня организации получает 401).
+CLOUD_RU_API_URL = "https://foundation-models.api.cloud.ru/v1"
 
 
 class Settings(BaseSettings):
@@ -34,8 +38,12 @@ class Settings(BaseSettings):
     llm_provider: LlmProvider = "anthropic"
     llm_model: str = ""
     llm_api_key: SecretStr = SecretStr("")
-    # Эмбеддинги Voyage AI; адрес должен соответствовать кабинету, где создан ключ.
-    embedding_model: str = "voyage-4"
+    # Эмбеддинги. Пустая модель — модель провайдера по умолчанию (DEFAULT_MODELS).
+    embedding_provider: EmbeddingProvider = "cloudru"
+    embedding_model: str = ""
+    cloud_ru_api_key: SecretStr = SecretStr("")
+    cloud_ru_api_url: str = CLOUD_RU_API_URL
+    # Voyage AI; адрес должен соответствовать кабинету, где создан ключ.
     voyage_api_key: SecretStr = SecretStr("")
     voyage_api_url: str = VOYAGE_API_URL
     # Умолчания рассчитаны на запуск с хоста; контейнеру ассистента адреса docker-сети задаёт compose.

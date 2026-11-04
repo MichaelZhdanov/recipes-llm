@@ -29,8 +29,12 @@ import httpx2
 from qdrant_client import QdrantClient
 
 from assistant.config import Settings
-from assistant.indexing.build import PRICE_PER_MTOK
-from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
+from assistant.indexing.build import estimate_cost
+from assistant.retrieval.embeddings import (
+    RETRIEVAL_TASK,
+    EmbeddingStats,
+    make_embedder,
+)
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import IndexManifest, VectorStore
 from evals.dataset import Case, load_cases
@@ -135,11 +139,21 @@ def _git_revision() -> str:
     return f"{sha} (есть незакоммиченные изменения)" if dirty else sha
 
 
+def _instruction_cell(template: str | None) -> str:
+    if not template:
+        return "нет, вопрос уходит как есть"
+    shown = template.format(task=RETRIEVAL_TASK, query="<вопрос>")
+    # Перевод строки сломал бы таблицу markdown.
+    return "`" + shown.replace("\n", "\\n") + "`"
+
+
 def render_report(
     results: Sequence[CaseResult],
     *,
     manifest: IndexManifest,
     revision: str,
+    provider: str,
+    query_template: str | None,
     stats: EmbeddingStats,
     today: date,
 ) -> str:
@@ -147,8 +161,7 @@ def render_report(
     mrr = mrr_per_run(results)
     latencies = [lat for r in results for lat in r.latencies]
     passed = statistics.mean(recall) >= THRESHOLDS["recall@5"]
-    price = PRICE_PER_MTOK.get(manifest.embedding_model)
-    cost = f" (≈${stats.tokens / 1_000_000 * price:.5f})" if price is not None else ""
+    cost = estimate_cost(manifest.embedding_model, stats.tokens)
     categories = Counter(r.case.category for r in results)
     chunks = ", ".join(f"{k} {v}" for k, v in sorted(manifest.chunks.items()))
 
@@ -162,7 +175,8 @@ def render_report(
         "|---|---|",
         f"| Коммит ассистента | {revision} |",
         f"| Paperless | {manifest.ref} ({manifest.commit or 'коммит неизвестен'}) |",
-        f"| Модель эмбеддингов | {manifest.embedding_model}, размерность {manifest.dim} |",
+        f"| Модель эмбеддингов | {provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
+        f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
         f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].ranks)} |",
@@ -177,7 +191,8 @@ def render_report(
         f"| MRR | {_mean_std(mrr)} | — | |",
         f"| задержка поиска p50 / p95 | {percentile(latencies, 0.5):.2f} / "
         f"{percentile(latencies, 0.95):.2f} с | показать | |",
-        f"| токены запросов Voyage | {stats.tokens}{cost} | показать | |",
+        f"| токены запросов к API эмбеддингов | {stats.tokens}"
+        f"{f' ({cost})' if cost else ''} | показать | |",
         f"| срабатывания маскера ПДн | {sum(stats.masked.values())} | — | |",
         "",
         "## По категориям и ролям",
@@ -255,6 +270,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         results,
         manifest=retriever.manifest,
         revision=_git_revision(),
+        provider=embedder.provider.name,
+        query_template=embedder.query_template,
         stats=embedder.stats,
         today=today,
     )

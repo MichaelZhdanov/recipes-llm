@@ -22,8 +22,18 @@ from assistant.indexing.sources import SourceTree, ensure_sources
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.store import IndexManifest, VectorStore
 
-# Цена за 1M токенов, $ (MongoDB Atlas, ноябрь 2026). Для оценки в отчёте, не для биллинга.
-PRICE_PER_MTOK = {"voyage-4-large": 0.12, "voyage-4": 0.06, "voyage-4-lite": 0.02}
+# Цена за 1M входных токенов: сумма и валюта. Только для оценки в отчёте,
+# не для биллинга. Voyage — прайс MongoDB Atlas, cloud.ru — каталог
+# Foundation Models; обе проверены в ноябре 2026.
+PRICE_PER_MTOK: dict[str, tuple[float, str]] = {
+    "voyage-4-large": (0.12, "$"),
+    "voyage-4": (0.06, "$"),
+    "voyage-4-lite": (0.02, "$"),
+    "ai-sage/Giga-Embeddings-instruct-3B": (32.22, "₽"),
+    "ai-sage/Giga-Embeddings-instruct-480M": (3.32, "₽"),
+    "BAAI/bge-m3": (0.61, "₽"),
+    "Qwen/Qwen3-Embedding-0.6B": (0.854, "₽"),
+}
 _PROGRESS_STEP = 512
 
 
@@ -31,9 +41,17 @@ _PROGRESS_STEP = 512
 class BuildReport:
     manifest: IndexManifest
     tokens: int
-    cost_usd: float | None
+    cost: str | None
     masked: Counter[str]
     seconds: float
+
+
+def estimate_cost(model: str, tokens: int) -> str | None:
+    """Оценка стоимости вида «≈3.2100 ₽»; None, если цены модели нет в таблице."""
+    if model not in PRICE_PER_MTOK:
+        return None
+    price, currency = PRICE_PER_MTOK[model]
+    return f"≈{tokens / 1_000_000 * price:.4f} {currency}"
 
 
 def chunk_kind(chunk: Chunk) -> str:
@@ -94,13 +112,10 @@ def build_index(
     if stored != len(chunks):
         raise RuntimeError(f"в индексе {stored} точек вместо {len(chunks)}")
 
-    price = PRICE_PER_MTOK.get(embedder.model)
     return BuildReport(
         manifest=manifest,
         tokens=embedder.stats.tokens,
-        cost_usd=embedder.stats.tokens / 1_000_000 * price
-        if price is not None
-        else None,
+        cost=estimate_cost(embedder.model, embedder.stats.tokens),
         masked=embedder.stats.masked,
         seconds=time.monotonic() - started,
     )

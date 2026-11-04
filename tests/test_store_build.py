@@ -6,7 +6,7 @@ import httpx2
 import pytest
 
 from assistant.config import Settings
-from assistant.indexing.build import build_index
+from assistant.indexing.build import build_index, estimate_cost
 from assistant.indexing.chunks import Chunk
 from assistant.indexing.docs import chunk_markdown
 from assistant.indexing.sources import SOURCE_META_FILE
@@ -183,3 +183,11 @@ def test_failed_embedding_keeps_old_index(
 
     assert store.count() == len(docs_chunks())
     assert store.manifest().ref == "v3.4.2"
+
+
+def test_cost_is_estimated_in_model_currency() -> None:
+    assert (
+        estimate_cost("ai-sage/Giga-Embeddings-instruct-3B", 1_000_000) == "≈32.2200 ₽"
+    )
+    assert estimate_cost("voyage-4", 500_000) == "≈0.0300 $"
+    assert estimate_cost("unknown-model", 10) is None

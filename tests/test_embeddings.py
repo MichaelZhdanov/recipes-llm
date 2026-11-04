@@ -5,11 +5,17 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 
+from assistant.config import CLOUD_RU_API_URL, Settings
 from assistant.retrieval.embeddings import (
+    CLOUD_RU,
+    DEFAULT_MODELS,
+    RETRIEVAL_TASK,
     VOYAGE,
     EmbeddingError,
     HttpEmbedder,
     batches,
+    make_embedder,
+    query_template,
 )
 
 KEY = "pa-test-key-1234567890"
@@ -159,3 +165,119 @@ def test_missing_key_gives_clear_error() -> None:
 
 def test_key_is_not_visible_in_repr() -> None:
     assert KEY not in repr(make(FakeApi()).__dict__)
+
+
+GIGA = "ai-sage/Giga-Embeddings-instruct-3B"
+
+
+def make_cloudru(fake: FakeApi, model: str = GIGA) -> HttpEmbedder:
+    return HttpEmbedder(
+        provider=CLOUD_RU,
+        api_key=SecretStr(KEY),
+        model=model,
+        base_url=CLOUD_RU_API_URL,
+        client=httpx2.Client(transport=httpx2.MockTransport(fake)),
+        query_template=query_template(model),
+        sleep=lambda _: None,
+    )
+
+
+def test_cloudru_query_gets_instruction_after_masking() -> None:
+    fake = FakeApi()
+
+    make_cloudru(fake).embed_query("я ivan@example.com, как настроить почту")
+
+    body = fake.bodies()[0]
+    assert "input_type" not in body
+    assert body["input"] == [
+        f"Instruct: {RETRIEVAL_TASK}\nQuery: я [EMAIL], как настроить почту"
+    ]
+    assert "ivan@example.com" not in fake.requests[0].content.decode()
+
+
+def test_cloudru_documents_go_without_instruction() -> None:
+    fake = FakeApi()
+
+    make_cloudru(fake).embed_documents(["Usage > Mail\n\nFetch mail from IMAP."])
+
+    assert str(fake.requests[0].url) == f"{CLOUD_RU_API_URL}/embeddings"
+    assert fake.bodies()[0] == {
+        "input": ["Usage > Mail\n\nFetch mail from IMAP."],
+        "model": GIGA,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("ai-sage/Giga-Embeddings-instruct-480M", "Instruct: {task}\nQuery: {query}"),
+        ("Qwen/Qwen3-Embedding-0.6B", "Instruct: {task}\nQuery:{query}"),
+        ("BAAI/bge-m3", None),
+        ("voyage-4", None),
+    ],
+)
+def test_query_template_depends_on_model(model: str, expected: str | None) -> None:
+    assert query_template(model) == expected
+
+
+def test_model_without_instruction_sends_question_as_is() -> None:
+    fake = FakeApi()
+
+    make_cloudru(fake, model="BAAI/bge-m3").embed_query("как настроить почту")
+
+    assert fake.bodies()[0]["input"] == ["как настроить почту"]
+
+
+@pytest.mark.parametrize(
+    ("status", "hint"), [(401, "уровня «Проект»"), (402, "Пополните баланс")]
+)
+def test_cloudru_errors_explain_what_to_check(status: int, hint: str) -> None:
+    fake = FakeApi(statuses=[status])
+
+    with pytest.raises(
+        EmbeddingError, match=f"cloud.ru ответил HTTP {status}"
+    ) as error:
+        make_cloudru(fake).embed_query("x")
+
+    assert hint in str(error.value)
+    assert KEY not in str(error.value)
+
+
+def test_make_embedder_picks_provider_and_its_default_model() -> None:
+    with httpx2.Client() as http:
+        cloudru = make_embedder(
+            Settings(
+                embedding_provider="cloudru",
+                embedding_model="",
+                cloud_ru_api_key=SecretStr(KEY),
+            ),
+            http,
+        )
+        voyage = make_embedder(
+            Settings(
+                embedding_provider="voyage",
+                embedding_model="",
+                voyage_api_key=SecretStr(KEY),
+            ),
+            http,
+        )
+
+    assert (cloudru.provider, cloudru.model) == (CLOUD_RU, DEFAULT_MODELS["cloudru"])
+    assert cloudru.query_template is not None
+    assert (voyage.provider, voyage.model) == (VOYAGE, "voyage-4")
+    assert voyage.query_template is None
+
+
+def test_explicit_model_wins_over_default() -> None:
+    with httpx2.Client() as http:
+        embedder = make_embedder(
+            Settings(
+                embedding_provider="cloudru",
+                embedding_model="BAAI/bge-m3",
+                cloud_ru_api_key=SecretStr(KEY),
+            ),
+            http,
+        )
+
+    assert embedder.model == "BAAI/bge-m3"
+    assert embedder.query_template is None
