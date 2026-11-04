@@ -5,13 +5,18 @@ import httpx2
 import pytest
 from pydantic import SecretStr
 
-from assistant.retrieval.embeddings import EmbeddingError, VoyageEmbedder, batches
+from assistant.retrieval.embeddings import (
+    VOYAGE,
+    EmbeddingError,
+    HttpEmbedder,
+    batches,
+)
 
 KEY = "pa-test-key-1234567890"
 
 
-class FakeVoyage:
-    """Подменяет API Voyage: запоминает запросы и отвечает векторами [индекс, длина]."""
+class FakeApi:
+    """Подменяет API эмбеддингов: запоминает запросы и отвечает векторами [индекс, длина]."""
 
     def __init__(
         self, statuses: list[int] | None = None, shuffle: bool = False
@@ -42,9 +47,10 @@ class FakeVoyage:
 
 
 def make(
-    fake: FakeVoyage, sleeps: list[float] | None = None, key: str = KEY
-) -> VoyageEmbedder:
-    return VoyageEmbedder(
+    fake: FakeApi, sleeps: list[float] | None = None, key: str = KEY
+) -> HttpEmbedder:
+    return HttpEmbedder(
+        provider=VOYAGE,
         api_key=SecretStr(key),
         model="voyage-4",
         base_url="https://api.voyageai.com/v1/",
@@ -54,7 +60,7 @@ def make(
 
 
 def test_personal_data_never_reaches_the_api() -> None:
-    fake = FakeVoyage()
+    fake = FakeApi()
     embedder = make(fake)
 
     embedder.embed_query(
@@ -71,7 +77,7 @@ def test_personal_data_never_reaches_the_api() -> None:
 
 
 def test_request_shape_and_auth_header() -> None:
-    fake = FakeVoyage()
+    fake = FakeApi()
 
     make(fake).embed_documents(["a", "b"])
 
@@ -86,7 +92,7 @@ def test_request_shape_and_auth_header() -> None:
 
 
 def test_query_uses_query_input_type() -> None:
-    fake = FakeVoyage()
+    fake = FakeApi()
 
     vector = make(fake).embed_query("вопрос")
 
@@ -95,7 +101,7 @@ def test_query_uses_query_input_type() -> None:
 
 
 def test_documents_are_sent_in_batches_and_order_is_kept() -> None:
-    fake = FakeVoyage(shuffle=True)
+    fake = FakeApi(shuffle=True)
     embedder = make(fake)
     embedder.max_batch_texts = 2
 
@@ -116,7 +122,7 @@ def test_batches_respect_character_limit() -> None:
 
 def test_rate_limit_is_retried_after_retry_after() -> None:
     sleeps: list[float] = []
-    fake = FakeVoyage(statuses=[429, 200])
+    fake = FakeApi(statuses=[429, 200])
 
     make(fake, sleeps).embed_query("x")
 
@@ -126,7 +132,7 @@ def test_rate_limit_is_retried_after_retry_after() -> None:
 
 @pytest.mark.parametrize("status", [401, 403])
 def test_auth_error_is_clear_and_does_not_leak_key(status: int) -> None:
-    fake = FakeVoyage(statuses=[status])
+    fake = FakeApi(statuses=[status])
 
     with pytest.raises(EmbeddingError, match=f"HTTP {status}") as error:
         make(fake).embed_query("x")
@@ -138,7 +144,7 @@ def test_auth_error_is_clear_and_does_not_leak_key(status: int) -> None:
 
 
 def test_other_errors_have_no_auth_hint() -> None:
-    fake = FakeVoyage(statuses=[400])
+    fake = FakeApi(statuses=[400])
 
     with pytest.raises(EmbeddingError, match="HTTP 400") as error:
         make(fake).embed_query("x")
@@ -148,8 +154,8 @@ def test_other_errors_have_no_auth_hint() -> None:
 
 def test_missing_key_gives_clear_error() -> None:
     with pytest.raises(EmbeddingError, match="VOYAGE_API_KEY"):
-        make(FakeVoyage(), key="")
+        make(FakeApi(), key="")
 
 
 def test_key_is_not_visible_in_repr() -> None:
-    assert KEY not in repr(make(FakeVoyage()).__dict__)
+    assert KEY not in repr(make(FakeApi()).__dict__)

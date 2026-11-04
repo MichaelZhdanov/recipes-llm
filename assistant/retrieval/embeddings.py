@@ -1,19 +1,22 @@
-"""Эмбеддинги через Voyage AI (рекомендация Anthropic: своей модели эмбеддингов у неё нет).
+"""Эмбеддинги через внешний API.
 
-Свой тонкий адаптер на httpx2 вместо SDK `voyageai`: это один POST-запрос,
-а SDK тянет requests, aiohttp, pillow и langchain-text-splitters.
+API эмбеддингов у разных компаний устроены почти одинаково: POST
+{base}/embeddings, в теле модель и список текстов, в ответе data[].embedding
+и usage.total_tokens. Отличия собраны в `Provider`, а маскирование, пакеты,
+повторы и учёт токенов общие и живут в `HttpEmbedder`.
+
+Свой тонкий адаптер на httpx2 вместо SDK: это один POST-запрос, а SDK тянут
+лишние зависимости (у `voyageai` это requests, aiohttp, pillow и
+langchain-text-splitters).
 
 **Каждый текст перед отправкой проходит mask_pii.** Маскирование стоит здесь,
 в адаптере, а не у вызывающего кода: так его нельзя случайно обойти.
 Документация и код Paperless публичны, но вопросы пользователей — нет.
-
-API: POST {base}/embeddings, до 1000 текстов и 320K токенов в запросе для
-voyage-4. Батчи берём меньше (128 текстов, ≈200K символов), с запасом.
 """
 
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -25,13 +28,6 @@ from assistant.http import request_with_retries
 from assistant.security.pii import mask_pii
 
 InputType = Literal["query", "document"]
-
-# Ключ из одного кабинета на адресе другого даёт 403: подсказываем, что проверить.
-AUTH_STATUSES = frozenset({401, 403})
-AUTH_HINT = (
-    ". Проверьте VOYAGE_API_KEY и VOYAGE_API_URL: ключи dash.voyageai.com работают "
-    f"с {VOYAGE_API_URL}, ключи MongoDB Atlas — с {VOYAGE_ATLAS_API_URL}"
-)
 
 
 class Embedder(Protocol):
@@ -56,6 +52,34 @@ class EmbeddingStats:
     masked: Counter[str] = field(default_factory=Counter)
 
 
+@dataclass(frozen=True)
+class Provider:
+    """Чем отличаются API эмбеддингов разных компаний."""
+
+    name: str
+    # Имя переменной с ключом и где его взять — для понятной ошибки без ключа.
+    key_env: str
+    key_help: str
+    # Voyage помечает вопрос и документ полем input_type; OpenAI-совместимые API так не умеют.
+    sends_input_type: bool
+    # Подсказки к частым ошибкам: HTTP-статус → что проверить.
+    hints: Mapping[int, str] = field(default_factory=dict)
+
+
+# Ключ из одного кабинета на адресе другого даёт 403: подсказываем, что проверить.
+_VOYAGE_AUTH_HINT = (
+    "Проверьте VOYAGE_API_KEY и VOYAGE_API_URL: ключи dash.voyageai.com работают "
+    f"с {VOYAGE_API_URL}, ключи MongoDB Atlas — с {VOYAGE_ATLAS_API_URL}"
+)
+VOYAGE = Provider(
+    name="Voyage",
+    key_env="VOYAGE_API_KEY",
+    key_help="создайте ключ на dash.voyageai.com",
+    sends_input_type=True,
+    hints={401: _VOYAGE_AUTH_HINT, 403: _VOYAGE_AUTH_HINT},
+)
+
+
 def batches(
     texts: Sequence[str], max_texts: int, max_chars: int
 ) -> Iterator[list[str]]:
@@ -71,13 +95,15 @@ def batches(
         yield batch
 
 
-class VoyageEmbedder:
+class HttpEmbedder:
+    # С запасом от лимитов API (у Voyage 1000 текстов и 320K токенов в запросе).
     max_batch_texts = 128
     max_batch_chars = 200_000
 
     def __init__(
         self,
         *,
+        provider: Provider,
         api_key: SecretStr,
         model: str,
         base_url: str,
@@ -86,9 +112,10 @@ class VoyageEmbedder:
     ) -> None:
         if not api_key.get_secret_value():
             raise EmbeddingError(
-                "не задан VOYAGE_API_KEY: создайте ключ на dash.voyageai.com "
-                "и добавьте строку VOYAGE_API_KEY=… в .env"
+                f"не задан {provider.key_env}: {provider.key_help} "
+                f"и добавьте строку {provider.key_env}=… в .env"
             )
+        self.provider = provider
         self.model = model
         self.stats = EmbeddingStats()
         self._api_key = api_key
@@ -114,7 +141,9 @@ class VoyageEmbedder:
         return vectors
 
     def _request(self, inputs: list[str], input_type: InputType) -> list[list[float]]:
-        body = {"input": inputs, "model": self.model, "input_type": input_type}
+        body: dict[str, object] = {"input": inputs, "model": self.model}
+        if self.provider.sends_input_type:
+            body["input_type"] = input_type
         headers = {"Authorization": f"Bearer {self._api_key.get_secret_value()}"}
         response = request_with_retries(
             lambda: self._client.post(self._url, json=body, headers=headers),
@@ -123,24 +152,24 @@ class VoyageEmbedder:
         self.stats.requests += 1
         if response.status_code != 200:
             # Тело ответа обрезаем: нам нужна причина, а не простыня.
-            message = (
-                f"Voyage ответил HTTP {response.status_code}: {response.text[:300]}"
-            )
-            if response.status_code in AUTH_STATUSES:
-                message += AUTH_HINT
+            message = f"{self.provider.name} ответил HTTP {response.status_code}: {response.text[:300]}"
+            hint = self.provider.hints.get(response.status_code)
+            if hint:
+                message += f". {hint}"
             raise EmbeddingError(message)
         data = response.json()
         items = sorted(data["data"], key=lambda item: item["index"])
         if len(items) != len(inputs):
             raise EmbeddingError(
-                f"Voyage вернул {len(items)} векторов на {len(inputs)} текстов"
+                f"{self.provider.name} вернул {len(items)} векторов на {len(inputs)} текстов"
             )
         self.stats.tokens += int(data["usage"]["total_tokens"])
         return [item["embedding"] for item in items]
 
 
-def make_embedder(settings: Settings, client: httpx2.Client) -> VoyageEmbedder:
-    return VoyageEmbedder(
+def make_embedder(settings: Settings, client: httpx2.Client) -> HttpEmbedder:
+    return HttpEmbedder(
+        provider=VOYAGE,
         api_key=settings.voyage_api_key,
         model=settings.embedding_model,
         base_url=settings.voyage_api_url,
