@@ -248,7 +248,7 @@ def test_prompt_has_system_rules_sources_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="как выбрать язык OCR")
 
     system, user = llm.calls[0]
-    assert system == {"role": "system", "content": load_prompt("answer_v1")}
+    assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert 'path="docs/configuration.md"' in user["content"]
     assert user["content"].endswith("Вопрос пользователя: как выбрать язык OCR")
@@ -313,3 +313,28 @@ def test_render_not_found_offers_what_was_found(retriever: Retriever) -> None:
         "Не нашёл ответа в документации и коде Paperless-ngx v3.4.2."
     )
     assert "Вот что может пригодиться:" in text
+
+
+def test_glossary_terms_from_sources_go_into_the_prompt(retriever: Retriever) -> None:
+    llm = FakeLlm({"status": "not_found", "statements": []})
+
+    ask(retriever, llm, question="IMAP mail accounts")
+
+    user = llm.calls[0][1]["content"]
+    # «mail accounts» есть в источниках, значит, есть и перевод из глоссария.
+    assert "Термины (переводи только так):\n" in user
+    assert "- mail account — почтовый ящик" in user
+    # Термина, которого нет в источниках, в промпте нет.
+    assert "реверс-прокси" not in user
+    assert user.index("Термины") < user.index("Вопрос пользователя")
+
+
+def test_no_terms_block_without_matching_terms(retriever: Retriever) -> None:
+    llm = FakeLlm({"status": "not_found", "statements": []})
+    answerer = Answerer(
+        retriever, llm, model="GigaChat-2", ref="v3.4.2", k=3, glossary=()
+    )
+
+    answerer.answer("IMAP mail accounts")
+
+    assert "Термины" not in llm.calls[0][1]["content"]

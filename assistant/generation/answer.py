@@ -42,6 +42,7 @@ from assistant.generation.gigachat import (
     llm_model,
     make_llm,
 )
+from assistant.generation.glossary import Term, load_glossary, render_terms, terms_in
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
@@ -49,7 +50,8 @@ from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-PROMPT_VERSION = "answer_v1"
+# v1 — без глоссария; v2 добавила блок «Термины» (glossary.py).
+PROMPT_VERSION = "answer_v2"
 K = 5
 # Сколько найденных кусков приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -166,18 +168,25 @@ def prepare_sources(hits: Sequence[Hit]) -> list[SourceText]:
     ]
 
 
-def user_message(question: str, sources: Sequence[SourceText], ref: str) -> str:
+def user_message(
+    question: str,
+    sources: Sequence[SourceText],
+    ref: str,
+    glossary: Sequence[Term] = (),
+) -> str:
+    """Источники, термины из них (если есть в глоссарии) и вопрос."""
     blocks = [
         f'<source id="{s.number}" path="{s.chunk.path}" '
         f'lines="{s.chunk.start_line}-{s.chunk.end_line}" '
         f'title="{_attribute(s.chunk.breadcrumb)}">\n{s.text}\n</source>'
         for s in sources
     ]
-    return (
-        f"Источники (Paperless-ngx {ref}):\n\n"
-        + "\n\n".join(blocks)
-        + f"\n\nВопрос пользователя: {question}"
-    )
+    parts = [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
+    terms = terms_in((s.text for s in sources), glossary)
+    if terms:
+        parts.append("Термины (переводи только так):\n" + render_terms(terms))
+    parts.append(f"Вопрос пользователя: {question}")
+    return "\n\n".join(parts)
 
 
 def _link(number: int, chunk: Chunk, start: int, end: int) -> SourceLink:
@@ -303,6 +312,7 @@ class Answerer:
         ref: str,
         prompt_version: str = PROMPT_VERSION,
         k: int = K,
+        glossary: Sequence[Term] | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.model = model
@@ -311,6 +321,7 @@ class Answerer:
         self._llm = llm
         self._ref = ref
         self._k = k
+        self._glossary = load_glossary() if glossary is None else glossary
         self._clock = clock
 
     def answer(self, question: str) -> AnswerResult:
@@ -325,7 +336,9 @@ class Answerer:
                     {"role": "system", "content": load_prompt(self.prompt_version)},
                     {
                         "role": "user",
-                        "content": user_message(question, sources, self._ref),
+                        "content": user_message(
+                            question, sources, self._ref, self._glossary
+                        ),
                     },
                 ],
                 model=self.model,
