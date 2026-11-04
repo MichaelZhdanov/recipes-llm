@@ -1,4 +1,4 @@
-"""Командная строка: `python -m assistant.cli index`, `… ask "вопрос"` и `… search "вопрос"`.
+"""Командная строка: `python -m assistant.cli index | sources | ask "вопрос" | search "вопрос"`.
 
 Запускается на хосте через `uv run --env-file .env` (см. Makefile). Ход
 работы пишется в stderr, результат — в stdout.
@@ -17,7 +17,7 @@ from assistant.config import Settings
 from assistant.generation.answer import make_answerer, render_markdown
 from assistant.generation.gigachat import LlmError, make_http_client
 from assistant.indexing.build import build_index
-from assistant.indexing.sources import SourceDownloadError
+from assistant.indexing.sources import SourceDownloadError, ensure_sources
 from assistant.retrieval.embeddings import EmbeddingError, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import (
@@ -60,6 +60,18 @@ def _index(settings: Settings) -> int:
         f"маскер сработал: {masked}\n"
         f"время: {report.seconds:.0f} с"
     )
+    return 0
+
+
+def _sources(settings: Settings) -> int:
+    with httpx2.Client(timeout=60) as http:
+        tree = ensure_sources(
+            settings.paperless_repo_url,
+            settings.paperless_ref,
+            settings.paperless_source_path,
+            http,
+        )
+    print(f"исходники {tree.ref} ({tree.commit or 'коммит неизвестен'}) в {tree.root}")
     return 0
 
 
@@ -120,6 +132,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
+    commands.add_parser(
+        "sources", help="только скачать исходники PAPERLESS_REF, без индекса"
+    )
     ask = commands.add_parser("ask", help="ответ со ссылками на документацию и код")
     ask.add_argument("question")
     ask.add_argument("--json", action="store_true", help="вывод в JSON")
@@ -135,6 +150,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "index":
             return _index(settings)
+        if args.command == "sources":
+            return _sources(settings)
         if args.command == "ask":
             return _ask(settings, args.question, args.json)
         if args.command == "search":

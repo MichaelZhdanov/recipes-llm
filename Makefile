@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index ask search eval test lint format
+.PHONY: help up down index sources ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -31,6 +31,9 @@ RUN = uv run --env-file .env python -m assistant.cli
 index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги, Qdrant
 	docker compose up -d --wait qdrant
 	$(RUN) index
+
+sources: .env ## только скачать исходники Paperless по тегу (без ключей и Qdrant)
+	$(RUN) sources
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
