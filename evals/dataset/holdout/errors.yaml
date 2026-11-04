@@ -1,0 +1,107 @@
+# Сгенерировано evals/generate_errors.py из Paperless-ngx v3.4.2, сид 20261104.
+# Вручную не править: при смене тега сгенерировать заново.
+- id: error_holdout-001
+  category: error
+  role: engineer
+  question: '[2026-11-04 10:15:02,123] [ERROR] [paperless.serialisers] [3f2a9c1d] Some ids in objects don''t exist or were specified twice.'
+  expected_behavior: answer
+  expected_line: src/documents/serialisers.py:3055
+  notes: 'исключение (raise), форма: строка лога'
+- id: error_holdout-002
+  category: error
+  role: user
+  question: 'scan_0042.pdf: Not consuming /usr/src/paperless/media/documents/originals/0000042.pdf: Given ASN 42 already exists!'
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:1169
+  notes: 'обработка документа (_fail), форма: ошибка задачи'
+- id: error_holdout-003
+  category: error
+  role: user
+  question: 'В логах paperless вот такое: «Error occurred sending notification email: /usr/src/paperless/media/documents/originals/0000042.pdf». Что это значит и что делать?'
+  expected_behavior: answer
+  expected_line: src/documents/workflows/actions.py:204
+  notes: 'ошибка в логе (log.exception), форма: вопрос'
+- id: error_holdout-004
+  category: error
+  role: user
+  question: Unsupported search language '[Errno 13] Permission denied' - stemming disabled.
+  expected_behavior: answer
+  expected_line: src/documents/search/_tokenizer.py:97
+  notes: 'предупреждение в логе (log.warning), форма: обрезано'
+- id: error_holdout-005
+  category: error
+  role: engineer
+  question: 'Dir does exist: scan_0042.pdf'
+  expected_behavior: answer
+  expected_line: src/paperless_testing/assertions.py:27
+  notes: 'исключение (raise), форма: сообщение'
+- id: error_holdout-006
+  category: error
+  role: user
+  question: '[2026-11-04 10:15:02,123] [ERROR] [paperless.consumer] [3f2a9c1d] Error while executing pre-consume script: /usr/src/paperless/media/documents/originals/0000042.pdf'
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:331
+  notes: 'обработка документа (_fail), форма: строка лога'
+- id: error_holdout-007
+  category: error
+  role: user
+  question: 'scan_0042.pdf: Unable to access folder /usr/src/paperless/media/documents/originals/0000042.pdf, attempting folder listing'
+  expected_behavior: answer
+  expected_line: src/paperless_mail/mail.py:770
+  notes: 'ошибка в логе (log.error), форма: ошибка задачи'
+- id: error_holdout-008
+  category: error
+  role: user
+  question: 'В логах paperless вот такое: «Remote OCR was requested for this document but no remote parser is available for it, processing locally instead.». Что это значит и что делать?'
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:487
+  notes: 'предупреждение в логе (log.warning), форма: вопрос'
+- id: error_holdout-009
+  category: error
+  role: engineer
+  question: Value must be an id of an element in /usr/src/paperless/media/
+  expected_behavior: answer
+  expected_line: src/documents/serialisers.py:926
+  notes: 'исключение (raise), форма: обрезано'
+- id: error_holdout-010
+  category: error
+  role: user
+  question: 'Error editing document /usr/src/paperless/media/documents/originals/0000042.pdf: 42'
+  expected_behavior: answer
+  expected_line: src/documents/bulk_edit.py:1004
+  notes: 'ошибка в логе (log.exception), форма: сообщение'
+- id: error_holdout-011
+  category: error
+  role: user
+  question: '[2026-11-04 10:15:02,123] [WARNING] [paperless.vector_store] [3f2a9c1d] Skipping compact: no stored vector dimension'
+  expected_behavior: answer
+  expected_line: src/paperless_ai/vector_store.py:602
+  notes: 'предупреждение в логе (log.warning), форма: строка лога'
+- id: error_holdout-012
+  category: error
+  role: engineer
+  question: 'scan_0042.pdf: Required environment variable ''[Errno 13] Permission denied'' is not set'
+  expected_behavior: answer
+  expected_line: src/paperless/settings/parsers.py:246
+  notes: 'исключение (raise), форма: ошибка задачи'
+- id: error_holdout-013
+  category: error
+  role: user
+  question: 'В логах paperless вот такое: «Exception during folder listing, unable to provide list folders: 42». Что это значит и что делать?'
+  expected_behavior: answer
+  expected_line: src/paperless_mail/mail.py:777
+  notes: 'ошибка в логе (log.error), форма: вопрос'
+- id: error_holdout-014
+  category: error
+  role: user
+  question: Exception during barcode scann
+  expected_behavior: answer
+  expected_line: src/documents/barcodes.py:302
+  notes: 'предупреждение в логе (log.warning), форма: обрезано'
+- id: error_holdout-015
+  category: error
+  role: engineer
+  question: Correspondent does not exist
+  expected_behavior: answer
+  expected_line: src/documents/serialisers.py:1989
+  notes: 'исключение (raise), форма: сообщение'
