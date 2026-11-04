@@ -20,6 +20,7 @@ dev = [
     "pytest",
     "pyyaml>=6.0.3",
     "ruff",
+    "shellcheck-py>=0.11.0.1",
     "types-pyyaml>=6.0.12.20261103",
 ]
 

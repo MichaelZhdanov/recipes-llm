@@ -77,17 +77,21 @@ def add_missing_secrets(text: str) -> tuple[str, list[str]]:
     return "\n".join(lines) + "\n", added
 
 
+def write_private(target: Path, content: str) -> None:
+    """Перезаписывает файл с секретами: права 0600, атомарно."""
+    temporary = target.with_name(f"{target.name}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as env_file:
+        env_file.write(content)
+    # replace атомарен: .env либо старый, либо новый целиком.
+    os.replace(temporary, target)
+
+
 def update_env(target: Path) -> list[str]:
     """Дописывает в target недостающие секреты. Права 0600 сохраняются."""
-    text = target.read_text(encoding="utf-8")
-    content, added = add_missing_secrets(text)
+    content, added = add_missing_secrets(target.read_text(encoding="utf-8"))
     if added:
-        temporary = target.with_name(f"{target.name}.tmp")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as env_file:
-            env_file.write(content)
-        # replace атомарен: .env либо старый, либо новый целиком.
-        os.replace(temporary, target)
+        write_private(target, content)
     return added
 
 

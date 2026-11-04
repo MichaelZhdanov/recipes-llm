@@ -1,0 +1,11 @@
+# Раз в сутки: исходники Paperless на теге и индекс, если их ещё нет (deploy/refresh.sh).
+[Unit]
+Description=Paperless Assistant: исходники Paperless и индекс
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/paperless-assistant
+ExecStart=/opt/paperless-assistant/deploy/refresh.sh

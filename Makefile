@@ -68,10 +68,11 @@ eval: .env ## прогон эталонного набора, отчёт в eval
 test: ## unit-тесты (pytest)
 	uv run pytest
 
-lint: ## ruff check, ruff format --check, mypy
+lint: ## ruff check, ruff format --check, mypy, shellcheck
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
+	uv run shellcheck deploy/*.sh
 
 format: ## автоформатирование и автоисправления ruff
 	uv run ruff format .

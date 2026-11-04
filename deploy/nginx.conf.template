@@ -1,0 +1,31 @@
+# Paperless Assistant: nginx на хосте → ассистент на 127.0.0.1:${ASSISTANT_PORT}.
+# bootstrap.sh подставляет ${DOMAIN} и ${ASSISTANT_PORT} (envsubst только этих
+# двух имён: переменные nginx вроде $binary_remote_addr остаются как есть).
+# HTTPS, сертификат Let's Encrypt, редирект с http и HSTS добавляет certbot --nginx.
+
+# Перебор пароля: не больше 10 попыток входа в минуту с одного адреса.
+limit_req_zone $binary_remote_addr zone=pa_login:1m rate=10r/m;
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    server_tokens off;
+    # Вопрос — до 2000 символов в JSON: больше не нужно.
+    client_max_body_size 64k;
+
+    location = /login {
+        limit_req zone=pa_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:${ASSISTANT_PORT};
+        include proxy_params;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:${ASSISTANT_PORT};
+        include proxy_params;
+        # Ответ GigaChat с проверкой ссылок — обычно 5–20 секунд, с повторами дольше.
+        proxy_read_timeout 120s;
+    }
+}
