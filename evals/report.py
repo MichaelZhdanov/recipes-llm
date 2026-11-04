@@ -26,6 +26,7 @@ from evals.answer_metrics import (
     abstention,
     citation_accuracy,
     cost_rub,
+    current_cited,
     error_localization,
     expected_source_cited,
     false_refusal,
@@ -37,6 +38,7 @@ from evals.answer_metrics import (
     outcomes,
     per_run,
     routed_as_error,
+    stale_answers,
     statement_coverage,
     term_fixes,
     top1_scores,
@@ -321,6 +323,17 @@ def _error_rows(results: Sequence[AnswerCase], gates: dict[str, bool]) -> list[s
     ]
 
 
+def _changelog_rows(results: Sequence[AnswerCase]) -> list[str]:
+    stale = stale_answers(results)
+    if not stale.n:
+        return []
+    return [
+        f"| changelog: старая запись подана как текущая | {stale} | ≈ 0 | |",
+        f"| changelog: ответ ссылается на актуальное состояние | {current_cited(results)} "
+        "| показать | |",
+    ]
+
+
 def _fixes_cell(results: Sequence[AnswerCase]) -> str:
     fixes = term_fixes(results)
     if not fixes:
@@ -459,6 +472,7 @@ def render_answer_report(
             else []
         ),
         *_error_rows(results, gates),
+        *_changelog_rows(results),
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
         f"| ответ ссылается на ожидаемый источник | {expected_source_cited(results)} | показать | |",
