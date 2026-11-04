@@ -55,7 +55,15 @@ from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from evals.answer_metrics import AnswerCase, AnswerRun
-from evals.dataset import DATASET_DIR, HOLDOUT_DIR, Case, load_canaries, load_cases
+from evals.dataset import (
+    CLARITY_CANARIES_FILE,
+    DATASET_DIR,
+    HOLDOUT_DIR,
+    Case,
+    load_canaries,
+    load_cases,
+    load_clarity_canaries,
+)
 from evals.judge import Judge, Judging, run_judge
 from evals.report import (
     THRESHOLDS,
@@ -280,7 +288,8 @@ def _judge(
     _log(
         f"судья {judge.model}: {sum(len(r.runs) for r in results)} ответов и канарейки"
     )
-    return run_judge(results, judge, load_canaries())
+    clarity = load_clarity_canaries() if CLARITY_CANARIES_FILE.exists() else []
+    return run_judge(results, judge, load_canaries(), clarity)
 
 
 def _finish(

@@ -41,6 +41,7 @@ from evals.judge import (
     Judging,
     canary_scores,
     clarity,
+    clarity_canary_scores,
     groundedness,
     must_include_judged,
     unjudged,
@@ -538,9 +539,22 @@ def _judge_rows(judging: Judging | None) -> list[str]:
         f"| must_include в howto (судья) | {must_include_judged(judging.verdicts)} | показать | |",
         f"| канарейки: судья поймал неверные | {caught} | все | |",
         f"| канарейки: судья принял верные | {accepted} | все | |",
+        *_clarity_canary_rows(judging),
         f"| пункты без вердикта судьи | {unjudged(judging.verdicts)}, "
         f"неразобранных ответов {judging.failures} | 0 | |",
         f"| токены судьи | {judging.stats.total_tokens} | показать | |",
+    ]
+
+
+def _clarity_canary_rows(judging: Judging) -> list[str]:
+    if not judging.clarity_canaries:
+        return []
+    caught, accepted = clarity_canary_scores(
+        judging.clarity_canaries, judging.clarity_marks
+    )
+    return [
+        f"| канарейки грамотности: судья поймал плохие тексты | {caught} | все | |",
+        f"| канарейки грамотности: судья принял хорошие | {accepted} | все | |",
     ]
 
 
@@ -592,4 +606,18 @@ def _judge_sections(
     lines += unclear or ["Нет."]
     lines += ["", f"## Судья: ошибки на канарейках ({len(missed)})", ""]
     lines += missed or ["Нет."]
+    if judging.clarity_canaries:
+        missed_clarity = [
+            f"- {c.id} (clear={c.clear}): судья сказал {mark}"
+            for c, mark in zip(
+                judging.clarity_canaries, judging.clarity_marks, strict=True
+            )
+            if mark is not c.clear
+        ]
+        lines += [
+            "",
+            f"## Судья: ошибки на канарейках грамотности ({len(missed_clarity)})",
+            "",
+        ]
+        lines += missed_clarity or ["Нет."]
     return lines

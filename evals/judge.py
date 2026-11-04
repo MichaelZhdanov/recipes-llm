@@ -18,19 +18,21 @@
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel, LlmStats
+from assistant.generation.glossary import Term, load_glossary, render_terms, terms_in
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
-from evals.dataset import Canary
+from evals.dataset import Canary, ClarityCanary
 
 JUDGE_MODEL = "GigaChat-3-Ultra"
-# v1 — только groundedness и факты; v2 добавила грамотность (clear).
-JUDGE_PROMPT = "judge_v2"
+# v1 — только groundedness и факты; v2 добавила грамотность (clear);
+# v3 — термины из глоссария в оценке грамотности.
+JUDGE_PROMPT = "judge_v3"
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_TOKENS = 2000
 
@@ -128,12 +130,17 @@ def claims_of(run: AnswerRun) -> list[Claim]:
     return claims
 
 
-def judge_message(question: str, claims: Sequence[Claim], facts: Sequence[str]) -> str:
-    parts = [
-        f"Вопрос пользователя: {question}",
-        "",
-        "Утверждения ответа и их фрагменты:",
-    ]
+def judge_message(
+    question: str,
+    claims: Sequence[Claim],
+    facts: Sequence[str],
+    terms: Sequence[Term] = (),
+) -> str:
+    parts = [f"Вопрос пользователя: {question}"]
+    if terms:
+        # Тот же блок, что видел ассистент: как переводить термины из фрагментов.
+        parts += ["", "Термины (как их нужно переводить):", render_terms(terms)]
+    parts += ["", "Утверждения ответа и их фрагменты:"]
     for number, claim in enumerate(claims, start=1):
         parts += ["", f'<statement number="{number}">', f"<text>{claim.text}</text>"]
         parts += [
@@ -155,8 +162,10 @@ class Judge:
         *,
         model: str = JUDGE_MODEL,
         prompt_version: str = JUDGE_PROMPT,
+        glossary: Sequence[Term] | None = None,
     ) -> None:
         self.llm = llm
+        self._glossary = load_glossary() if glossary is None else glossary
         self.model = model
         self.prompt_version = prompt_version
         self._prompt = (PROMPTS_DIR / f"{prompt_version}.md").read_text(
@@ -170,10 +179,15 @@ class Judge:
     ) -> Verdict:
         if not claims and not facts:
             return Verdict([], [], [], [])
+        # Термины ищутся во фрагментах: это слова, которые ассистент переводил.
+        terms = terms_in((f for c in claims for f in c.fragments), self._glossary)
         completion = self.llm.chat(
             [
                 {"role": "system", "content": self._prompt},
-                {"role": "user", "content": judge_message(question, claims, facts)},
+                {
+                    "role": "user",
+                    "content": judge_message(question, claims, facts, terms),
+                },
             ],
             model=self.model,
             temperature=DETERMINISTIC_TEMPERATURE,
@@ -241,13 +255,19 @@ class Judging:
     canary_marks: list[bool | None]
     stats: LlmStats
     failures: int
+    clarity_canaries: list[ClarityCanary] = field(default_factory=list)
+    clarity_marks: list[bool | None] = field(default_factory=list)
 
 
 def run_judge(
-    results: Sequence[AnswerCase], judge: Judge, canaries: Sequence[Canary]
+    results: Sequence[AnswerCase],
+    judge: Judge,
+    canaries: Sequence[Canary],
+    clarity_canaries: Sequence[ClarityCanary] = (),
 ) -> Judging:
     verdicts = judge_results(results, judge)
     marks = judge_canaries(canaries, judge)
+    clarity_marks = judge_clarity_canaries(clarity_canaries, judge)
     return Judging(
         model=judge.model,
         prompt_version=judge.prompt_version,
@@ -256,6 +276,8 @@ def run_judge(
         canary_marks=marks,
         stats=judge.llm.stats,
         failures=judge.failures,
+        clarity_canaries=list(clarity_canaries),
+        clarity_marks=clarity_marks,
     )
 
 
@@ -263,6 +285,14 @@ def judge_canaries(canaries: Sequence[Canary], judge: Judge) -> list[bool | None
     return [
         judge.judge("—", [Claim(c.statement, [c.quote])], []).supported[0]
         for c in canaries
+    ]
+
+
+def judge_clarity_canaries(
+    canaries: Sequence[ClarityCanary], judge: Judge
+) -> list[bool | None]:
+    return [
+        judge.judge("—", [Claim(c.statement, [c.quote])], []).clear[0] for c in canaries
     ]
 
 
@@ -298,4 +328,16 @@ def canary_scores(
     return (
         Rate(sum(m is False for m in wrong), len(wrong)),
         Rate(sum(m is True for m in right), len(right)),
+    )
+
+
+def clarity_canary_scores(
+    canaries: Sequence[ClarityCanary], marks: Sequence[bool | None]
+) -> tuple[Rate, Rate]:
+    """(пойманы плохие тексты, приняты хорошие). Без ответа судьи — промах."""
+    bad = [m for c, m in zip(canaries, marks, strict=True) if not c.clear]
+    good = [m for c, m in zip(canaries, marks, strict=True) if c.clear]
+    return (
+        Rate(sum(m is False for m in bad), len(bad)),
+        Rate(sum(m is True for m in good), len(good)),
     )

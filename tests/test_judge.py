@@ -6,9 +6,10 @@ from eval_helpers import CHUNK, RUN, SOURCES, case
 
 from assistant.generation.answer import assemble
 from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
+from assistant.generation.glossary import parse_glossary
 from assistant.retrieval.store import Hit
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
-from evals.dataset import Canary
+from evals.dataset import Canary, ClarityCanary
 from evals.judge import (
     JUDGE_MODEL,
     Claim,
@@ -17,7 +18,9 @@ from evals.judge import (
     canary_scores,
     claims_of,
     clarity,
+    clarity_canary_scores,
     groundedness,
+    judge_clarity_canaries,
     judge_message,
     judge_results,
     must_include_judged,
@@ -205,3 +208,61 @@ def test_clarity_is_judged_separately_from_support() -> None:
     assert verdict.supported == [True, True]
     assert verdict.clear == [True, False]
     assert clarity({("howto-001", 0): verdict}) == Rate(1, 2)
+
+
+def test_judge_sees_glossary_terms_from_fragments() -> None:
+    glossary = parse_glossary(
+        "volume\tтом\t-\tтом Docker, не «объём»\nimage\tобраз\t-\t\n"
+    )
+    llm = FakeJudgeLlm([reply([True])])
+    claim = Claim(
+        "Документы лежат в Docker-объёме.",
+        ["docs/faq.md:19-19\nstored inside the docker volume"],
+    )
+
+    Judge(llm, glossary=glossary).judge("где файлы", [claim], [])
+
+    message = llm.calls[0][1]["content"]
+    assert (
+        "Термины (как их нужно переводить):\n- volume — том (том Docker, не «объём»)"
+        in message
+    )
+    # «image» во фрагменте нет — и в блоке его нет.
+    assert "образ" not in message
+    assert llm.calls[0][0]["content"].startswith("Ты проверяешь ответы")
+
+
+def test_clarity_canaries_are_scored_by_clear_verdict() -> None:
+    canaries = [
+        ClarityCanary(
+            id="clarity-001", statement="Docker-объём", quote="volume", clear=False
+        ),
+        ClarityCanary(
+            id="clarity-002", statement="том Docker", quote="volume", clear=True
+        ),
+    ]
+    llm = FakeJudgeLlm(
+        [
+            json.dumps(
+                {
+                    "statements": [
+                        {"number": 1, "comment": "", "supported": True, "clear": False}
+                    ],
+                    "facts": [],
+                }
+            ),
+            json.dumps(
+                {
+                    "statements": [
+                        {"number": 1, "comment": "", "supported": True, "clear": False}
+                    ],
+                    "facts": [],
+                }
+            ),
+        ]
+    )
+
+    marks = judge_clarity_canaries(canaries, Judge(llm))
+
+    assert marks == [False, False]
+    assert clarity_canary_scores(canaries, marks) == (Rate(1, 1), Rate(0, 1))
