@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Ручной запуск (Actions → CI → Run workflow): проверка и деплой текущего main.
+  workflow_dispatch:
 
 # Минимальные права: CI только читает код.
 permissions:
@@ -48,3 +50,43 @@ jobs:
 
       - name: Сборка образа ассистента
         run: docker compose build assistant
+
+  # Деплой на сервер: только после зелёной проверки, только main и не из PR
+  # (в PR секретов нет). На сервере ключ деплоя может выполнить лишь
+  # deploy/deploy.sh с этим SHA — см. deploy/bootstrap.sh.
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-26.04
+    environment: production
+    timeout-minutes: 30
+    # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - name: Деплой по SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          WEB_LOGIN: ${{ vars.WEB_LOGIN }}
+          WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment production (README, «Деплой»)."
+            exit 0
+          fi
+          if [ -z "$WEB_PASSWORD" ]; then
+            echo "::error::Нет секрета WEB_PASSWORD: без пароля входа ассистент не стартует."
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Ключ сервера известен заранее: подменённый сервер ssh отвергнет.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # Логин и пароль — в stdin, а не в команде: так их не видно в ps на сервере.
+          printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' "${WEB_LOGIN:-admin}" "$WEB_PASSWORD" \
+            | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ServerAliveInterval=30 "deploy@$DEPLOY_HOST" "deploy $GITHUB_SHA"
