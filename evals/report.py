@@ -51,7 +51,7 @@ from evals.retrieval_metrics import (
     CaseResult,
     K,
     RetrievalRun,
-    first_hit_rank,
+    hit_rank,
     mrr_per_run,
     percentile,
     recall_per_run,
@@ -222,9 +222,7 @@ def retrieval_results(results: Sequence[AnswerCase]) -> list[CaseResult]:
             runs=[
                 RetrievalRun(
                     top=run.top,
-                    rank=first_hit_rank(
-                        r.case.expected_sources, [s for s, _ in run.top]
-                    ),
+                    rank=hit_rank(r.case, [s.chunk for s in run.sources]),
                     latency=run.retrieval_seconds,
                 )
                 for run in r.runs

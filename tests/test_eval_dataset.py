@@ -9,6 +9,7 @@ from evals.dataset import (
     load_canaries,
     load_cases,
     load_clarity_canaries,
+    parse_line,
 )
 
 GOOD = """\
@@ -196,3 +197,48 @@ def test_clarity_canary_needs_its_own_id_prefix(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         load_clarity_canaries(file)
+
+
+def error_case(**fields: object) -> Case:
+    return Case.model_validate(
+        {
+            "id": "error-001",
+            "category": "error",
+            "role": "user",
+            "question": "Unsupported mime type application/octet-stream",
+            "expected_behavior": "answer",
+            **fields,
+        }
+    )
+
+
+def test_error_case_needs_a_line_not_sources() -> None:
+    case = error_case(expected_line="src/documents/consumer.py:478")
+
+    assert case.expected_sources == []
+    assert parse_line(case.expected_line or "") == ("src/documents/consumer.py", 478)
+    with pytest.raises(ValidationError, match="expected_line"):
+        error_case()
+    with pytest.raises(ValidationError):
+        error_case(expected_line="consumer.py line 478")
+
+
+def test_changelog_case_needs_stale_and_current_lines() -> None:
+    fields = {
+        "id": "changelog-001",
+        "category": "changelog",
+        "role": "user",
+        "question": "есть ли helm-чарт?",
+        "expected_behavior": "abstain",
+    }
+    case = Case.model_validate(
+        {
+            **fields,
+            "stale_line": "docs/changelog.md:7245",
+            "current_line": "docs/changelog.md:7096",
+        }
+    )
+
+    assert case.stale_line == "docs/changelog.md:7245"
+    with pytest.raises(ValidationError, match="stale_line"):
+        Case.model_validate({**fields, "stale_line": "docs/changelog.md:7245"})

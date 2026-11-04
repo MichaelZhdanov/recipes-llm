@@ -10,7 +10,13 @@ from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import Case
-from evals.run import answer_records, pick_cases, raw_records, rescore_label
+from evals.run import (
+    _categories,
+    answer_records,
+    pick_cases,
+    raw_records,
+    rescore_label,
+)
 
 
 def test_raw_data_has_one_record_per_case_and_run() -> None:
@@ -141,3 +147,7 @@ def test_sample_larger_than_set_takes_all() -> None:
     cases = dev_cases()
 
     assert pick_cases(cases, 100) == cases
+
+
+def test_categories_flag_is_a_comma_list() -> None:
+    assert _categories("error, howto,") == frozenset({"error", "howto"})

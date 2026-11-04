@@ -283,7 +283,7 @@ def _write(path: Path, report: str, raw: object) -> None:
 
 
 def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
-    missing = missing_sources(cases, store.has_source)
+    missing = missing_sources(cases, store.has_source, store.has_line)
     if missing:
         print(
             "кейсы ссылаются на источники, которых нет в индексе:",
@@ -294,13 +294,18 @@ def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
 
 
 def _retrieval_stage(
-    settings: Settings, runs: int, label: str | None, sample: int | None, seed: int
+    settings: Settings,
+    runs: int,
+    label: str | None,
+    sample: int | None,
+    seed: int,
+    categories: frozenset[str] = RETRIEVAL_CATEGORIES,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
     revision = git_revision()
     cases, sampled = _choose(
-        [c for c in load_cases() if c.category in RETRIEVAL_CATEGORIES], sample, seed
+        [c for c in load_cases() if c.category in categories], sample, seed
     )
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
@@ -368,11 +373,12 @@ def _answer_stage(
     split: str,
     sample: int | None = None,
     seed: int = SAMPLE_SEED,
+    categories: frozenset[str] = ANSWER_CATEGORIES,
 ) -> int:
     revision = git_revision()
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
     cases, sampled = _choose(
-        [c for c in load_cases(directory) if c.category in ANSWER_CATEGORIES],
+        [c for c in load_cases(directory) if c.category in categories],
         sample,
         seed,
     )
@@ -425,6 +431,10 @@ def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool)
     return _finish(results, meta, judging, label or rescore_label(raw_path))
 
 
+def _categories(value: str) -> frozenset[str]:
+    return frozenset(part.strip() for part in value.split(",") if part.strip())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run", description=__doc__)
     parser.add_argument("--runs", type=int, default=RUNS)
@@ -436,6 +446,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--seed", type=int, default=SAMPLE_SEED, help="сид для --sample"
+    )
+    parser.add_argument(
+        "--categories",
+        type=_categories,
+        help="только эти категории через запятую, например error или howto,config",
     )
     parser.add_argument(
         "--split",
@@ -467,7 +482,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.rescore:
         return _rescore(settings, args.rescore, args.label, not args.no_judge)
     if args.stage == "retrieval":
-        return _retrieval_stage(settings, args.runs, args.label, args.sample, args.seed)
+        return _retrieval_stage(
+            settings,
+            args.runs,
+            args.label,
+            args.sample,
+            args.seed,
+            args.categories or RETRIEVAL_CATEGORIES,
+        )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(
         settings,
@@ -477,6 +499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.split,
         args.sample,
         args.seed,
+        args.categories or ANSWER_CATEGORIES,
     )
 
 

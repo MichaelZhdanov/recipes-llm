@@ -11,8 +11,9 @@ import time
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
+from assistant.indexing.chunks import Chunk
 from assistant.retrieval.search import Retriever
-from evals.dataset import Case
+from evals.dataset import Case, parse_line
 
 K = 5
 
@@ -76,13 +77,36 @@ def percentile(values: Sequence[float], share: float) -> float:
     return ordered[min(len(ordered) - 1, int(share * len(ordered)))]
 
 
+def hit_rank(case: Case, chunks: Sequence[Chunk]) -> int | None:
+    """Ранг первого подходящего куска (с 1) или None.
+
+    У ошибки подходящий кусок — тот, где лежит строка expected_line: место
+    ошибки известно до строки, а не до раздела. У остальных — по expected_sources.
+    """
+    if case.expected_line is not None:
+        path, line = parse_line(case.expected_line)
+        for rank, chunk in enumerate(chunks, start=1):
+            if chunk.path == path and chunk.start_line <= line <= chunk.end_line:
+                return rank
+        return None
+    return first_hit_rank(case.expected_sources, [c.source_id for c in chunks])
+
+
 def missing_sources(
-    cases: Sequence[Case], has_source: Callable[[str], bool]
+    cases: Sequence[Case],
+    has_source: Callable[[str], bool],
+    has_line: Callable[[str, int], bool] = lambda _path, _line: True,
 ) -> list[str]:
     """Кейсы, ссылающиеся на источник, которого нет в индексе: такой кейс не засчитается никогда."""
-    return [
+    missing = [
         f"{c.id}: {s}" for c in cases for s in c.expected_sources if not has_source(s)
     ]
+    missing += [
+        f"{c.id}: {c.expected_line}"
+        for c in cases
+        if c.expected_line is not None and not has_line(*parse_line(c.expected_line))
+    ]
+    return missing
 
 
 def run_cases(
@@ -101,7 +125,7 @@ def run_cases(
             hits = retriever.search(case.question, k=k)
             latency = clock() - started
             top = [(h.chunk.source_id, h.score) for h in hits]
-            rank = first_hit_rank(case.expected_sources, [s for s, _ in top])
+            rank = hit_rank(case, [h.chunk for h in hits])
             case_runs.append(RetrievalRun(top=top, rank=rank, latency=latency))
         results.append(CaseResult(case=case, runs=case_runs))
     return results

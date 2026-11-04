@@ -119,6 +119,22 @@ class VectorStore:
             > 0
         )
 
+    def has_line(self, path: str, line: int) -> bool:
+        """Есть ли в индексе кусок файла path, который содержит строку line."""
+        line_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="path", match=models.MatchValue(value=path)),
+                models.FieldCondition(key="start_line", range=models.Range(lte=line)),
+                models.FieldCondition(key="end_line", range=models.Range(gte=line)),
+            ]
+        )
+        return (
+            self._client.count(
+                self._collection, count_filter=line_filter, exact=True
+            ).count
+            > 0
+        )
+
     def verify(self) -> int:
         """Читает все точки и проверяет, что payload — полный кусок. Возвращает число точек."""
         total = 0

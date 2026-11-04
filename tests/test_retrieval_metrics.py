@@ -2,12 +2,15 @@ from itertools import count
 
 from eval_helpers import MANIFEST, case, result
 
+from assistant.indexing.chunks import Chunk
 from assistant.indexing.docs import chunk_markdown
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
+from evals.dataset import Case
 from evals.retrieval_metrics import (
     first_hit_rank,
+    hit_rank,
     missing_sources,
     mrr_per_run,
     recall_per_run,
@@ -87,3 +90,59 @@ def test_run_cases_measures_rank_and_latency(
     assert results[0].ranks == [1, 1, 1]
     assert results[0].latencies == [1.0, 1.0, 1.0]
     assert results[0].top[0][0] == "docs/usage.md#trash"
+
+
+def chunk_at(path: str, start: int, end: int, source_id: str = "x") -> Chunk:
+    return Chunk(
+        kind="code",
+        path=path,
+        start_line=start,
+        end_line=end,
+        title="t",
+        breadcrumb="b",
+        source_id=source_id,
+        url="https://x",
+        site_url=None,
+        ref="v3.4.2",
+        text="code",
+    )
+
+
+def error_case(line: str) -> Case:
+    return Case(
+        id="error-001",
+        category="error",
+        role="user",
+        question="?",
+        expected_behavior="answer",
+        expected_line=line,
+    )
+
+
+def test_error_rank_is_the_chunk_holding_the_line() -> None:
+    chunks = [
+        chunk_at("docs/faq.md", 1, 50),
+        chunk_at("src/documents/consumer.py", 400, 470),
+        chunk_at("src/documents/consumer.py", 471, 520),
+    ]
+
+    assert hit_rank(error_case("src/documents/consumer.py:478"), chunks) == 3
+    assert hit_rank(error_case("src/documents/consumer.py:999"), chunks) is None
+
+
+def test_missing_line_is_reported() -> None:
+    cases = [error_case("src/documents/consumer.py:478")]
+
+    assert missing_sources(cases, lambda _: True, lambda _p, _l: False) == [
+        "error-001: src/documents/consumer.py:478"
+    ]
+
+
+def test_store_finds_chunk_by_line(store: VectorStore, fake_embedder: Embedder) -> None:
+    chunks = [chunk_at("src/documents/consumer.py", 471, 520)]
+    store.recreate(MANIFEST)
+    store.upsert(chunks, fake_embedder.embed_documents(["code"]))
+
+    assert store.has_line("src/documents/consumer.py", 478)
+    assert not store.has_line("src/documents/consumer.py", 521)
+    assert not store.has_line("src/other.py", 478)
