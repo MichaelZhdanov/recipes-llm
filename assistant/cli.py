@@ -1,4 +1,4 @@
-"""Командная строка: `python -m assistant.cli index` и `… ask "вопрос"`.
+"""Командная строка: `python -m assistant.cli index` и `… search "вопрос"`.
 
 Запускается на хосте через `uv run --env-file .env` (см. Makefile). Ход
 работы пишется в stderr, результат — в stdout.
@@ -80,7 +80,7 @@ def format_hits(hits: Sequence[Hit]) -> str:
     return "\n\n".join(blocks)
 
 
-def _ask(settings: Settings, question: str, k: int, as_json: bool) -> int:
+def _search(settings: Settings, question: str, k: int, as_json: bool) -> int:
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
@@ -101,18 +101,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
-    ask = commands.add_parser("ask", help="найти куски документации и кода по вопросу")
-    ask.add_argument("question")
-    ask.add_argument("-k", type=int, default=5, help="сколько источников показать")
-    ask.add_argument("--json", action="store_true", help="вывод в JSON")
+    search = commands.add_parser(
+        "search", help="найти куски документации и кода по вопросу, без LLM"
+    )
+    search.add_argument("question")
+    search.add_argument("-k", type=int, default=5, help="сколько источников показать")
+    search.add_argument("--json", action="store_true", help="вывод в JSON")
     args = parser.parse_args(argv)
 
     settings = Settings()
     try:
         if args.command == "index":
             return _index(settings)
-        if args.command == "ask":
-            return _ask(settings, args.question, args.k, args.json)
+        if args.command == "search":
+            return _search(settings, args.question, args.k, args.json)
     except _EXPECTED_ERRORS as error:
         _log(f"ошибка: {error}")
         return 1

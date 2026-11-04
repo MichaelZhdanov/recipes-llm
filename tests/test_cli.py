@@ -17,3 +17,12 @@ def test_index_without_embeddings_key_explains_what_to_do(
 def test_unknown_command_is_rejected() -> None:
     with pytest.raises(SystemExit):
         main(["nope"])
+
+
+def test_search_without_embeddings_key_explains_what_to_do(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["search", "как включить OCR"])
+
+    assert code == 1
+    assert "CLOUD_RU_API_KEY" in capsys.readouterr().err

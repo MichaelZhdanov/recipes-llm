@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index ask eval test lint format
+.PHONY: help up down index search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -28,15 +28,15 @@ down: ## остановить стек (данные в томах Docker сох
 # --env-file .env отдаёт им ключи; переменная из shell перекрывает значение из файла.
 RUN = uv run --env-file .env python -m assistant.cli
 
-index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги Voyage, Qdrant
+index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги, Qdrant
 	docker compose up -d --wait qdrant
 	$(RUN) index
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
-ask: .env ## найти куски по вопросу: make ask Q="как включить OCR на русском"
-	@test -n "$$Q" || { echo 'Укажите вопрос: make ask Q="как включить OCR на русском"'; exit 2; }
-	$(RUN) ask "$$Q"
+search: .env ## найти куски по вопросу, без LLM: make search Q="как включить OCR на русском"
+	@test -n "$$Q" || { echo 'Укажите вопрос: make search Q="как включить OCR на русском"'; exit 2; }
+	$(RUN) search "$$Q"
 
 # Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
