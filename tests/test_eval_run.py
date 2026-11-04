@@ -1,3 +1,4 @@
+import subprocess
 from datetime import date
 from itertools import count
 from pathlib import Path
@@ -13,6 +14,7 @@ from evals.dataset import Case
 from evals.run import (
     CaseResult,
     first_hit_rank,
+    git_revision,
     missing_sources,
     mrr_per_run,
     recall_per_run,
@@ -166,3 +168,19 @@ def test_report_shows_metrics_threshold_and_misses() -> None:
 )
 def test_report_path(label: str | None, name: str) -> None:
     assert report_path(Path("r"), date(2026, 11, 4), label) == Path("r") / name
+
+
+def test_revision_ignores_untracked_files_but_not_edits(tmp_path: Path) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q")
+    (tmp_path / "code.py").write_text("x = 1\n")
+    git("add", "code.py")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+
+    (tmp_path / "draft.py").write_text("черновик\n")
+    assert "изменения" not in git_revision(tmp_path)
+
+    (tmp_path / "code.py").write_text("x = 2\n")
+    assert git_revision(tmp_path).endswith("(есть незакоммиченные изменения)")

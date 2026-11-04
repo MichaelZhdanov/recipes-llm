@@ -123,16 +123,26 @@ def _mean_std(values: Sequence[float]) -> str:
     return f"{statistics.mean(values):.2f} ± {statistics.pstdev(values):.2f}"
 
 
-def _git_revision() -> str:
+def git_revision(cwd: Path | None = None) -> str:
+    """Короткий SHA и пометка, если отслеживаемые файлы изменены.
+
+    Неотслеживаемые файлы (черновики, заметки) на код не влияют, поэтому
+    отчёт ими не помечается.
+    """
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
+            cwd=cwd,
         ).stdout.strip()
         dirty = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=cwd,
         ).stdout.strip()
     except OSError, subprocess.CalledProcessError:
         return "неизвестен"
@@ -269,7 +279,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = render_report(
         results,
         manifest=retriever.manifest,
-        revision=_git_revision(),
+        revision=git_revision(),
         provider=embedder.provider.name,
         query_template=embedder.query_template,
         stats=embedder.stats,
