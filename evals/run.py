@@ -25,6 +25,11 @@
 
 Отчёт: evals/reports/<дата>[-метка].md, сырые данные — в evals/reports/raw/
 (эта папка в .gitignore), одна запись на каждую пару «кейс, прогон».
+
+Пока идёт генерация, каждый готовый кейс сразу дописывается в журнал
+`raw/<отчёт>.partial.jsonl` (`evals/progress.py`). Если прогон прервался
+(429 у GigaChat, Ctrl+C), `--resume ЖУРНАЛ` с теми же флагами продолжает его:
+готовые кейсы не прогоняются заново.
 Код выхода 1, если метрика ниже порога.
 """
 
@@ -33,10 +38,11 @@ import dataclasses
 import json
 import random
 import re
+import shlex
 import statistics
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -61,6 +67,7 @@ from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
+from evals import progress
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import (
     CLARITY_CANARIES_FILE,
@@ -72,6 +79,7 @@ from evals.dataset import (
     load_clarity_canaries,
 )
 from evals.judge import Judge, Judging, run_judge
+from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.report import (
     THRESHOLDS,
     RunMeta,
@@ -264,16 +272,32 @@ def _log(message: str) -> None:
 
 
 def run_answers(
-    cases: Sequence[Case], answerer: Answerer, *, runs: int
+    cases: Sequence[Case],
+    answerer: Answerer,
+    *,
+    runs: int,
+    done: Mapping[str, AnswerCase] | None = None,
+    on_case: Callable[[AnswerCase], None] | None = None,
 ) -> list[AnswerCase]:
+    """Прогоняет кейсы по порядку. Готовые (done) берутся из журнала, а не заново.
+
+    on_case вызывается после каждого нового кейса: так он сразу попадает в журнал.
+    """
     results = []
     for index, case in enumerate(cases, start=1):
+        if done is not None and case.id in done:
+            results.append(done[case.id])
+            _log(f"[{index}/{len(cases)}] {case.id}: из журнала")
+            continue
         case_runs = [
             AnswerRun.from_result(answerer.answer(case.question)) for _ in range(runs)
         ]
         outcome = ", ".join(run.answer.reason or "ответ" for run in case_runs)
         _log(f"[{index}/{len(cases)}] {case.id}: {outcome}")
-        results.append(AnswerCase(case=case, runs=case_runs))
+        result = AnswerCase(case=case, runs=case_runs)
+        if on_case is not None:
+            on_case(result)
+        results.append(result)
     return results
 
 
@@ -389,6 +413,8 @@ def _answer_stage(
     sample: int | None = None,
     seed: int = SAMPLE_SEED,
     categories: frozenset[str] = ANSWER_CATEGORIES,
+    resume: Path | None = None,
+    command: Sequence[str] = (),
 ) -> int:
     revision = git_revision()
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
@@ -396,6 +422,9 @@ def _answer_stage(
         [c for c in load_cases(directory) if c.category in categories],
         sample,
         seed,
+    )
+    journal_file = resume or journal_path(
+        REPORTS_DIR / "raw", report_path(REPORTS_DIR, date.today(), label)
     )
     model = llm_model(settings)
     with httpx2.Client(timeout=30) as embeddings_http, make_http_client() as llm_http:
@@ -405,25 +434,101 @@ def _answer_stage(
         retriever = Retriever(store, embedder, ref=settings.paperless_ref)
         if not _check_sources(cases, store):
             return 2
+        journal = _open_journal(journal_file, resume is not None, revision, cases, runs)
+        if journal is None:
+            return 2
+        done = _resumed_cases(journal, cases)
         answerer = Answerer(retriever, llm, model=model, ref=settings.paperless_ref)
-        _log(f"модель {model}, {len(cases)} кейсов × {runs} прогона")
-        results = run_answers(cases, answerer, runs=runs)
-        judging = _judge(settings, llm_http, results) if judge else None
+        _log(
+            f"модель {model}, {len(cases)} кейсов × {runs} прогона, журнал {journal_file}"
+        )
+
+        def save(result: AnswerCase) -> None:
+            progress.append(
+                journal_file,
+                answer_records([result]),
+                add_llm_stats(journal.llm_stats, llm.stats),
+                add_embedding_stats(journal.embedding_stats, embedder.stats),
+            )
+
+        try:
+            results = run_answers(cases, answerer, runs=runs, done=done, on_case=save)
+            judging = _judge(settings, llm_http, results) if judge else None
+        except BaseException:
+            # Готовые кейсы уже в журнале: подсказываем, как продолжить, и падаем как раньше.
+            args = shlex.join(
+                [*_without_resume(command), "--resume", str(journal_file)]
+            )
+            _log(f"прогон прерван, готовые кейсы — в {journal_file}")
+            _log(f"продолжить: make eval ARGS={shlex.quote(args)}")
+            raise
 
     meta = RunMeta(
         manifest=retriever.manifest,
-        revision=revision,
+        revision=journal.revision,
         provider=embedder.provider.name,
         query_template=embedder.query_template,
-        embedding_stats=embedder.stats,
-        llm_stats=llm.stats,
+        embedding_stats=add_embedding_stats(journal.embedding_stats, embedder.stats),
+        llm_stats=add_llm_stats(journal.llm_stats, llm.stats),
         llm_model=model,
         temperature=DETERMINISTIC_TEMPERATURE,
         prompt_version=answerer.prompt_version,
         split=split,
         sample=sampled,
     )
-    return _finish(results, meta, judging, label)
+    code = _finish(results, meta, judging, label)
+    # Всё из журнала теперь в raw JSON, а оставленный журнал помешал бы новому прогону.
+    journal_file.unlink()
+    return code
+
+
+def _open_journal(
+    path: Path, resume: bool, revision: str, cases: Sequence[Case], runs: int
+) -> progress.Journal | None:
+    """Новый журнал или продолжение старого; None и сообщение, если так нельзя."""
+    ids = [c.id for c in cases]
+    if not resume:
+        try:
+            return progress.start(path, revision, ids, runs)
+        except FileExistsError:
+            print(
+                f"есть журнал незаконченного прогона {path}: продолжите его с "
+                f"--resume {path} или уберите файл, чтобы начать заново"
+            )
+            return None
+    journal = progress.load(path)
+    if journal.case_ids != ids or journal.runs != runs:
+        print(
+            f"журнал {path} — от другого прогона: {len(journal.case_ids)} кейсов × "
+            f"{journal.runs}, а сейчас {len(ids)} × {runs}. Запустите с теми же флагами."
+        )
+        return None
+    return journal
+
+
+def _resumed_cases(
+    journal: progress.Journal, cases: Sequence[Case]
+) -> dict[str, AnswerCase]:
+    """Готовые кейсы из журнала. Ссылки проверяются заново текущим кодом, как в --rescore."""
+    records = [
+        record for case_records in journal.done.values() for record in case_records
+    ]
+    by_id = {c.id: c for c in cases}
+    return {r.case.id: r for r in load_answer_cases(records, by_id)}
+
+
+def _without_resume(command: Sequence[str]) -> list[str]:
+    """Флаги прогона без старого --resume: для подсказки, как продолжить."""
+    result: list[str] = []
+    skip = False
+    for arg in command:
+        if skip:
+            skip = False
+        elif arg == "--resume":
+            skip = True
+        elif not arg.startswith("--resume="):
+            result.append(arg)
+    return result
 
 
 def rescore_label(raw_path: Path) -> str:
@@ -491,6 +596,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="без модели-судьи (groundedness не считается)",
     )
     parser.add_argument(
+        "--resume",
+        type=Path,
+        metavar="JOURNAL",
+        help="продолжить прерванный прогон по журналу evals/reports/raw/*.partial.jsonl",
+    )
+    parser.add_argument(
         "--rescore",
         type=Path,
         metavar="RAW_JSON",
@@ -521,6 +632,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.sample,
         args.seed,
         args.categories or ANSWER_CATEGORIES,
+        args.resume,
+        list(argv) if argv is not None else sys.argv[1:],
     )
 
 

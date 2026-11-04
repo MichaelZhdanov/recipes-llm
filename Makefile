@@ -49,6 +49,7 @@ search: .env ## найти куски по вопросу, без LLM: make sear
 # STAGE=retrieval — только поиск, без GigaChat. SPLIT=holdout — отложенная выборка
 # (один раз в конце). ARGS — прочие флаги evals.run,
 # например ARGS="--rescore evals/reports/raw/<отчёт>.json" или ARGS=--no-judge.
+# Прерванный прогон продолжается с --resume: команду печатает сам прогон.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant
 	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL)) $(if $(STAGE),--stage $(STAGE)) $(if $(SPLIT),--split $(SPLIT)) $(ARGS)
