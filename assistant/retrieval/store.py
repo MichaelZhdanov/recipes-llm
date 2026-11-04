@@ -36,6 +36,9 @@ class IndexManifest(BaseModel):
     built_at: str
     chunks: dict[str, int]
     assistant_version: str
+    # Шаблоны сообщений для точного поиска: сколько извлечено и из скольких
+    # вызовов raise/логгера/_fail. В индексах до этапа 3 — пусто.
+    messages: dict[str, int] = {}
 
 
 @dataclass(frozen=True)

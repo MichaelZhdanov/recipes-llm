@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from assistant.indexing.messages import Message
+
 ChunkKind = Literal["doc", "code"]
 
 # site_url из zensical.toml на v3.4.2.
@@ -35,6 +37,9 @@ class Chunk(BaseModel):
     site_url: str | None
     ref: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    # Шаблоны текстов ошибок и логов в этом куске кода (messages.py) — для
+    # точного поиска. У документации и в старых индексах пусто.
+    messages: list[Message] = []
 
     def embedding_text(self) -> str:
         """Текст для эмбеддинга: путь заголовков даёт куску контекст раздела."""

@@ -10,6 +10,9 @@
   Так в индекс попадает `settings/__init__.py`, где почти всё на уровне модуля.
   Блоки из одних импортов пропускаются: для поиска это шум.
 
+У каждого куска есть шаблоны текстов ошибок и логов, которые в нём лежат
+(`messages.py`): по ним работает точный поиск ошибок.
+
 Комментарии прямо над кодом входят в кусок: в Paperless они часто объясняют
 настройку («# The next 3 settings can also be set using just PAPERLESS_URL»).
 Тесты и миграции не индексируются.
@@ -20,6 +23,7 @@ import logging
 from pathlib import Path
 
 from assistant.indexing.chunks import Chunk, blob_url
+from assistant.indexing.messages import Extraction, Message, extract_messages
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +128,22 @@ class _Cutter:
 
 
 def chunk_python(source: str, *, path: str, ref: str, repo_url: str) -> list[Chunk]:
+    """Куски файла; у каждого — шаблоны сообщений, чьи строки в него попали."""
+    chunks = _cut(source, path, ref, repo_url)
+    messages = extract_messages(source).messages
+    return [
+        chunk.model_copy(
+            update={
+                "messages": [
+                    m for m in messages if chunk.start_line <= m.line <= chunk.end_line
+                ]
+            }
+        )
+        for chunk in chunks
+    ]
+
+
+def _cut(source: str, path: str, ref: str, repo_url: str) -> list[Chunk]:
     cutter = _Cutter(source, path, ref, repo_url)
     block: list[ast.stmt] = []
     for node in ast.parse(source).body:
@@ -166,3 +186,20 @@ def chunk_code(root: Path, *, ref: str, repo_url: str) -> list[Chunk]:
         except SyntaxError as error:
             log.warning("пропускаю %s: %s", relative, error)
     return chunks
+
+
+def message_coverage(root: Path) -> Extraction:
+    """Сколько вызовов raise/логгера/_fail в `src` дало шаблон: метрика для паспорта индекса."""
+    calls = covered = 0
+    messages: list[Message] = []
+    for file in sorted((root / "src").rglob("*.py")):
+        if not is_indexed(file.relative_to(root)):
+            continue
+        try:
+            found = extract_messages(file.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        calls += found.calls
+        covered += found.covered
+        messages += found.messages
+    return Extraction(messages=messages, calls=calls, covered=covered)
