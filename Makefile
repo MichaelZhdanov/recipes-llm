@@ -42,10 +42,11 @@ search: .env ## найти куски по вопросу, без LLM: make sear
 	@test -n "$$Q" || { echo 'Укажите вопрос: make search Q="как включить OCR на русском"'; exit 2; }
 	$(RUN) search "$$Q"
 
-# Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта.
+# Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта,
+# STAGE=retrieval — только поиск, без GigaChat.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant
-	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL))
+	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL)) $(if $(STAGE),--stage $(STAGE))
 
 test: ## unit-тесты (pytest)
 	uv run pytest
