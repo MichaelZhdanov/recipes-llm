@@ -60,7 +60,8 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      # Порт на хосте меняется в .env (ASSISTANT_PORT), если 8080 занят.
+      - "127.0.0.1:${ASSISTANT_PORT:-8080}:8080"
     # Все поля assistant/config.py. Пустое значение означает значение по умолчанию из config.py.
     # Секрета Paperless и пароля администратора здесь нет: ассистенту они не нужны.
     environment:

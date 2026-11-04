@@ -37,7 +37,7 @@ make up
 | Сервис | Адрес |
 |---|---|
 | Paperless | http://localhost:8000, логин и пароль — `PAPERLESS_ADMIN_USER` и `PAPERLESS_ADMIN_PASSWORD` в `.env` |
-| Ассистент | http://localhost:8080/health, описание API — http://localhost:8080/docs |
+| Ассистент | http://localhost:8080/ — веб-чат, описание API — http://localhost:8080/docs. Если 8080 занят, задайте другой порт в `.env`: `ASSISTANT_PORT=8081` |
 | Qdrant | http://localhost:6333/dashboard |
 
 `make down` останавливает стек, данные остаются в томах Docker. Удалить и их: `docker compose down -v`.

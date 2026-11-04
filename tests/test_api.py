@@ -1,9 +1,11 @@
+import re
+
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
 from assistant import __version__
-from assistant.api import create_app
+from assistant.api import WEB_DIR, create_app
 from assistant.config import Settings
 from assistant.generation.answer import Answer, AnswerResult, Trace
 from assistant.generation.gigachat import LlmError
@@ -111,3 +113,36 @@ def test_without_keys_ask_is_503_but_health_works() -> None:
     with TestClient(create_app(Settings())) as client:
         assert client.get("/health").status_code == 200
         assert client.post("/ask", json={"question": "?"}).status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("path", "media_type", "marker"),
+    [
+        ("/", "text/html", 'id="ask"'),
+        ("/chat.js", "text/javascript", 'fetch("/ask"'),
+        ("/chat.css", "text/css", "prefers-color-scheme"),
+    ],
+)
+def test_chat_page_is_served_with_strict_headers(
+    path: str, media_type: str, marker: str
+) -> None:
+    client = TestClient(create_app(Settings(), answerer=FakeAnswerer()))
+
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(media_type)
+    assert marker in response.text
+    policy = response.headers["content-security-policy"]
+    assert "default-src 'self'" in policy and "script-src 'self'" in policy
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_chat_has_no_external_resources_or_innerhtml() -> None:
+    """Страница работает без интернета и не вставляет HTML из ответа модели."""
+    web = WEB_DIR
+    page = (web / "index.html").read_text() + (web / "chat.css").read_text()
+    script = (web / "chat.js").read_text()
+
+    assert "http://" not in page and "https://" not in page
+    assert not re.search(r"\.innerHTML|insertAdjacentHTML\(|document\.write", script)

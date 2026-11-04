@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paperless Assistant</title>
+  <link rel="stylesheet" href="/chat.css">
+  <script src="/chat.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Paperless Assistant</h1>
+    <p id="about">Ответы по документации и коду Paperless-ngx. Каждая ссылка проверена кодом.</p>
+  </header>
+  <main id="log" aria-live="polite"></main>
+  <form id="ask">
+    <textarea id="question" name="question" rows="2" maxlength="2000" required
+      placeholder="Например: почему не распознаётся русский текст?"></textarea>
+    <button type="submit" id="send">Спросить</button>
+  </form>
+  <footer>Enter — отправить, Shift+Enter — новая строка. Ответ генерирует GigaChat, обычно 5–20 секунд.</footer>
+</body>
+</html>

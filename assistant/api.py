@@ -2,6 +2,7 @@
 
 Запуск: `uvicorn assistant.api:create_app --factory`.
 
+- `GET /` — простой веб-чат (`assistant/web/`), он ходит в `POST /ask`;
 - `GET /health` — процесс жив; Qdrant, ключи и GigaChat здесь не нужны.
 - `POST /ask {"question": "…"}` — ответ со ссылками, тот же, что у `make ask`.
   Если Qdrant, API эмбеддингов или GigaChat недоступны, ответ 503 с короткой
@@ -10,12 +11,14 @@
 
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal, Protocol
 
 import httpx2
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException
@@ -28,6 +31,25 @@ from assistant.retrieval.embeddings import EmbeddingError
 from assistant.retrieval.store import IndexMismatchError, IndexMissingError
 
 logger = logging.getLogger(__name__)
+
+WEB_DIR = Path(__file__).parent / "web"
+# Страница чата берёт скрипты, стили и данные только со своего адреса: ни CDN,
+# ни встроенных скриптов. Даже если в ответ модели попадёт HTML, браузер
+# не выполнит чужой код (а сам чат вставляет текст через textContent).
+WEB_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "connect-src 'self'; img-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+WEB_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
+    "/chat.css": ("chat.css", "text/css; charset=utf-8"),
+}
 
 # Вопрос в чат поддержки, а не документ: длиннее 2000 символов — скорее
 # вставленный лог целиком, его разбор — этап 3.
@@ -96,6 +118,13 @@ class LazyAnswerer:
         self._qdrant.close()
 
 
+def _static(path: Path, media_type: str) -> Callable[[], FileResponse]:
+    def serve() -> FileResponse:
+        return FileResponse(path, media_type=media_type, headers=WEB_HEADERS)
+
+    return serve
+
+
 def create_app(
     settings: Settings | None = None, answerer: QuestionAnswerer | None = None
 ) -> FastAPI:
@@ -123,6 +152,14 @@ def create_app(
         """Liveness: процесс жив и отвечает. Qdrant и Paperless здесь не проверяются."""
         return HealthResponse(
             status="ok", version=__version__, paperless_ref=config.paperless_ref
+        )
+
+    for route, (name, media_type) in WEB_FILES.items():
+        app.add_api_route(
+            route,
+            _static(WEB_DIR / name, media_type),
+            methods=["GET"],
+            include_in_schema=False,
         )
 
     @app.post("/ask", responses={503: {"description": "поиск или LLM недоступны"}})

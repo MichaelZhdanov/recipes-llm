@@ -18,7 +18,7 @@ help: ## показать список команд
 up: .env ## поднять Paperless, Valkey, Qdrant и ассистента
 	docker compose up -d --build --wait --wait-timeout 300
 	@echo "Paperless:  http://localhost:8000 (логин и пароль в .env)"
-	@echo "Ассистент:  http://localhost:8080/health"
+	@echo "Ассистент:  http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/ (чат), /docs (API)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
 
 down: ## остановить стек (данные в томах Docker сохраняются)
