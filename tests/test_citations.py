@@ -315,3 +315,72 @@ def test_words_must_still_match(quote: str) -> None:
     sources = [SourceText(number=1, chunk=chunk(FORMATTED), text=FORMATTED)]
 
     assert check_citation(cite(1, quote), sources).error == "фрагмента нет в источнике"
+
+
+CALLS = """\
+def run(self, language):
+    try:
+        run_subprocess(
+            [
+                settings.PRE_CONSUME_SCRIPT,
+            ],
+            script_env,
+        )
+    except Exception as e:
+        self._fail(
+            ConsumerStatusShortMessage.PRE_CONSUME_SCRIPT_ERROR,
+            f"Error while executing pre-consume script: {e}",
+        )
+    logger.warning(
+        f"Chinese locale detected: {language}. dateparser might fail to parse"
+        f' some dates with this locale, so Chinese ("zh") will be used.',
+    )
+    lang_codes = ["fr", "de", "it"]
+"""
+
+
+def code_sources(start: int = 100) -> list[SourceText]:
+    return [SourceText(number=1, chunk=chunk(CALLS, "code", start), text=CALLS)]
+
+
+@pytest.mark.parametrize(
+    ("quote", "lines"),
+    [
+        # Модель свернула вызов из нескольких строк в одну и убрала висячие запятые.
+        ("try: run_subprocess([settings.PRE_CONSUME_SCRIPT], script_env)", (101, 107)),
+        (
+            "self._fail(ConsumerStatusShortMessage.PRE_CONSUME_SCRIPT_ERROR, "
+            'f"Error while executing pre-consume script: {e}")',
+            (109, 112),
+        ),
+        # Текст сообщения без префикса f: так его видит пользователь.
+        ('"Error while executing pre-consume script: {e}"', (111, 111)),
+        # Склейка двух строк: пробел в начале второй модель перенесла не так.
+        (
+            "dateparser might fail to parse\"\nf'some dates with this locale",
+            (114, 115),
+        ),
+    ],
+)
+def test_code_formatting_does_not_matter(quote: str, lines: tuple[int, int]) -> None:
+    checked = check_citation(cite(1, quote), code_sources())
+
+    assert checked.valid, checked.error
+    assert (checked.start_line, checked.end_line) == lines
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        # Имя искажено — это уже не цитата.
+        "try: run_subprocess([settings.PR_CONSUME_SCRIPT], script_env)",
+        # Значение в кавычках не принимается за префикс строки и не теряется.
+        'lang_codes = ["ru", "de", "it"]',
+        # Пропущенный кусок вызова — тоже не цитата.
+        'self._fail(... f"Error while executing pre-consume script: {e}")',
+    ],
+)
+def test_code_words_must_still_match(quote: str) -> None:
+    checked = check_citation(cite(1, quote), code_sources())
+
+    assert checked.error == "фрагмента нет в источнике"

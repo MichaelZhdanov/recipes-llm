@@ -22,7 +22,10 @@
   - знаки препинания по краям цитаты не учитываются: модель ставит
     точку после обрезанного предложения;
   - подчёркивание внутри слова не трогается: в `PAPERLESS_OCR_LANGUAGE`
-    оно часть имени.
+    оно часть имени;
+  - у кода не важен перенос строк у скобок и висячая запятая: модель
+    сворачивает вызов из нескольких строк в одну. Префикс строки
+    (`f"…"`, `r"…"`) не учитывается.
   Слова, числа, имена и их порядок должны совпасть;
 - у документации совпадение не может целиком лежать в строке заголовка:
   заголовок только называет тему, а не подтверждает утверждение.
@@ -39,6 +42,7 @@
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -179,7 +183,17 @@ _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)\s]*\)")
 # Курсив: `_слово_` или `*слово*` на границе слова. Подчёркивание внутри
 # слова (PAPERLESS_OCR_LANGUAGE) сюда не попадает.
 _EMPHASIS = re.compile(r"(?<![\w*])([_*])(?=\S)(.+?)(?<=\S)\1(?![\w*])")
+# Префикс строки Python: f"…", r'…', rb"…". Он не часть текста, а без
+# кавычек приклеился бы к слову: f"Error" → «fError». Перед префиксом
+# не может стоять буква или кавычка, поэтому ["fr", "de"] не трогается.
+_STRING_PREFIX = re.compile(r"(?<![\w\"'])[rRbBuUfF]{1,2}(?=[\"'])")
 _EDGE_PUNCTUATION = ".,;:!?"
+# Токены цитаты: скобка или кусок без пробелов и скобок.
+_TOKEN = re.compile(r"[()\[\]{}]|[^\s()\[\]{}]+")
+_OPENING = frozenset("([{")
+_CLOSING = frozenset(")]}")
+# Висячая запятая перед закрывающей скобкой: `f(a, b,)` то же, что `f(a, b)`.
+_TRAILING_COMMA = re.compile(r",\s*(?=[)\]}])")
 
 
 def normalize(text: str) -> str:
@@ -187,20 +201,40 @@ def normalize(text: str) -> str:
 
     Переводы строк не добавляются и не удаляются: по ним считаются строки.
     """
+    text = _STRING_PREFIX.sub("", text)
     text = text.translate(_TRANSLATE).replace("**", "")
     text = _MARKDOWN_LINK.sub(r"\1", text)
     return _EMPHASIS.sub(r"\2", text)
 
 
+def _separator(previous: str, token: str) -> str:
+    """Что может стоять между соседними токенами цитаты в источнике.
+
+    Модель переносит код по-своему: сворачивает вызов из нескольких строк
+    в одну или наоборот. Поэтому у скобок пробелы и переводы строк
+    необязательны, а перед закрывающей скобкой может быть висячая запятая.
+    Между словами пробел обязателен, как и раньше.
+    """
+    if token in _CLOSING:
+        return r",?\s*"
+    if previous in _OPENING | _CLOSING or token in _OPENING:
+        return r"\s*"
+    return r"\s+"
+
+
 def _quote_pattern(quote: str) -> re.Pattern[str] | None:
-    words = normalize(quote).strip().strip(_EDGE_PUNCTUATION).split()
-    if not words:
+    text = normalize(quote).strip().strip(_EDGE_PUNCTUATION)
+    tokens = _TOKEN.findall(_TRAILING_COMMA.sub("", text))
+    if not tokens:
         return None
-    body = r"\s+".join(re.escape(word) for word in words)
+    body = re.escape(tokens[0]) + "".join(
+        _separator(previous, token) + re.escape(token)
+        for previous, token in pairwise(tokens)
+    )
     # Цитата начинается и кончается на границе слова: «false» не совпадёт
     # с началом «falsehood», а «anguage» — с серединой «language».
-    start = r"(?<!\w)" if re.match(r"\w", words[0]) else ""
-    end = r"(?!\w)" if re.search(r"\w$", words[-1]) else ""
+    start = r"(?<!\w)" if re.match(r"\w", tokens[0]) else ""
+    end = r"(?!\w)" if re.search(r"\w$", tokens[-1]) else ""
     return re.compile(start + body + end, re.IGNORECASE)
 
 
