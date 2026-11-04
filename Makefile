@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index search eval test lint format
+.PHONY: help up down index ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -34,6 +34,10 @@ index: .env ## пересобрать индекс: исходники по те
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
+ask: .env ## ответ со ссылками: make ask Q="как включить OCR на русском"
+	@test -n "$$Q" || { echo 'Укажите вопрос: make ask Q="как включить OCR на русском"'; exit 2; }
+	$(RUN) ask "$$Q"
+
 search: .env ## найти куски по вопросу, без LLM: make search Q="как включить OCR на русском"
 	@test -n "$$Q" || { echo 'Укажите вопрос: make search Q="как включить OCR на русском"'; exit 2; }
 	$(RUN) search "$$Q"

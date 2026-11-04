@@ -26,3 +26,14 @@ def test_search_without_embeddings_key_explains_what_to_do(
 
     assert code == 1
     assert "CLOUD_RU_API_KEY" in capsys.readouterr().err
+
+
+def test_ask_without_gigachat_key_explains_what_to_do(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLOUD_RU_API_KEY", "test-key")
+
+    code = main(["ask", "как включить OCR"])
+
+    assert code == 1
+    assert "GIGACHAT_API_KEY" in capsys.readouterr().err

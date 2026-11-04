@@ -1,4 +1,4 @@
-"""Командная строка: `python -m assistant.cli index` и `… search "вопрос"`.
+"""Командная строка: `python -m assistant.cli index`, `… ask "вопрос"` и `… search "вопрос"`.
 
 Запускается на хосте через `uv run --env-file .env` (см. Makefile). Ход
 работы пишется в stderr, результат — в stdout.
@@ -14,6 +14,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
+from assistant.generation.answer import make_answerer, render_markdown
+from assistant.generation.gigachat import LlmError, make_http_client
 from assistant.indexing.build import build_index
 from assistant.indexing.sources import SourceDownloadError
 from assistant.retrieval.embeddings import EmbeddingError, make_embedder
@@ -28,6 +30,7 @@ from assistant.retrieval.store import (
 # Ошибки, о которых пользователю достаточно одной строки без трассировки.
 _EXPECTED_ERRORS = (
     EmbeddingError,
+    LlmError,
     SourceDownloadError,
     IndexMissingError,
     IndexMismatchError,
@@ -95,12 +98,31 @@ def _search(settings: Settings, question: str, k: int, as_json: bool) -> int:
     return 0
 
 
+def _ask(settings: Settings, question: str, as_json: bool) -> int:
+    with (
+        httpx2.Client(timeout=30) as embeddings_http,
+        make_http_client() as llm_http,
+    ):
+        answerer = make_answerer(
+            settings,
+            embeddings_http=embeddings_http,
+            llm_http=llm_http,
+            qdrant=QdrantClient(url=settings.qdrant_url, timeout=30),
+        )
+        answer = answerer.answer(question).answer
+    print(answer.model_dump_json(indent=2) if as_json else render_markdown(answer))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m assistant.cli", description=__doc__
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
+    ask = commands.add_parser("ask", help="ответ со ссылками на документацию и код")
+    ask.add_argument("question")
+    ask.add_argument("--json", action="store_true", help="вывод в JSON")
     search = commands.add_parser(
         "search", help="найти куски документации и кода по вопросу, без LLM"
     )
@@ -113,6 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "index":
             return _index(settings)
+        if args.command == "ask":
+            return _ask(settings, args.question, args.json)
         if args.command == "search":
             return _search(settings, args.question, args.k, args.json)
     except _EXPECTED_ERRORS as error:
