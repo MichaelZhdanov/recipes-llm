@@ -237,6 +237,62 @@ def suggestions(hits: Sequence[Hit], limit: int = SUGGESTIONS) -> list[SourceLin
     ]
 
 
+def check_completion(
+    completion: Completion, sources: Sequence[SourceText]
+) -> tuple[list[CheckedStatement], Reason | None]:
+    """Разбирает ответ модели и проверяет ссылки. Без сети: так же работает пересчёт eval."""
+    if completion.finish_reason != "stop":
+        return [], _FINISH_REASONS.get(completion.finish_reason, "format_error")
+    try:
+        parsed = ModelAnswer.model_validate_json(completion.content)
+    except ValidationError:
+        return [], "format_error"
+    if parsed.status == "not_found":
+        return [], "model_not_found"
+    checked = check_answer(parsed, sources)
+    return checked, None if any(s.kept for s in checked) else "filtered_out"
+
+
+def assemble(
+    hits: list[Hit],
+    sources: list[SourceText],
+    completion: Completion | None,
+    *,
+    prompt_version: str,
+    ref: str,
+    retrieval_seconds: float = 0.0,
+    generation_seconds: float = 0.0,
+) -> AnswerResult:
+    """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
+    if completion is None:
+        checked: list[CheckedStatement] = []
+        reason: Reason | None = "no_sources"
+    else:
+        checked, reason = check_completion(completion, sources)
+    if reason is None:
+        statements, links = build_statements(checked, sources)
+    else:
+        statements, links = [], suggestions(hits)
+    answer = Answer(
+        status="answer" if reason is None else "not_found",
+        reason=reason,
+        statements=statements,
+        sources=links,
+        model=completion.model if completion else "",
+        prompt_version=prompt_version,
+        paperless_ref=ref,
+    )
+    trace = Trace(
+        hits=hits,
+        sources=sources,
+        completion=completion,
+        checked=checked,
+        retrieval_seconds=retrieval_seconds,
+        generation_seconds=generation_seconds,
+    )
+    return AnswerResult(answer=answer, trace=trace)
+
+
 class Answerer:
     def __init__(
         self,
@@ -262,73 +318,34 @@ class Answerer:
         hits = self._retriever.search(question, k=self._k)
         retrieved = self._clock()
         sources = prepare_sources(hits)
-        if not sources:
-            return self._result(
-                hits, sources, None, [], "no_sources", retrieved - started
+        completion = None
+        if sources:
+            completion = self._llm.chat(
+                [
+                    {"role": "system", "content": load_prompt(self.prompt_version)},
+                    {
+                        "role": "user",
+                        "content": user_message(question, sources, self._ref),
+                    },
+                ],
+                model=self.model,
+                temperature=DETERMINISTIC_TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                response_format={
+                    "type": "json_schema",
+                    "schema": ANSWER_SCHEMA,
+                    "strict": True,
+                },
             )
-
-        completion = self._llm.chat(
-            [
-                {"role": "system", "content": load_prompt(self.prompt_version)},
-                {"role": "user", "content": user_message(question, sources, self._ref)},
-            ],
-            model=self.model,
-            temperature=DETERMINISTIC_TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            response_format={
-                "type": "json_schema",
-                "schema": ANSWER_SCHEMA,
-                "strict": True,
-            },
-        )
-        timing = (retrieved - started, self._clock() - retrieved)
-        if completion.finish_reason != "stop":
-            failure = _FINISH_REASONS.get(completion.finish_reason, "format_error")
-            return self._result(hits, sources, completion, [], failure, *timing)
-        try:
-            parsed = ModelAnswer.model_validate_json(completion.content)
-        except ValidationError:
-            return self._result(hits, sources, completion, [], "format_error", *timing)
-        if parsed.status == "not_found":
-            return self._result(
-                hits, sources, completion, [], "model_not_found", *timing
-            )
-        checked = check_answer(parsed, sources)
-        reason: Reason | None = None if any(s.kept for s in checked) else "filtered_out"
-        return self._result(hits, sources, completion, checked, reason, *timing)
-
-    def _result(
-        self,
-        hits: list[Hit],
-        sources: list[SourceText],
-        completion: Completion | None,
-        checked: list[CheckedStatement],
-        reason: Reason | None,
-        retrieval_seconds: float,
-        generation_seconds: float = 0.0,
-    ) -> AnswerResult:
-        if reason is None:
-            statements, links = build_statements(checked, sources)
-        else:
-            statements, links = [], suggestions(hits)
-        answer = Answer(
-            status="answer" if reason is None else "not_found",
-            reason=reason,
-            statements=statements,
-            sources=links,
-            model=completion.model if completion else "",
+        return assemble(
+            hits,
+            sources,
+            completion,
             prompt_version=self.prompt_version,
-            paperless_ref=self._ref,
+            ref=self._ref,
+            retrieval_seconds=retrieved - started,
+            generation_seconds=self._clock() - retrieved if completion else 0.0,
         )
-        trace = Trace(
-            hits=hits,
-            sources=sources,
-            completion=completion,
-            checked=checked,
-            retrieval_seconds=retrieval_seconds,
-            generation_seconds=generation_seconds,
-        )
-        return AnswerResult(answer=answer, trace=trace)
 
 
 _REASON_TEXT: dict[Reason, str] = {
