@@ -10,6 +10,11 @@
   ссылок. Кейсы howto, config и out_of_scope;
 - `retrieval` — только поиск, как на этапе 1: ключ GigaChat не нужен.
 
+После генерации модель-судья (`evals/judge.py`) оценивает groundedness
+и проверяется на канарейках; `--no-judge` её выключает. `--rescore RAW`
+пересчитывает отчёт по сохранённым ответам модели без новой генерации:
+ссылки проверяются текущим кодом, судья запускается заново.
+
 Каждый кейс прогоняется RUNS раз (правило из CLAUDE.md), в отчёте среднее
 и разброс.
 
@@ -23,28 +28,37 @@ import dataclasses
 import json
 import statistics
 import sys
+from collections import Counter
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import httpx2
 from qdrant_client import QdrantClient
 
 from assistant.config import Settings
-from assistant.generation.answer import Answerer
+from assistant.generation.answer import Answerer, assemble
+from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
+    Completion,
+    LlmStats,
+    Usage,
     llm_model,
     make_http_client,
     make_llm,
 )
-from assistant.retrieval.embeddings import make_embedder
+from assistant.indexing.chunks import Chunk
+from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
-from assistant.retrieval.store import VectorStore
+from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from evals.answer_metrics import AnswerCase, AnswerRun
-from evals.dataset import Case, load_cases
+from evals.dataset import HOLDOUT_DIR, Case, load_canaries, load_cases
+from evals.judge import Judge, Judging, run_judge
 from evals.report import (
     THRESHOLDS,
+    RunMeta,
     answer_gates,
     git_revision,
     render_answer_report,
@@ -81,8 +95,11 @@ def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
     ]
 
 
-def answer_records(results: Sequence[AnswerCase]) -> list[dict[str, object]]:
+def answer_records(
+    results: Sequence[AnswerCase], judging: Judging | None = None
+) -> list[dict[str, object]]:
     """Сырые данные ответов: всё, чтобы разобрать прогон и пересчитать метрики без LLM."""
+    verdicts = judging.verdicts if judging else {}
     return [
         {
             "id": r.case.id,
@@ -99,9 +116,90 @@ def answer_records(results: Sequence[AnswerCase]) -> list[dict[str, object]]:
                 for s in run.sources
             ],
             "checked": [dataclasses.asdict(s) for s in run.checked],
+            "judge": (
+                dataclasses.asdict(verdicts[(r.case.id, number)])
+                if (r.case.id, number) in verdicts
+                else None
+            ),
         }
         for r in results
         for number, run in enumerate(r.runs)
+    ]
+
+
+def meta_record(meta: RunMeta) -> dict[str, object]:
+    return {
+        "manifest": meta.manifest.model_dump(),
+        "revision": meta.revision,
+        "provider": meta.provider,
+        "query_template": meta.query_template,
+        "embedding_stats": dataclasses.asdict(meta.embedding_stats),
+        "llm_stats": dataclasses.asdict(meta.llm_stats),
+        "llm_model": meta.llm_model,
+        "temperature": meta.temperature,
+        "prompt_version": meta.prompt_version,
+    }
+
+
+def load_meta(data: dict[str, Any], *, revision: str, rescored_from: str) -> RunMeta:
+    embedding = data["embedding_stats"]
+    llm = data["llm_stats"]
+    return RunMeta(
+        manifest=IndexManifest.model_validate(data["manifest"]),
+        revision=revision,
+        provider=data["provider"],
+        query_template=data["query_template"],
+        embedding_stats=EmbeddingStats(
+            requests=embedding["requests"],
+            tokens=embedding["tokens"],
+            masked=Counter(embedding["masked"]),
+        ),
+        llm_stats=LlmStats(**{**llm, "masked": Counter(llm["masked"])}),
+        llm_model=data["llm_model"],
+        temperature=data["temperature"],
+        prompt_version=data["prompt_version"],
+        rescored_from=f"{rescored_from}, прогон на {data['revision']}",
+    )
+
+
+def load_answer_run(record: dict[str, Any]) -> AnswerRun:
+    """Прогон из сырых данных. Ссылки проверяются заново текущим кодом (assemble)."""
+    sources = [
+        SourceText(s["number"], Chunk.model_validate(s["chunk"]), s["text"])
+        for s in record["sources"]
+    ]
+    hits = [
+        Hit(chunk=source.chunk, score=score)
+        for source, (_, score) in zip(sources, record["top"], strict=True)
+    ]
+    completion = None
+    if record["finish_reason"] is not None:
+        completion = Completion(
+            content=record["content"],
+            finish_reason=record["finish_reason"],
+            model=record["answer"]["model"],
+            usage=Usage(**record["usage"]),
+        )
+    result = assemble(
+        hits,
+        sources,
+        completion,
+        prompt_version=record["answer"]["prompt_version"],
+        ref=record["answer"]["paperless_ref"],
+        retrieval_seconds=record["retrieval_seconds"],
+        generation_seconds=record["generation_seconds"],
+    )
+    return AnswerRun.from_result(result)
+
+
+def load_answer_cases(
+    records: Sequence[dict[str, Any]], cases: dict[str, Case]
+) -> list[AnswerCase]:
+    runs: dict[str, list[AnswerRun]] = {}
+    for record in records:
+        runs.setdefault(record["id"], []).append(load_answer_run(record))
+    return [
+        AnswerCase(cases[case_id], case_runs) for case_id, case_runs in runs.items()
     ]
 
 
@@ -171,7 +269,36 @@ def _retrieval_stage(settings: Settings, runs: int, label: str | None) -> int:
     return 0 if recall >= THRESHOLDS["recall@5"] else 1
 
 
-def _answer_stage(settings: Settings, runs: int, label: str | None) -> int:
+def _judge(
+    settings: Settings, http: httpx2.Client, results: Sequence[AnswerCase]
+) -> Judging:
+    # Свой экземпляр клиента: токены судьи считаются отдельно от токенов ассистента.
+    judge = Judge(make_llm(settings, http))
+    _log(
+        f"судья {judge.model}: {sum(len(r.runs) for r in results)} ответов и канарейки"
+    )
+    return run_judge(results, judge, load_canaries())
+
+
+def _finish(
+    results: Sequence[AnswerCase],
+    meta: RunMeta,
+    judging: Judging | None,
+    label: str | None,
+) -> int:
+    today = date.today()
+    report = render_answer_report(results, meta=meta, judging=judging, today=today)
+    path = report_path(REPORTS_DIR, today, label)
+    raw = {"meta": meta_record(meta), "records": answer_records(results, judging)}
+    _write(path, report, raw)
+    gates = answer_gates(results, judging)
+    failed = [name for name, passed in gates.items() if not passed]
+    print(f"не прошли порог: {', '.join(failed)}" if failed else "все пороги пройдены")
+    print(f"отчёт: {path}")
+    return 1 if failed else 0
+
+
+def _answer_stage(settings: Settings, runs: int, label: str | None, judge: bool) -> int:
     cases = [c for c in load_cases() if c.category in ANSWER_CATEGORIES]
     model = llm_model(settings)
     with httpx2.Client(timeout=30) as embeddings_http, make_http_client() as llm_http:
@@ -184,10 +311,9 @@ def _answer_stage(settings: Settings, runs: int, label: str | None) -> int:
         answerer = Answerer(retriever, llm, model=model, ref=settings.paperless_ref)
         _log(f"модель {model}, {len(cases)} кейсов × {runs} прогона")
         results = run_answers(cases, answerer, runs=runs)
+        judging = _judge(settings, llm_http, results) if judge else None
 
-    today = date.today()
-    report = render_answer_report(
-        results,
+    meta = RunMeta(
         manifest=retriever.manifest,
         revision=git_revision(),
         provider=embedder.provider.name,
@@ -197,15 +323,21 @@ def _answer_stage(settings: Settings, runs: int, label: str | None) -> int:
         llm_model=model,
         temperature=DETERMINISTIC_TEMPERATURE,
         prompt_version=answerer.prompt_version,
-        today=today,
     )
-    path = report_path(REPORTS_DIR, today, label)
-    _write(path, report, answer_records(results))
-    gates = answer_gates(results)
-    failed = [name for name, passed in gates.items() if not passed]
-    print(f"не прошли порог: {', '.join(failed)}" if failed else "все пороги пройдены")
-    print(f"отчёт: {path}")
-    return 1 if failed else 0
+    return _finish(results, meta, judging, label)
+
+
+def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool) -> int:
+    """Метрики заново по сохранённым ответам модели: без генерации, ссылки — текущим кодом."""
+    data = json.loads(raw_path.read_text(encoding="utf-8"))
+    cases = {c.id: c for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
+    results = load_answer_cases(data["records"], cases)
+    meta = load_meta(data["meta"], revision=git_revision(), rescored_from=str(raw_path))
+    judging = None
+    if judge:
+        with make_http_client() as llm_http:
+            judging = _judge(settings, llm_http, results)
+    return _finish(results, meta, judging, label or f"{raw_path.stem}-rescore")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -218,12 +350,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="answer",
         help="answer — ассистент целиком; retrieval — только поиск, без GigaChat",
     )
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="без модели-судьи (groundedness не считается)",
+    )
+    parser.add_argument(
+        "--rescore",
+        type=Path,
+        metavar="RAW_JSON",
+        help="пересчитать метрики по сохранённым ответам модели, без генерации",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
+    if args.rescore:
+        return _rescore(settings, args.rescore, args.label, not args.no_judge)
     if args.stage == "retrieval":
         return _retrieval_stage(settings, args.runs, args.label)
-    return _answer_stage(settings, args.runs, args.label)
+    return _answer_stage(settings, args.runs, args.label, not args.no_judge)
 
 
 if __name__ == "__main__":

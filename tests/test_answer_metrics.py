@@ -26,9 +26,23 @@ from evals.answer_metrics import (
     statement_coverage,
 )
 from evals.dataset import Case
-from evals.report import answer_gates, render_answer_report
+from evals.report import RunMeta, answer_gates, render_answer_report
 
 Category = Literal["howto", "config", "out_of_scope"]
+
+
+def meta(llm_stats: LlmStats) -> RunMeta:
+    return RunMeta(
+        manifest=MANIFEST,
+        revision="abc1234",
+        provider="cloud.ru",
+        query_template=None,
+        embedding_stats=EmbeddingStats(),
+        llm_stats=llm_stats,
+        llm_model="GigaChat-2",
+        temperature=1e-4,
+        prompt_version="answer_v1",
+    )
 
 
 def chunk(anchor: str, text: str) -> Chunk:
@@ -252,15 +266,8 @@ def test_answer_report_and_gates() -> None:
 
     report = render_answer_report(
         results,
-        manifest=MANIFEST,
-        revision="abc1234",
-        provider="cloud.ru",
-        query_template=None,
-        embedding_stats=EmbeddingStats(),
-        llm_stats=LlmStats(total_tokens=4400),
-        llm_model="GigaChat-2",
-        temperature=1e-4,
-        prompt_version="answer_v1",
+        meta=meta(LlmStats(total_tokens=4400)),
+        judging=None,
         today=date(2026, 11, 4),
     )
 
@@ -281,17 +288,7 @@ def test_report_shows_broken_answers_with_model_output() -> None:
     results = [AnswerCase(case("howto-001"), [broken])]
 
     report = render_answer_report(
-        results,
-        manifest=MANIFEST,
-        revision="abc1234",
-        provider="cloud.ru",
-        query_template=None,
-        embedding_stats=EmbeddingStats(),
-        llm_stats=LlmStats(),
-        llm_model="GigaChat-2",
-        temperature=1e-4,
-        prompt_version="answer_v1",
-        today=date(2026, 11, 4),
+        results, meta=meta(LlmStats()), judging=None, today=date(2026, 11, 4)
     )
 
     assert "## Поломки: format_error, blacklist, length (1)" in report

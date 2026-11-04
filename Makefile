@@ -43,10 +43,11 @@ search: .env ## найти куски по вопросу, без LLM: make sear
 	$(RUN) search "$$Q"
 
 # Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта,
-# STAGE=retrieval — только поиск, без GigaChat.
+# STAGE=retrieval — только поиск, без GigaChat. ARGS — прочие флаги evals.run,
+# например ARGS="--rescore evals/reports/raw/<отчёт>.json" или ARGS=--no-judge.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant
-	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL)) $(if $(STAGE),--stage $(STAGE))
+	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL)) $(if $(STAGE),--stage $(STAGE)) $(ARGS)
 
 test: ## unit-тесты (pytest)
 	uv run pytest

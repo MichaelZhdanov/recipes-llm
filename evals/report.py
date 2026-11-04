@@ -10,6 +10,7 @@ import statistics
 import subprocess
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -35,6 +36,13 @@ from evals.answer_metrics import (
     per_run,
     statement_coverage,
     top1_scores,
+)
+from evals.judge import (
+    Judging,
+    canary_scores,
+    groundedness,
+    must_include_judged,
+    unjudged,
 )
 from evals.retrieval_metrics import (
     CaseResult,
@@ -191,6 +199,7 @@ ANSWER_THRESHOLDS = {
     "abstention": 0.90,
     # Не больше: доля отказов на вопросах из области.
     "false_refusal": 0.10,
+    "groundedness": 0.85,
 }
 
 
@@ -215,10 +224,12 @@ def retrieval_results(results: Sequence[AnswerCase]) -> list[CaseResult]:
     ]
 
 
-def answer_gates(results: Sequence[AnswerCase]) -> dict[str, bool]:
+def answer_gates(
+    results: Sequence[AnswerCase], judging: Judging | None = None
+) -> dict[str, bool]:
     """Метрики с порогом и прошли ли они его: по ним считается код выхода."""
     recall = statistics.mean(recall_per_run(retrieval_results(results)))
-    return {
+    gates = {
         "recall@5": recall >= THRESHOLDS["recall@5"],
         "citation_accuracy": citation_accuracy(results).value
         >= ANSWER_THRESHOLDS["citation_accuracy"],
@@ -226,6 +237,28 @@ def answer_gates(results: Sequence[AnswerCase]) -> dict[str, bool]:
         "false_refusal": false_refusal(results).value
         <= ANSWER_THRESHOLDS["false_refusal"],
     }
+    if judging is not None:
+        gates["groundedness"] = (
+            groundedness(judging.verdicts).value >= ANSWER_THRESHOLDS["groundedness"]
+        )
+    return gates
+
+
+@dataclass(frozen=True)
+class RunMeta:
+    """Параметры прогона для шапки отчёта. Пишутся и в сырые данные — для --rescore."""
+
+    manifest: IndexManifest
+    revision: str
+    provider: str
+    query_template: str | None
+    embedding_stats: EmbeddingStats
+    llm_stats: LlmStats
+    llm_model: str
+    temperature: float
+    prompt_version: str
+    # Пересчёт по сохранённому прогону: откуда взяты ответы модели.
+    rescored_from: str | None = None
 
 
 def _spread(values: Sequence[float]) -> str:
@@ -252,20 +285,14 @@ def _outcome_cell(run: AnswerRun) -> str:
 def render_answer_report(
     results: Sequence[AnswerCase],
     *,
-    manifest: IndexManifest,
-    revision: str,
-    provider: str,
-    query_template: str | None,
-    embedding_stats: EmbeddingStats,
-    llm_stats: LlmStats,
-    llm_model: str,
-    temperature: float,
-    prompt_version: str,
+    meta: RunMeta,
+    judging: Judging | None,
     today: date,
 ) -> str:
+    manifest, llm_stats, llm_model = meta.manifest, meta.llm_stats, meta.llm_model
     retrieval = retrieval_results(results)
     recall = recall_per_run(retrieval)
-    gates = answer_gates(results)
+    gates = answer_gates(results, judging)
     runs = [run for r in results for run in r.runs]
     api_models = sorted({run.answer.model for run in runs if run.answer.model})
     categories = Counter(r.case.category for r in results)
@@ -284,14 +311,22 @@ def render_answer_report(
         "",
         "| Параметр | Значение |",
         "|---|---|",
-        f"| Коммит ассистента | {revision} |",
+        f"| Коммит ассистента | {meta.revision} |",
+        *(
+            [
+                f"| Пересчёт | ответы модели из `{meta.rescored_from}`, ссылки и судья — заново |"
+            ]
+            if meta.rescored_from
+            else []
+        ),
         f"| Paperless | {manifest.ref} ({manifest.commit or 'коммит неизвестен'}) |",
-        f"| Модель эмбеддингов | {provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
-        f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
+        f"| Модель эмбеддингов | {meta.provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
+        f"| Инструкция к вопросу | {_instruction_cell(meta.query_template)} |",
         f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
         f"| LLM | {llm_model}; по ответам API: {', '.join(api_models) or '—'} |",
-        f"| Температура | {temperature} (GigaChat не принимает 0) |",
-        f"| Промпт | `{prompt_version}` |",
+        f"| Температура | {meta.temperature} (GigaChat не принимает 0) |",
+        f"| Промпт | `{meta.prompt_version}` |",
+        f"| Судья | {f'{judging.model}, рубрика `{judging.prompt_version}`' if judging else 'не запускался'} |",
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].runs) if results else 0} |",
         "",
@@ -327,8 +362,9 @@ def render_answer_report(
         f"| стоимость по платному тарифу | "
         f"{'—' if cost is None else f'≈{cost:.2f} ₽ за прогон, ≈{cost / max(len(runs), 1):.3f} ₽ за ответ'}"
         " (на Freemium бесплатно) | показать | |",
-        f"| срабатывания маскера ПДн (эмбеддинги / LLM) | {sum(embedding_stats.masked.values())} / "
+        f"| срабатывания маскера ПДн (эмбеддинги / LLM) | {sum(meta.embedding_stats.masked.values())} / "
         f"{sum(llm_stats.masked.values())} | — | |",
+        *_judge_rows(judging),
         "",
         "## Чем закончились прогоны",
         "",
@@ -398,6 +434,7 @@ def render_answer_report(
         )
 
     lines += _problem_sections(results)
+    lines += _judge_sections(results, judging)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -470,4 +507,54 @@ def _problem_sections(results: Sequence[AnswerCase]) -> list[str]:
             f"- {case_id}, источник {c.source}: «{c.quote}» — {c.error}"
             for case_id, c in bad[:10]
         ]
+    return lines
+
+
+def _judge_rows(judging: Judging | None) -> list[str]:
+    if judging is None:
+        return []
+    caught, accepted = canary_scores(judging.canaries, judging.canary_marks)
+    grounded = groundedness(judging.verdicts)
+    passed = grounded.value >= ANSWER_THRESHOLDS["groundedness"]
+    return [
+        f"| groundedness (судья) | {grounded} | ≥ {ANSWER_THRESHOLDS['groundedness']:.2f} "
+        f"| {_status(passed)} |",
+        f"| must_include в howto (судья) | {must_include_judged(judging.verdicts)} | показать | |",
+        f"| канарейки: судья поймал неверные | {caught} | все | |",
+        f"| канарейки: судья принял верные | {accepted} | все | |",
+        f"| пункты без вердикта судьи | {unjudged(judging.verdicts)}, "
+        f"неразобранных ответов {judging.failures} | 0 | |",
+        f"| токены судьи | {judging.stats.total_tokens} | показать | |",
+    ]
+
+
+def _judge_sections(
+    results: Sequence[AnswerCase], judging: Judging | None
+) -> list[str]:
+    if judging is None:
+        return []
+    unsupported = []
+    for r in results:
+        for number, run in enumerate(r.runs):
+            verdict = judging.verdicts.get((r.case.id, number))
+            if verdict is None:
+                continue
+            kept = [s for s in run.checked if s.kept]
+            for index, mark in enumerate(verdict.supported):
+                if mark is False:
+                    comment = (
+                        verdict.comments[index] if index < len(verdict.comments) else ""
+                    )
+                    unsupported.append(
+                        f"- {r.case.id}, прогон {number + 1}: «{kept[index].text}» — {comment}"
+                    )
+    missed = [
+        f"- canary {c.id} (supported={c.supported}): судья сказал {mark}"
+        for c, mark in zip(judging.canaries, judging.canary_marks, strict=True)
+        if mark is not c.supported
+    ]
+    lines = ["", f"## Судья: неподтверждённые утверждения ({len(unsupported)})", ""]
+    lines += unsupported or ["Нет."]
+    lines += ["", f"## Судья: ошибки на канарейках ({len(missed)})", ""]
+    lines += missed or ["Нет."]
     return lines
