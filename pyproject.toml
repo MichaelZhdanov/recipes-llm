@@ -5,10 +5,15 @@ description = "ИИ-ассистент поддержки для Paperless-ngx: 
 license = "MIT"
 authors = [{ name = "Mikhail Zhdanov" }]
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "fastapi>=0.162.0",
+    "pydantic-settings>=2.7",
+    "uvicorn[standard]>=0.54.0",
+]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16.0",
     "mypy",
     "pytest",
     "ruff",
@@ -38,6 +43,8 @@ ignore = [
 [tool.mypy]
 strict = true
 files = ["assistant", "tests"]
+# Плагин понимает модели pydantic: проверяет аргументы конструктора Settings(...) по полям.
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
