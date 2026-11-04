@@ -7,7 +7,9 @@ from assistant.config import Settings
 def test_defaults_without_environment() -> None:
     settings = Settings()
 
-    assert settings.llm_provider == "anthropic"
+    assert settings.llm_provider == "gigachat"
+    assert settings.llm_model == ""
+    assert settings.gigachat_scope == "GIGACHAT_API_PERS"
     assert settings.paperless_ref == "v3.4.2"
     assert settings.paperless_api_url == "http://localhost:8000"
     assert settings.qdrant_url == "http://localhost:6333"
@@ -16,7 +18,7 @@ def test_defaults_without_environment() -> None:
     assert settings.embedding_model == ""
     assert settings.engineer_telegram_ids == frozenset()
     assert settings.escalation_chat_id is None
-    assert settings.llm_api_key.get_secret_value() == ""
+    assert settings.gigachat_api_key.get_secret_value() == ""
 
 
 @pytest.mark.parametrize(
@@ -68,7 +70,7 @@ def test_unknown_llm_provider_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.parametrize(
-    "env_name", ["LLM_API_KEY", "PAPERLESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    "env_name", ["GIGACHAT_API_KEY", "PAPERLESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
 )
 def test_secrets_are_hidden_in_repr_and_dumps(
     monkeypatch: pytest.MonkeyPatch, env_name: str

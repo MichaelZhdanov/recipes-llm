@@ -11,7 +11,7 @@ TEMPLATE = """\
 PAPERLESS_SECRET_KEY=
 PAPERLESS_ADMIN_USER=admin
 PAPERLESS_ADMIN_PASSWORD=
-LLM_API_KEY=
+GIGACHAT_API_KEY=
 """
 
 
@@ -31,7 +31,7 @@ def test_fills_only_generated_secrets() -> None:
     assert env["PAPERLESS_ADMIN_PASSWORD"]
     assert env["PAPERLESS_ADMIN_USER"] == "admin"
     # Ключ к LLM скрипт не выдумывает: его вводит сам пользователь.
-    assert env["LLM_API_KEY"] == ""
+    assert env["GIGACHAT_API_KEY"] == ""
 
 
 def test_keeps_comments_and_order() -> None:

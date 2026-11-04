@@ -11,7 +11,10 @@ from typing import Annotated, Literal
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-LlmProvider = Literal["anthropic", "openai", "gigachat", "yandexgpt", "local"]
+# Пока один провайдер LLM; другие — S2 из плана (смена модели).
+LlmProvider = Literal["gigachat"]
+# Области доступа GigaChat: физлица (Freemium), ИП и юрлица по предоплате, по постоплате.
+GigaChatScope = Literal["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]
 EmbeddingProvider = Literal["cloudru", "voyage"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
@@ -23,6 +26,9 @@ VOYAGE_ATLAS_API_URL = "https://ai.mongodb.com/v1"
 # Evolution Foundation Models: OpenAI-совместимый API, ключ — API-ключ сервисного
 # аккаунта уровня «Проект» (аккаунт уровня организации получает 401).
 CLOUD_RU_API_URL = "https://foundation-models.api.cloud.ru/v1"
+# GigaChat: токен выдаёт отдельный OAuth-адрес, генерация — на api.giga.chat.
+GIGACHAT_API_URL = "https://api.giga.chat/v1"
+GIGACHAT_OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
 
 class Settings(BaseSettings):
@@ -35,9 +41,13 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    llm_provider: LlmProvider = "anthropic"
+    llm_provider: LlmProvider = "gigachat"
+    # Пустая модель — модель по умолчанию (assistant/generation/gigachat.py).
     llm_model: str = ""
-    llm_api_key: SecretStr = SecretStr("")
+    gigachat_api_key: SecretStr = SecretStr("")
+    gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
+    gigachat_api_url: str = GIGACHAT_API_URL
+    gigachat_oauth_url: str = GIGACHAT_OAUTH_URL
     # Эмбеддинги. Пустая модель — модель провайдера по умолчанию (DEFAULT_MODELS).
     embedding_provider: EmbeddingProvider = "cloudru"
     embedding_model: str = ""
