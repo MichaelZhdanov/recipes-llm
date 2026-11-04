@@ -5,7 +5,7 @@ from typing import Literal
 import pytest
 from eval_helpers import MANIFEST
 
-from assistant.generation.answer import Answer, AnswerStatement, Reason
+from assistant.generation.answer import Answer, AnswerStatement, Reason, SourceLink
 from assistant.generation.citations import CheckedCitation, CheckedStatement, SourceText
 from assistant.generation.gigachat import LlmStats, Usage
 from assistant.indexing.chunks import Chunk
@@ -18,12 +18,14 @@ from evals.answer_metrics import (
     citation_accuracy,
     cost_rub,
     cyrillic_share,
+    error_localization,
     expected_source_cited,
     false_refusal,
     must_include_found,
     must_not_include_violations,
     negative_control,
     per_run,
+    routed_as_error,
     statement_coverage,
     term_fixes,
 )
@@ -315,3 +317,83 @@ def test_term_fixes_are_counted() -> None:
     results = [AnswerCase(case("howto-001"), [fixed, run(None)])]
 
     assert term_fixes(results) == {"объёме → томе": 1, "объёма → тома": 1}
+
+
+def code_source(start: int, end: int) -> SourceText:
+    chunk = Chunk(
+        kind="code",
+        path="src/documents/consumer.py",
+        start_line=start,
+        end_line=end,
+        title="run",
+        breadcrumb="consumer.py > run",
+        source_id=f"src/documents/consumer.py::f{start}",
+        url="https://x",
+        site_url=None,
+        ref="v3.4.2",
+        text="code",
+    )
+    return SourceText(1, chunk, "code")
+
+
+def error_run(
+    links: list[tuple[int, int]], status: str = "answer", question_type: str = "error"
+) -> AnswerRun:
+    base = run(None if status == "answer" else "model_not_found")
+    answer = base.answer.model_copy(
+        update={
+            "sources": [
+                SourceLink(
+                    number=n,
+                    kind="code",
+                    path="src/documents/consumer.py",
+                    start_line=a,
+                    end_line=b,
+                    title="run",
+                    url="https://x",
+                    site_url=None,
+                )
+                for n, (a, b) in enumerate(links, start=1)
+            ],
+            "question_type": question_type,
+        }
+    )
+    return dataclasses.replace(
+        base, answer=answer, sources=[code_source(467, 520), code_source(600, 650)]
+    )
+
+
+def error_case_for(line: int = 478) -> Case:
+    return Case(
+        id="error-001",
+        category="error",
+        role="user",
+        question="?",
+        expected_behavior="answer",
+        expected_line=f"src/documents/consumer.py:{line}",
+    )
+
+
+def test_error_localization_by_function_and_by_line() -> None:
+    results = [
+        AnswerCase(
+            error_case_for(478),
+            [
+                error_run([(476, 479)]),  # строка ошибки — в функции и до строки
+                error_run([(467, 470)]),  # та же функция, но не та строка
+                error_run([(600, 610)]),  # чужая функция
+                error_run([], status="not_found", question_type="general"),
+            ],
+        )
+    ]
+
+    assert error_localization(results) == Rate(2, 4)
+    assert error_localization(results, exact_line=True) == Rate(1, 4)
+    assert routed_as_error(results) == Rate(3, 4)
+
+
+def test_multiline_message_counts_with_slack() -> None:
+    """Текст собран из двух строк: модель процитировала вторую, это то же сообщение."""
+    results = [AnswerCase(error_case_for(478), [error_run([(479, 479)])])]
+
+    assert error_localization(results, exact_line=True) == Rate(1, 1)

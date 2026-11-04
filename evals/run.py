@@ -93,8 +93,8 @@ from evals.retrieval_metrics import (
 RUNS = 3
 SAMPLE_SEED = 20261104
 # Категории каждого режима.
-RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
-ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope"})
+RETRIEVAL_CATEGORIES = frozenset({"howto", "config", "error", "changelog"})
+ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope", "error", "changelog"})
 REPORTS_DIR = Path(__file__).parent / "reports"
 
 

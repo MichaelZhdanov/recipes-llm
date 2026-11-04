@@ -20,11 +20,13 @@ from assistant.retrieval.embeddings import RETRIEVAL_TASK, EmbeddingStats
 from assistant.retrieval.store import IndexManifest
 from evals.answer_metrics import (
     IN_SCOPE,
+    LINE_SLACK,
     AnswerCase,
     AnswerRun,
     abstention,
     citation_accuracy,
     cost_rub,
+    error_localization,
     expected_source_cited,
     false_refusal,
     filtered_out_share,
@@ -34,6 +36,7 @@ from evals.answer_metrics import (
     negative_control,
     outcomes,
     per_run,
+    routed_as_error,
     statement_coverage,
     term_fixes,
     top1_scores,
@@ -225,6 +228,7 @@ ANSWER_THRESHOLDS = {
     # Не больше: доля отказов на вопросах из области.
     "false_refusal": 0.10,
     "groundedness": 0.85,
+    "error_localization": 0.80,
 }
 
 
@@ -260,6 +264,11 @@ def answer_gates(
         "false_refusal": false_refusal(results).value
         <= ANSWER_THRESHOLDS["false_refusal"],
     }
+    localization = error_localization(results)
+    if localization.n:
+        gates["error_localization"] = (
+            localization.value >= ANSWER_THRESHOLDS["error_localization"]
+        )
     if judging is not None:
         gates["groundedness"] = (
             groundedness(judging.verdicts).value >= ANSWER_THRESHOLDS["groundedness"]
@@ -293,6 +302,19 @@ def _spread(values: Sequence[float]) -> str:
     if len(finite) < 2:
         return ""
     return f"по прогонам {min(finite):.2f}–{max(finite):.2f}"
+
+
+def _error_rows(results: Sequence[AnswerCase], gates: dict[str, bool]) -> list[str]:
+    localization = error_localization(results)
+    if not localization.n:
+        return []
+    return [
+        f"| error localization (ответ указывает на функцию с ошибкой) | {localization} | "
+        f"≥ {ANSWER_THRESHOLDS['error_localization']:.2f} | "
+        f"{_status(gates['error_localization'])} |",
+        f"| … до строки (±{LINE_SLACK}) | {error_localization(results, exact_line=True)} | показать | |",
+        f"| роутер распознал ошибку | {routed_as_error(results)} | показать | |",
+    ]
 
 
 def _fixes_cell(results: Sequence[AnswerCase]) -> str:
@@ -393,6 +415,7 @@ def render_answer_report(
         f"≥ {ANSWER_THRESHOLDS['abstention']:.2f} | {_status(gates['abstention'])} |",
         f"| false refusal (howto, config) | {refusal} {_spread(per_run(results, false_refusal))} | "
         f"≤ {ANSWER_THRESHOLDS['false_refusal']:.2f} | {_status(gates['false_refusal'])} |",
+        *_error_rows(results, gates),
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
         f"| ответ ссылается на ожидаемый источник | {expected_source_cited(results)} | показать | |",
