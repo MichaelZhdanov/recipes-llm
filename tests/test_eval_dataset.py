@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evals.dataset import HOLDOUT_DIR, Case, load_canaries, load_cases
+from evals.dataset import (
+    HOLDOUT_DIR,
+    Case,
+    load_canaries,
+    load_cases,
+    load_clarity_canaries,
+)
 
 GOOD = """\
 - id: howto-001
@@ -162,3 +168,30 @@ def test_dataset_in_repository_follows_the_schema() -> None:
     assert load_cases()
     assert load_cases(HOLDOUT_DIR)
     assert load_canaries()
+
+
+CLARITY = """\
+- id: clarity-001
+  statement: "Документы хранятся в Docker-объёме `paperless_media`."
+  quote: "By default, your documents are stored inside the docker volume paperless_media."
+  clear: false
+  notes: "volume — это том"
+"""
+
+
+def test_loads_clarity_canaries(tmp_path: Path) -> None:
+    file = write(tmp_path, "c.yaml", CLARITY) / "c.yaml"
+
+    [canary] = load_clarity_canaries(file)
+
+    assert canary.clear is False
+
+
+def test_clarity_canary_needs_its_own_id_prefix(tmp_path: Path) -> None:
+    file = (
+        write(tmp_path, "c.yaml", CLARITY.replace("clarity-001", "canary-001"))
+        / "c.yaml"
+    )
+
+    with pytest.raises(ValidationError):
+        load_clarity_canaries(file)

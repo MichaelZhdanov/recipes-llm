@@ -8,7 +8,9 @@
 - `holdout/` — отложенная выборка. Обычный `load_cases` её не видит:
   её смотрят один раз в конце, когда модель и промпт уже выбраны;
 - `judge/canaries.yaml` — «канарейки» для проверки модели-судьи:
-  утверждение, фрагмент и правильный вердикт.
+  утверждение, фрагмент и правильный вердикт `supported`;
+- `judge/clarity_canaries.yaml` — канарейки для оценки грамотности
+  `clear`: смысл подтверждён, а текст хороший или плохой.
 """
 
 from pathlib import Path
@@ -20,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DATASET_DIR = Path(__file__).parent / "dataset"
 HOLDOUT_DIR = DATASET_DIR / "holdout"
 CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
+CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 
 Category = Literal[
     "howto", "config", "error", "out_of_scope", "security", "tool", "escalation"
@@ -81,6 +84,23 @@ class Canary(BaseModel):
     notes: str = ""
 
 
+class ClarityCanary(BaseModel):
+    """Утверждение, которое фрагмент подтверждает, с известной оценкой грамотности.
+
+    `clear: false` — смысл верный, но текст плохой: неверный перевод термина
+    («Docker-объём» вместо «том»), ошибка, обрывок разметки. Если судья такое
+    пропускает, его метрике грамотности верить нельзя.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^clarity-\d{3}$")
+    statement: str = Field(min_length=1)
+    quote: str = Field(min_length=1)
+    clear: bool
+    notes: str = ""
+
+
 def _read_list(file: Path) -> list[object]:
     raw = yaml.safe_load(file.read_text(encoding="utf-8")) or []
     if not isinstance(raw, list):
@@ -107,5 +127,11 @@ def load_cases(directory: Path = DATASET_DIR) -> list[Case]:
 
 def load_canaries(file: Path = CANARIES_FILE) -> list[Canary]:
     canaries = [Canary.model_validate(item) for item in _read_list(file)]
+    _check_unique([canary.id for canary in canaries])
+    return canaries
+
+
+def load_clarity_canaries(file: Path = CLARITY_CANARIES_FILE) -> list[ClarityCanary]:
+    canaries = [ClarityCanary.model_validate(item) for item in _read_list(file)]
     _check_unique([canary.id for canary in canaries])
     return canaries
