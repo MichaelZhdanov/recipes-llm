@@ -1,0 +1,44 @@
+[project]
+name = "paperless-assistant"
+version = "0.1.0"
+description = "ИИ-ассистент поддержки для Paperless-ngx: ответы по документации и коду, диагностика, эскалация"
+license = "MIT"
+authors = [{ name = "Mikhail Zhdanov" }]
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mypy",
+    "pytest",
+    "ruff",
+]
+
+# Проект ставится в .venv как пакет: так версия живёт только здесь,
+# а код читает её через importlib.metadata.
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "assistant"
+module-root = ""
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    # Длину строк держит ruff format, длинные строковые литералы он не режет.
+    "E501",
+    # «Похожие на латиницу символы»: срабатывает на любую кириллицу в строках и комментариях.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.mypy]
+strict = true
+files = ["assistant", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

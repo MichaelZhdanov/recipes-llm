@@ -1,0 +1,33 @@
+# Локальные файлы автора: инструкции для Claude, конспект и план этапа
+CLAUDE.md
+QUESTIONS.md
+PLAN.md
+
+# Секреты
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Кеши инструментов
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Данные стека: тома Qdrant и Paperless, клон исходников форка, индексы
+data/
+
+# Сырые отчёты прогонов могут содержать ответы с реальными данными
+evals/reports/raw/
+
+# Редакторы и ОС
+.DS_Store
+.idea/
+.vscode/
