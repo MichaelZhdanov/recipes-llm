@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Конкретная версия, а не ubuntu-latest: ярлык latest GitHub переводит на новые
+    # релизы сам, и окружение CI менялось бы без коммита в репозитории.
+    runs-on: ubuntu-26.04
     env:
       # uv run падает, если uv.lock разошёлся с pyproject.toml.
       UV_LOCKED: "1"
