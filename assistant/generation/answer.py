@@ -18,7 +18,7 @@
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Literal
@@ -42,7 +42,13 @@ from assistant.generation.gigachat import (
     llm_model,
     make_llm,
 )
-from assistant.generation.glossary import Term, load_glossary, render_terms, terms_in
+from assistant.generation.glossary import (
+    Term,
+    fix_terms,
+    load_glossary,
+    render_terms,
+    terms_in,
+)
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
@@ -50,9 +56,12 @@ from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-# v1 — без глоссария; v2 добавила блок «Термины» (glossary.py), но модель стала
-# хуже цитировать; v3 — строгое правило цитаты последним, термины до источников.
-PROMPT_VERSION = "answer_v3"
+# answer_v1 — основной. v2 и v3 добавляли в промпт блок «Термины» из глоссария,
+# но модель с ним хуже цитировала (0.93 → 0.87 и 0.84 на одних и тех же кейсах).
+# Поэтому известные неверные переводы исправляет код после проверки ссылок
+# (fix_terms), а блок терминов идёт только в промпты, которые его ждут.
+PROMPT_VERSION = "answer_v1"
+PROMPTS_WITH_TERMS = frozenset({"answer_v2", "answer_v3"})
 K = 5
 # Сколько найденных кусков приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -124,6 +133,8 @@ class Trace:
     checked: list[CheckedStatement]
     retrieval_seconds: float
     generation_seconds: float
+    # Исправленные кодом неверные переводы терминов: («объёма», «тома»).
+    term_fixes: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -208,12 +219,19 @@ def _link(number: int, chunk: Chunk, start: int, end: int) -> SourceLink:
 
 
 def build_statements(
-    checked: Sequence[CheckedStatement], sources: Sequence[SourceText]
-) -> tuple[list[AnswerStatement], list[SourceLink]]:
+    checked: Sequence[CheckedStatement],
+    sources: Sequence[SourceText],
+    glossary: Sequence[Term] = (),
+) -> tuple[list[AnswerStatement], list[SourceLink], list[tuple[str, str]]]:
     """Оставляет подтверждённые утверждения и собирает список источников.
 
     Один процитированный кусок — один источник в ответе. Его строки — от первой
     до последней подтверждённой цитаты из него. Номера идут по первому упоминанию.
+
+    Известные неверные переводы терминов исправляются уже после проверки
+    ссылок, и только для терминов из процитированных кусков: «объём»
+    в ответе про Docker volume — ошибка, в ответе про размер диска — нет.
+    Цитаты и имена в обратных кавычках не меняются.
     """
     kept = [s for s in checked if s.kept]
     spans: dict[int, tuple[int, int]] = {}
@@ -230,16 +248,18 @@ def build_statements(
         _link(order[source], chunks[source], first, last)
         for source, (first, last) in spans.items()
     ]
-    statements = [
-        AnswerStatement(
-            text=statement.text,
-            sources=list(
-                dict.fromkeys(order[c.source] for c in statement.citations if c.valid)
-            ),
+    texts = {s.number: s.text for s in sources}
+    statements = []
+    fixes: list[tuple[str, str]] = []
+    for statement in kept:
+        cited = list(dict.fromkeys(c.source for c in statement.citations if c.valid))
+        terms = terms_in((texts[number] for number in cited), glossary)
+        text, fixed = fix_terms(statement.text, terms)
+        fixes += fixed
+        statements.append(
+            AnswerStatement(text=text, sources=[order[number] for number in cited])
         )
-        for statement in kept
-    ]
-    return statements, links
+    return statements, links, fixes
 
 
 def suggestions(hits: Sequence[Hit], limit: int = SUGGESTIONS) -> list[SourceLink]:
@@ -274,6 +294,7 @@ def assemble(
     ref: str,
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
+    glossary: Sequence[Term] = (),
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
     if completion is None:
@@ -281,8 +302,9 @@ def assemble(
         reason: Reason | None = "no_sources"
     else:
         checked, reason = check_completion(completion, sources)
+    fixes: list[tuple[str, str]] = []
     if reason is None:
-        statements, links = build_statements(checked, sources)
+        statements, links, fixes = build_statements(checked, sources, glossary)
     else:
         statements, links = [], suggestions(hits)
     answer = Answer(
@@ -301,6 +323,7 @@ def assemble(
         checked=checked,
         retrieval_seconds=retrieval_seconds,
         generation_seconds=generation_seconds,
+        term_fixes=fixes,
     )
     return AnswerResult(answer=answer, trace=trace)
 
@@ -340,7 +363,12 @@ class Answerer:
                     {
                         "role": "user",
                         "content": user_message(
-                            question, sources, self._ref, self._glossary
+                            question,
+                            sources,
+                            self._ref,
+                            self._glossary
+                            if self.prompt_version in PROMPTS_WITH_TERMS
+                            else (),
                         ),
                     },
                 ],
@@ -361,6 +389,7 @@ class Answerer:
             ref=self._ref,
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
+            glossary=self._glossary,
         )
 
 

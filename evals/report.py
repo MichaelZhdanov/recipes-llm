@@ -35,6 +35,7 @@ from evals.answer_metrics import (
     outcomes,
     per_run,
     statement_coverage,
+    term_fixes,
     top1_scores,
 )
 from evals.judge import (
@@ -282,6 +283,15 @@ def _spread(values: Sequence[float]) -> str:
     return f"по прогонам {min(finite):.2f}–{max(finite):.2f}"
 
 
+def _fixes_cell(results: Sequence[AnswerCase]) -> str:
+    fixes = term_fixes(results)
+    if not fixes:
+        return "0"
+    return f"{sum(fixes.values())}: " + ", ".join(
+        f"«{k}» {n}" for k, n in fixes.most_common(5)
+    )
+
+
 def _status(passed: bool) -> str:
     return "✅" if passed else "❌"
 
@@ -381,6 +391,7 @@ def render_answer_report(
         f"| must_not_include нарушен | {must_not_include_violations(results)} | 0 | |",
         f"| доля кириллицы в ответе вне `кода` | {'—' if lang is None else f'{lang:.2f}'} "
         "| показать | |",
+        f"| неверные переводы терминов, исправленные кодом | {_fixes_cell(results)} | показать | |",
         f"| поиск p50 / p95 | {_p([run.retrieval_seconds for run in runs])} | показать | |",
         f"| генерация p50 / p95 | {_p([run.generation_seconds for run in runs if run.usage])} "
         "| показать | |",

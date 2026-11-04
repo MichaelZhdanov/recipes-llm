@@ -5,6 +5,7 @@ import pytest
 from glossary_candidates import PO_FILE, frequency, is_term, parse_po
 
 from assistant.generation.glossary import (
+    fix_terms,
     load_glossary,
     parse_glossary,
     render_terms,
@@ -106,3 +107,36 @@ def test_terms_are_found_as_whole_words_with_plural() -> None:
         render_terms(found)
         == "- volume — том (том Docker)\n- storage path — путь к хранилищу"
     )
+
+
+VOLUME = parse_glossary("volume\tтом\t-\tтом Docker\tобъём|объем\n")
+
+
+@pytest.mark.parametrize(
+    ("text", "fixed"),
+    [
+        (
+            "Документы в Docker-объёме `paperless_media`.",
+            "Документы в Docker-томе `paperless_media`.",
+        ),
+        ("Объём управляется Docker.", "Том управляется Docker."),
+        ("копии объемов баз данных", "копии томов баз данных"),
+    ],
+)
+def test_wrong_translation_is_fixed_with_its_ending(text: str, fixed: str) -> None:
+    assert fix_terms(text, VOLUME)[0] == fixed
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Нужен объёмный диск.",  # прилагательное — не термин
+        "Задайте `объём` как есть.",  # в обратных кавычках не трогаем
+    ],
+)
+def test_other_words_are_left_alone(text: str) -> None:
+    assert fix_terms(text, VOLUME) == (text, [])
+
+
+def test_fixes_are_reported() -> None:
+    assert fix_terms("Docker-объёма", VOLUME)[1] == [("объёма", "тома")]
