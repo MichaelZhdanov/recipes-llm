@@ -9,7 +9,11 @@ from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
 from evals.dataset import Case
 from evals.retrieval_metrics import (
+    CaseResult,
+    RetrievalRun,
+    exact_share,
     first_hit_rank,
+    has_expectation,
     hit_rank,
     missing_sources,
     mrr_per_run,
@@ -146,3 +150,24 @@ def test_store_finds_chunk_by_line(store: VectorStore, fake_embedder: Embedder) 
     assert store.has_line("src/documents/consumer.py", 478)
     assert not store.has_line("src/documents/consumer.py", 521)
     assert not store.has_line("src/other.py", 478)
+
+
+def test_exact_share_and_expectation() -> None:
+    oos = Case(
+        id="out_of_scope-001",
+        category="out_of_scope",
+        role="user",
+        question="?",
+        expected_behavior="abstain",
+    )
+    with_exact = CaseResult(
+        case=error_case("src/a.py:1"),
+        runs=[
+            RetrievalRun(top=[], rank=1, latency=0.1, exact=1),
+            RetrievalRun(top=[], rank=1, latency=0.1),
+        ],
+    )
+
+    assert exact_share([with_exact]) == 0.5
+    assert not has_expectation(oos)
+    assert has_expectation(with_exact.case)

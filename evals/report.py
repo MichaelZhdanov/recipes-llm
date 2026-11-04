@@ -51,6 +51,8 @@ from evals.retrieval_metrics import (
     CaseResult,
     K,
     RetrievalRun,
+    exact_share,
+    has_expectation,
     hit_rank,
     mrr_per_run,
     percentile,
@@ -115,7 +117,11 @@ def render_report(
     stats: EmbeddingStats,
     today: date,
     sample: str | None = None,
+    exact: bool = True,
 ) -> str:
+    # recall и MRR — только по кейсам, где есть что искать (у out_of_scope нечего).
+    all_results = results
+    results = [r for r in results if has_expectation(r.case)]
     recall = recall_per_run(results)
     mrr = mrr_per_run(results)
     latencies = [lat for r in results for lat in r.latencies]
@@ -140,6 +146,7 @@ def render_report(
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].ranks)} |",
         "| Промпт | не используется |",
+        f"| Точный поиск по тексту ошибки | {'включён' if exact else 'выключен (--no-exact)'} |",
         *_sample_row(sample),
         "",
         "## Метрики",
@@ -157,14 +164,21 @@ def render_report(
         "",
         "## По категориям и ролям",
         "",
-        "| Группа | Кейсов | recall@5 |",
-        "|---|---|---|",
+        "Для error recall@5 — кусок кода со строкой ошибки в топ-5. «Точный поиск» — доля",
+        "прогонов, где он сработал; на howto, config и out_of_scope это ложные срабатывания.",
+        "",
+        "| Группа | Кейсов | recall@5 | точный поиск |",
+        "|---|---|---|---|",
     ]
     for label, key in (("категория", "category"), ("роль", "role")):
-        for value in sorted({getattr(r.case, key) for r in results}):
-            group = [r for r in results if getattr(r.case, key) == value]
+        for value in sorted({getattr(r.case, key) for r in all_results}):
+            group = [r for r in all_results if getattr(r.case, key) == value]
+            scored = [r for r in group if has_expectation(r.case)]
+            recall_cell = (
+                f"{statistics.mean(recall_per_run(scored)):.2f}" if scored else "—"
+            )
             lines.append(
-                f"| {label} {value} | {len(group)} | {statistics.mean(recall_per_run(group)):.2f} |"
+                f"| {label} {value} | {len(group)} | {recall_cell} | {exact_share(group):.2f} |"
             )
 
     lines += [

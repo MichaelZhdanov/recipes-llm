@@ -27,6 +27,8 @@ class RetrievalRun:
     # Ранг первого ожидаемого источника (с 1), None — его нет в топ-K.
     rank: int | None
     latency: float
+    # Сколько кусков в топе нашёл точный поиск по тексту ошибки.
+    exact: int = 0
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,20 @@ def run_cases(
             latency = clock() - started
             top = [(h.chunk.source_id, h.score) for h in hits]
             rank = hit_rank(case, [h.chunk for h in hits])
-            case_runs.append(RetrievalRun(top=top, rank=rank, latency=latency))
+            exact = sum(h.exact for h in hits)
+            case_runs.append(
+                RetrievalRun(top=top, rank=rank, latency=latency, exact=exact)
+            )
         results.append(CaseResult(case=case, runs=case_runs))
     return results
+
+
+def has_expectation(case: Case) -> bool:
+    """Есть ли у кейса, что искать: у out_of_scope ожидаемого источника нет."""
+    return bool(case.expected_sources) or case.expected_line is not None
+
+
+def exact_share(results: Sequence[CaseResult]) -> float:
+    """Доля прогонов, где сработал точный поиск. На howto и config — ложные срабатывания."""
+    runs = [run for r in results for run in r.runs]
+    return sum(run.exact > 0 for run in runs) / len(runs) if runs else 0.0

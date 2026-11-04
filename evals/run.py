@@ -84,6 +84,7 @@ from evals.report import (
 from evals.retrieval_metrics import (
     CaseResult,
     K,
+    has_expectation,
     missing_sources,
     recall_per_run,
     run_cases,
@@ -106,6 +107,7 @@ def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
             "rank": run.rank,
             "top": run.top,
             "latency": run.latency,
+            "exact": run.exact,
         }
         for r in results
         for number, run in enumerate(r.runs)
@@ -300,6 +302,7 @@ def _retrieval_stage(
     sample: int | None,
     seed: int,
     categories: frozenset[str] = RETRIEVAL_CATEGORIES,
+    exact: bool = True,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
@@ -310,7 +313,7 @@ def _retrieval_stage(
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        retriever = Retriever(store, embedder, ref=settings.paperless_ref)
+        retriever = Retriever(store, embedder, ref=settings.paperless_ref, exact=exact)
         if not _check_sources(cases, store):
             return 2
         results = run_cases(cases, retriever, runs=runs)
@@ -325,10 +328,14 @@ def _retrieval_stage(
         stats=embedder.stats,
         today=today,
         sample=sampled,
+        exact=exact,
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results))
-    recall = statistics.mean(recall_per_run(results))
+    # Как в отчёте: только кейсы, где есть что искать (у out_of_scope нечего).
+    recall = statistics.mean(
+        recall_per_run([r for r in results if has_expectation(r.case)])
+    )
     print(
         f"recall@{K} = {recall:.2f} (порог {THRESHOLDS['recall@5']:.2f}), отчёт: {path}"
     )
@@ -448,6 +455,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--seed", type=int, default=SAMPLE_SEED, help="сид для --sample"
     )
     parser.add_argument(
+        "--no-exact",
+        action="store_true",
+        help="без точного поиска по тексту ошибки: для замера его вклада (STAGE=retrieval)",
+    )
+    parser.add_argument(
         "--categories",
         type=_categories,
         help="только эти категории через запятую, например error или howto,config",
@@ -489,6 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.sample,
             args.seed,
             args.categories or RETRIEVAL_CATEGORIES,
+            not args.no_exact,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(
