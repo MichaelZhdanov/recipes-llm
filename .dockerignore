@@ -1,6 +1,10 @@
 # В контекст сборки не попадают секреты, локальные заметки и данные.
 .env
 .env.*
+ops
+ops.pub
+deploy_key
+deploy_key.pub
 CLAUDE.md
 QUESTIONS.md
 PLAN.md
