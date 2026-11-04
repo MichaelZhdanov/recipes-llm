@@ -88,6 +88,10 @@ services:
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
       ENGINEER_TELEGRAM_IDS: ${ENGINEER_TELEGRAM_IDS:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      NO_AUTH: ${NO_AUTH:-}
+      WEB_LOGIN: ${WEB_LOGIN:-}
+      WEB_PASSWORD: ${WEB_PASSWORD:-}
+      WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:-}
 
 volumes:
   broker-data:

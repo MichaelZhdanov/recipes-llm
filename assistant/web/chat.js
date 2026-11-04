@@ -103,6 +103,11 @@ async function ask(question) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
     });
+    if (response.status === 401) {
+      // Сессия истекла или пароль сменили: на страницу входа.
+      window.location.href = "/login";
+      return;
+    }
     const data = await response.json().catch(() => ({}));
     if (response.ok) {
       pending.replaceWith(renderAnswer(data));
@@ -142,3 +147,18 @@ fetch("/health")
       `Ответы по документации и коду Paperless-ngx ${health.paperless_ref}. Каждая ссылка проверена кодом.`;
   })
   .catch(() => {});
+
+// Кнопка «Выйти» видна, только когда вход включён (при NO_AUTH=1 user — null).
+const logout = document.getElementById("logout");
+fetch("/session")
+  .then((response) => response.json())
+  .then((session) => {
+    if (!session.user) return;
+    logout.textContent = `Выйти (${session.user})`;
+    logout.hidden = false;
+  })
+  .catch(() => {});
+logout.addEventListener("click", async () => {
+  await fetch("/logout", { method: "POST" }).catch(() => {});
+  window.location.href = "/login";
+});

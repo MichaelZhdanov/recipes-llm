@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # NoDecode: без него pydantic-settings ждёт JSON вида "[1, 2]", а в .env привычнее "1,2".
     engineer_telegram_ids: Annotated[frozenset[int], NoDecode] = frozenset()
     log_level: LogLevel = "INFO"
+    # Вход в веб-чат и API (assistant/security/auth.py). NO_AUTH=1 выключает его,
+    # по умолчанию вход нужен: открытым сервер не окажется по забывчивости.
+    no_auth: bool = False
+    web_login: str = "admin"
+    web_password: SecretStr = SecretStr("")
+    # Ключ подписи cookie сессии; сменить его — разлогинить всех.
+    web_session_secret: SecretStr = SecretStr("")
 
     @field_validator("engineer_telegram_ids", mode="before")
     @classmethod

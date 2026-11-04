@@ -2,7 +2,13 @@ import re
 import stat
 from pathlib import Path
 
-from init_env import GENERATED_SECRETS, create_env, render_env
+from init_env import (
+    GENERATED_SECRETS,
+    add_missing_secrets,
+    create_env,
+    render_env,
+    update_env,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -12,6 +18,8 @@ PAPERLESS_SECRET_KEY=
 PAPERLESS_ADMIN_USER=admin
 PAPERLESS_ADMIN_PASSWORD=
 GIGACHAT_API_KEY=
+WEB_PASSWORD=
+WEB_SESSION_SECRET=
 """
 
 
@@ -85,3 +93,31 @@ def test_real_env_example_leaves_generated_secrets_empty() -> None:
     for key in GENERATED_SECRETS:
         assert example[key] == "", f"{key} в .env.example должен быть пустым"
         assert rendered[key], f"{key} не сгенерирован"
+
+
+def test_old_env_gets_new_secrets_and_keeps_its_values(tmp_path: Path) -> None:
+    """.env создан до появления входа: в нём нет WEB_SESSION_SECRET, а WEB_PASSWORD пустой."""
+    target = tmp_path / ".env"
+    target.write_text(
+        "# мой комментарий\nPAPERLESS_SECRET_KEY=keep-me\nWEB_PASSWORD=\n"
+        "GIGACHAT_API_KEY=my-key\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o600)
+
+    added = update_env(target)
+
+    text = target.read_text(encoding="utf-8")
+    env = parse(text)
+    assert added == ["WEB_PASSWORD", "PAPERLESS_ADMIN_PASSWORD", "WEB_SESSION_SECRET"]
+    assert env["PAPERLESS_SECRET_KEY"] == "keep-me"
+    assert env["GIGACHAT_API_KEY"] == "my-key"
+    assert env["WEB_PASSWORD"] and env["WEB_SESSION_SECRET"]
+    assert text.startswith("# мой комментарий\nPAPERLESS_SECRET_KEY=keep-me\n")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_complete_env_is_not_rewritten(tmp_path: Path) -> None:
+    text = "".join(f"{key}=set\n" for key in GENERATED_SECRETS)
+
+    assert add_missing_secrets(text) == (text, [])

@@ -1,8 +1,12 @@
-"""Создаёт .env из .env.example и подставляет случайные секреты для demo-Paperless.
+"""Создаёт .env из .env.example и подставляет случайные секреты.
 
-Вызывается из `make up` (цель `.env`) в Docker-образе uv с Python 3.14, где
-зависимости проекта ещё не установлены, поэтому только стандартная библиотека.
-Существующий .env не трогает.
+Вызывается из `make up` в Docker-образе uv с Python 3.14, где зависимости
+проекта ещё не установлены, поэтому только стандартная библиотека.
+
+Если .env уже есть, в нём меняется одно: дописываются сгенерированные секреты,
+которых там нет или они пустые. Так обновление проекта, добавившее новый
+секрет (WEB_SESSION_SECRET), не ломает запуск со старым .env. Заданные
+значения не трогаются никогда.
 """
 
 import os
@@ -18,7 +22,13 @@ ROOT = Path(__file__).resolve().parent.parent
 GENERATED_SECRETS = {
     "PAPERLESS_SECRET_KEY": 48,
     "PAPERLESS_ADMIN_PASSWORD": 16,
+    "WEB_PASSWORD": 16,
+    "WEB_SESSION_SECRET": 48,
 }
+
+
+def _secret(key: str) -> str:
+    return secrets.token_urlsafe(GENERATED_SECRETS[key])
 
 
 def render_env(template: str) -> str:
@@ -27,7 +37,7 @@ def render_env(template: str) -> str:
     for line in template.splitlines():
         key, sep, value = line.partition("=")
         if sep and not value and key in GENERATED_SECRETS:
-            line = f"{key}={secrets.token_urlsafe(GENERATED_SECRETS[key])}"
+            line = f"{key}={_secret(key)}"
         lines.append(line)
     return "\n".join(lines) + "\n"
 
@@ -45,15 +55,57 @@ def create_env(example: Path, target: Path) -> bool:
     return True
 
 
+def add_missing_secrets(text: str) -> tuple[str, list[str]]:
+    """Существующий .env с заполненными недостающими секретами и их список.
+
+    Пустой секрет заполняется на месте, отсутствующий дописывается в конец.
+    """
+    lines = text.splitlines()
+    present: set[str] = set()
+    added: list[str] = []
+    for index, line in enumerate(lines):
+        key, sep, value = line.partition("=")
+        if sep and key in GENERATED_SECRETS:
+            present.add(key)
+            if not value:
+                lines[index] = f"{key}={_secret(key)}"
+                added.append(key)
+    for key in GENERATED_SECRETS:
+        if key not in present:
+            lines.append(f"{key}={_secret(key)}")
+            added.append(key)
+    return "\n".join(lines) + "\n", added
+
+
+def update_env(target: Path) -> list[str]:
+    """Дописывает в target недостающие секреты. Права 0600 сохраняются."""
+    text = target.read_text(encoding="utf-8")
+    content, added = add_missing_secrets(text)
+    if added:
+        temporary = target.with_name(f"{target.name}.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as env_file:
+            env_file.write(content)
+        # replace атомарен: .env либо старый, либо новый целиком.
+        os.replace(temporary, target)
+    return added
+
+
 def main() -> int:
-    if not create_env(ROOT / ".env.example", ROOT / ".env"):
-        print(".env уже существует, оставляю как есть.")
+    target = ROOT / ".env"
+    if create_env(ROOT / ".env.example", target):
+        print(
+            "Создан .env, сгенерированы секреты: " + ", ".join(GENERATED_SECRETS) + "."
+        )
+        print(
+            "Вход в Paperless: http://localhost:8000, "
+            "логин и пароль — PAPERLESS_ADMIN_USER и PAPERLESS_ADMIN_PASSWORD в .env. "
+            "Вход в ассистента — WEB_LOGIN и WEB_PASSWORD."
+        )
         return 0
-    print("Создан .env, сгенерированы PAPERLESS_SECRET_KEY и PAPERLESS_ADMIN_PASSWORD.")
-    print(
-        "Вход в Paperless: http://localhost:8000, "
-        "логин и пароль — PAPERLESS_ADMIN_USER и PAPERLESS_ADMIN_PASSWORD в .env."
-    )
+    added = update_env(target)
+    if added:
+        print(f"В .env добавлены новые секреты: {', '.join(added)}.")
     return 0
 
 

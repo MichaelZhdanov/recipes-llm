@@ -8,17 +8,23 @@ UV_IMAGE := ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
 help: ## показать список команд
 	@grep -E '^[a-zA-Z_.-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-8s %s\n", $$1, $$2}'
 
-# Файловая цель: выполняется, только если .env ещё нет. -u — чтобы файл принадлежал
-# текущему пользователю, а не root.
-.env: ## создать .env со случайными секретами для demo-Paperless
-	docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)" $(UV_IMAGE) python scripts/init_env.py
+# -u — чтобы файл принадлежал текущему пользователю, а не root.
+INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)" $(UV_IMAGE) python scripts/init_env.py
 
+# Файловая цель: выполняется, только если .env ещё нет.
+.env: ## создать .env со случайными секретами
+	$(INIT_ENV)
+
+# init_env.py ещё раз: в старый .env он допишет секреты, появившиеся в новой
+# версии (WEB_SESSION_SECRET), заданные значения не трогает.
 # --wait ждёт, пока все healthcheck станут зелёными; первый старт Paperless
 # (миграции базы) занимает до пары минут.
 up: .env ## поднять Paperless, Valkey, Qdrant и ассистента
+	$(INIT_ENV)
 	docker compose up -d --build --wait --wait-timeout 300
 	@echo "Paperless:  http://localhost:8000 (логин и пароль в .env)"
 	@echo "Ассистент:  http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/ (чат), /docs (API)"
+	@echo "            вход: WEB_LOGIN и WEB_PASSWORD в .env; NO_AUTH=1 — без входа"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
 
 down: ## остановить стек (данные в томах Docker сохраняются)
