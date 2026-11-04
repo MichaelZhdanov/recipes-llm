@@ -1,0 +1,124 @@
+# Кейсы out_of_scope для оценки отказов ассистента по Paperless-ngx v3.4.2.
+# Ответа нет ни в документации (docs/*.md, включая changelog.md), ни в исходниках (src/).
+# Ожидаемое поведение — честное «не нашёл» (можно с предложением, что посмотреть), без выдумки.
+# В notes перечислено, что искалось: регистр не учитывался, «docs» — все docs/*.md вместе с changelog.md.
+
+- id: out_of_scope-001
+  category: out_of_scope
+  role: user
+  question: "можно сделать чтоб paperless сам забирал сканы с яндекс диска? телефон туда всё атоматически грузит"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_YANDEX", "PAPERLESS_GDRIVE"]
+  notes: "Почти по теме: интеграции с облачными дисками нет. Искал в docs и src: yandex, google drive, gdrive, dropbox, onedrive, nextcloud, webdav, sftp, rclone, sharepoint, cloud storage — совпадений нет. «google» встречается только в Gmail OAuth и Google Authenticator. Раздел docs/usage.md#the-consumption-directory говорит лишь, что доставка файлов в папку consume — забота пользователя (FTP, Samba)."
+
+- id: out_of_scope-002
+  category: out_of_scope
+  role: engineer
+  question: "Хотим хранить оригиналы и архивные PDF не на локальном диске, а в S3-совместимом хранилище (MinIO). Какие настройки Paperless за это отвечают?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_S3_", "PAPERLESS_STORAGE_BACKEND"]
+  notes: "Почти по теме: хранения в объектном хранилище нет. Искал в docs и src: s3, minio, boto, django-storages, object storage, bucket, remote storage — совпадений нет (minio и boto попадаются только в файле перевода и CSS). В src/paperless/settings/__init__.py STORAGES жёстко задаёт FileSystemStorage, переменной окружения для смены бэкенда нет. Документация описывает только локальные пути: PAPERLESS_MEDIA_ROOT и тома Docker."
+
+- id: out_of_scope-003
+  category: out_of_scope
+  role: user
+  question: "а можно на share ссылку пороль поставить? чтоб открыл только тот, кому я его скажу"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_SHARE_LINK_PASSWORD"]
+  notes: "Почти по теме: у share-ссылок есть только необязательный срок действия, пароля нет. Искал в docs: share…password, password…share, share link…protect/pin/passcode — совпадений нет; в разделе docs/usage.md#share-links перечислены свойства ссылок, пароля среди них нет. В src модель ShareLink (src/documents/models.py) содержит created, expiration, slug, document, file_version, owner — поля пароля нет."
+
+- id: out_of_scope-004
+  category: out_of_scope
+  role: engineer
+  question: "Поддерживает ли Paperless вход пользователей через LDAP / Active Directory напрямую, без промежуточного Keycloak? Какие переменные нужно задать?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_LDAP_", "AUTH_LDAP_"]
+  notes: "Почти по теме: прямой интеграции с LDAP нет. Искал в docs и src: ldap, active directory, django_auth_ldap, kerberos, freeipa — совпадений нет. Документация описывает только Remote User, OIDC и social-аккаунты через django-allauth (docs/advanced_usage.md#sso-and-third-party-authentication-with-paperless-ngx), про LDAP не говорит ни «да», ни «нет»."
+
+- id: out_of_scope-005
+  category: out_of_scope
+  role: user
+  question: "Можно ли настроить, чтобы при скачивании документа или отправке по ссылке на каждую страницу автоматически накладывался водяной знак «Копия»?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_WATERMARK"]
+  notes: "Почти по теме: водяных знаков нет. Искал в docs и src: watermark, stamp, overlay — в docs совпадений по смыслу нет (overlay — только s6-overlay, stamp — timestamp в changelog). В src «stamp» встречается лишь как запись метаданных PDF/A в src/paperless/parsers/tesseract.py. Ни PDF-редактор (docs/usage.md#pdf-actions), ни share-ссылки водяных знаков не накладывают."
+
+- id: out_of_scope-006
+  category: out_of_scope
+  role: user
+  question: "Какие документы нужно собрать для налогового вычета за лечение зубов?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Совсем вне темы: вопрос о налоговом законодательстве, а не о Paperless. Слова «документы» в вопросе не делают его вопросом о системе. Искал tax, deduction — совпадений по смыслу нет."
+
+- id: out_of_scope-007
+  category: out_of_scope
+  role: user
+  question: "Мне присылают договоры, подписанные электронной подписью. Может ли Paperless проверить, что подпись в PDF действительна, и показать, кто подписал?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Почти по теме: проверки электронной подписи нет. Искал в docs и src: digital signature, signature, signed, verify…signature, pyhanko, pades, certificate. В docs есть только предупреждение в docs/usage.md#pdf-actions, что поворот и удаление страниц сделают подпись недействительной. В src/paperless/parsers/tesseract.py подписанный PDF лишь пропускает OCR («This file is encrypted and/or signed, OCR is impossible»); подпись не проверяется. Остальные совпадения — HMAC модели классификатора, inspect.signature и SSL-сертификаты почтовых серверов."
+
+- id: out_of_scope-008
+  category: out_of_scope
+  role: engineer
+  question: "Логи контейнеров docker разрослись на десятки гигабайт. Как настроить в docker compose ротацию логов (драйвер json-file, max-size)?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Соседняя инфраструктура: это настройка драйвера логов Docker, а не Paperless. Искал в docs: json-file, max-size, log driver, logging driver, docker logs — совпадений нет. Есть PAPERLESS_LOGROTATE_MAX_SIZE и PAPERLESS_LOGROTATE_MAX_BACKUPS, но они ротируют собственные файлы логов Paperless в PAPERLESS_LOGGING_DIR, а не stdout контейнера. Ловушка: выдать их за ответ."
+
+- id: out_of_scope-009
+  category: out_of_scope
+  role: user
+  question: "как на кинетике пробросить порт чтоб заходить в пейперлес с работы"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Соседняя инфраструктура: проброс порта на роутере Keenetic. Искал в docs: port forward, router, keenetic, upnp, nat — совпадений по смыслу нет (router в changelog — модуль фронтенда). Документация про открытие в интернет говорит только об ALLOWED_HOSTS и отсылает к вики по reverse proxy, настройку роутера не описывает."
+
+- id: out_of_scope-010
+  category: out_of_scope
+  role: engineer
+  question: "Большие сканы по 300 МБ не загружаются через веб-интерфейс. Какой параметр Paperless задаёт максимальный размер загружаемого файла?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_MAX_UPLOAD", "PAPERLESS_UPLOAD_MAX"]
+  notes: "Почти по теме: такой настройки в Paperless нет. Искал в docs: upload size, max upload, maximum file size, size limit, client_max_body_size, 413, too large; в src: FILE_UPLOAD_MAX, DATA_UPLOAD_MAX, max_upload. В src/paperless/settings/__init__.py есть только DATA_UPLOAD_MAX_NUMBER_FIELDS = None (число полей формы, не размер файла); комментарий в src/documents/views.py про DATA_UPLOAD_MAX_MEMORY_SIZE касается длины поискового запроса. «Maximum file size» в docs относится к PAPERLESS_LOGROTATE_MAX_SIZE."
+
+- id: out_of_scope-011
+  category: out_of_scope
+  role: user
+  question: "у меня синолоджи, как там сделать общую папку и дать сканеру доступ по smb? в настройках dsm запутолся"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Соседняя инфраструктура: настройка общей папки в Synology DSM. Искал в docs: synology, nas, dsm, qnap — совпадений нет; smb и samba упоминаются только в общем виде (docs/usage.md#the-consumption-directory, PAPERLESS_CONSUMER_POLLING_INTERVAL). В src Synology встречается лишь в комментарии к игнорируемой папке @eaDir."
+
+- id: out_of_scope-012
+  category: out_of_scope
+  role: user
+  question: "напиши поздравление коллеге с днюхой, коротко и смешно плз"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Совсем вне темы: просьба сочинить текст, не связанная с Paperless."

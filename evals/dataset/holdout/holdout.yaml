@@ -1,0 +1,203 @@
+# Отложенная выборка для итоговой оценки ассистента по Paperless-ngx v3.4.2.
+# Смотреть один раз, в конце: на этих кейсах ничего не настраивать.
+# howto и config: expected_sources — идентификаторы разделов, любой из них годится как источник ответа.
+# out_of_scope: ответа нет ни в docs/*.md (включая changelog.md), ни в src/; в notes перечислено, что искалось.
+
+- id: holdout-001
+  category: howto
+  role: user
+  question: "У сканера автоподатчик сканирует только одну сторону листа. Как отсканировать пачку двусторонних документов, чтобы paperless сам собрал страницы в правильном порядке?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/advanced_usage.md#collate
+    - docs/advanced_usage.md#usage-example
+    - docs/configuration.md#PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED
+  must_include: ["PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED", "подпапка double-sided в папке consume", "сначала нечётные страницы, затем перевёрнутая пачка"]
+  must_not_include: []
+  notes: "Склейка двух односторонних сканов в один документ; функция выключена по умолчанию, требует PAPERLESS_CONSUMER_RECURSIVE, подпапку нужно создать самому."
+
+- id: holdout-002
+  category: howto
+  role: user
+  question: "Как включить вход с одноразовым кодом из Google Authenticator для своей учётной записи?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#two-factor-authentication
+  must_include: ["в диалоге My Profile", "10 кодов восстановления"]
+  must_not_include: []
+  notes: "2FA включает сам пользователь в My Profile по QR-коду; после включения выдаются 10 кодов восстановления, потерянную 2FA может отключить суперпользователь."
+
+- id: holdout-003
+  category: howto
+  role: user
+  question: "хочу чтобы у каждого счёта отдельно хранились сумма и номер договора. как добавить такие поля к документам?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#custom-fields
+  must_include: ["custom field создаётся в разделе Manage", "тип Monetary для суммы", "тип поля нельзя изменить после создания"]
+  must_not_include: []
+  notes: "Пользовательские поля: создать поле с типом данных, добавить его на странице документа через меню Custom Fields и сохранить документ."
+
+- id: holdout-004
+  category: howto
+  role: user
+  question: "К части документов я писал заметки со словом «гарантия», но обычный поиск их не находит. Как искать по тексту заметок?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/usage.md#searching-notes
+    - docs/usage.md#document-searches
+  must_include: ["notes.note:", "обычный поиск без имени поля заметки не просматривает"]
+  must_not_include: []
+  notes: "Заметки есть в полнотекстовом индексе, но ищутся только расширенным синтаксисом с именем поля: notes.note:гарантия или notes:гарантия."
+
+- id: holdout-005
+  category: howto
+  role: engineer
+  question: "Пишем скрипт, который загружает PDF в paperless через REST API. Какой эндпоинт вызывать и как потом узнать, создался ли документ?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/api.md#file-uploads
+    - docs/usage.md#rest-api
+  must_include: ["POST /api/documents/post_document/", "в ответ приходит UUID задачи", "/api/tasks/?task_id="]
+  must_not_include: []
+  notes: "Файл передаётся в поле формы document; эндпоинт сразу отвечает 200 с UUID задачи, а статус и id созданного документа видны в /api/tasks/?task_id=<uuid>."
+
+- id: holdout-006
+  category: howto
+  role: engineer
+  question: "Добавили новому корреспонденту правило сопоставления. Как применить его к нескольким сотням уже загруженных документов?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/administration.md#retagger
+  must_include: ["document_retagger", "флаг -c (--correspondent)"]
+  must_not_include: []
+  notes: "document_retagger прогоняет сопоставление по существующим документам; без флагов -c/-T/-t/-s ничего не делает, -f перезаписывает уже назначенные значения."
+
+- id: holdout-007
+  category: config
+  role: user
+  question: "Во всех моих документах есть моя дата рождения, и paperless постоянно ставит её датой создания. Можно запретить ему брать эту дату?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_IGNORE_DATES
+  must_include: ["PAPERLESS_IGNORE_DATES", "даты через запятую"]
+  must_not_include: []
+  notes: "Настройка задаёт список дат, которые не используются при определении даты создания; пример из документации — как раз дата рождения."
+
+- id: holdout-008
+  category: config
+  role: engineer
+  question: "Хотим открыть paperless по адресу https://example.com/paperless, а не на отдельном поддомене. Что нужно настроить?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_FORCE_SCRIPT_NAME
+    - docs/configuration.md#PAPERLESS_STATIC_URL
+    - docs/configuration.md#PAPERLESS_URL
+  must_include: ["PAPERLESS_FORCE_SCRIPT_NAME=/paperless без слэша в конце", "PAPERLESS_URL не может содержать путь"]
+  must_not_include: []
+  notes: "Размещение под подпутём задаётся PAPERLESS_FORCE_SCRIPT_NAME; PAPERLESS_URL указывается без пути даже в этом случае, PAPERLESS_STATIC_URL при необходимости меняется со слэшем в конце."
+
+- id: holdout-009
+  category: config
+  role: engineer
+  question: "Партнёры присылают договоры в .docx и .xlsx. Как включить в paperless обработку офисных файлов?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#tika
+    - docs/configuration.md#PAPERLESS_TIKA_ENABLED
+    - docs/faq.md#what-file-types-does-paperless-ngx-support
+  must_include: ["PAPERLESS_TIKA_ENABLED", "серверы Tika и Gotenberg", "PAPERLESS_TIKA_GOTENBERG_ENDPOINT"]
+  must_not_include: []
+  notes: "Офисные форматы поддерживаются только через Tika и Gotenberg: поднять оба сервиса, указать их адреса и включить парсер; в Docker есть пример docker-compose.sqlite-tika.yml."
+
+- id: holdout-010
+  category: config
+  role: user
+  question: "Можно ли вместо надписи «Paperless-ngx» показывать в интерфейсе название нашей фирмы и её логотип?"
+  expected_behavior: answer
+  expected_sources:
+    - docs/configuration.md#PAPERLESS_APP_TITLE
+    - docs/configuration.md#PAPERLESS_APP_LOGO
+  must_include: ["PAPERLESS_APP_TITLE", "PAPERLESS_APP_LOGO", "логотип в каталоге /media/logo"]
+  must_not_include: []
+  notes: "Название меняет PAPERLESS_APP_TITLE, логотип — PAPERLESS_APP_LOGO (файл в /media/logo, в имени должно быть logo); логотип виден всем на странице входа."
+
+- id: holdout-011
+  category: out_of_scope
+  role: engineer
+  question: "Можно ли ограничить, сколько места на диске занимают документы каждого пользователя, например квотой 5 ГБ?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["PAPERLESS_USER_QUOTA", "PAPERLESS_STORAGE_QUOTA"]
+  notes: "Почти по теме: квот нет. Искал в docs и src: quota, storage limit, disk quota, disk usage, per user limit/space/storage — совпадений нет. Права пользователей (docs/usage.md#permissions) ограничивают доступ к объектам, но не объём."
+
+- id: holdout-012
+  category: out_of_scope
+  role: user
+  question: "переезжаю с эвернота, там тыщи заметок с вложениями. как их импортнуть в paperless одним махом?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Почти по теме: импорта из Evernote нет. Искал в docs и src: evernote, enex, onenote, import from — совпадений нет. document_importer принимает только экспорт самого Paperless (docs/administration.md#importer), раздел миграции описывает переход только с paperless, paperless-ng и образа LinuxServer."
+
+- id: holdout-013
+  category: out_of_scope
+  role: engineer
+  question: "Подписывает ли paperless тело webhook-запроса из воркфлоу HMAC-подписью, как X-Hub-Signature у GitHub, чтобы наш сервис мог проверить отправителя?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: ["X-Paperless-Signature", "PAPERLESS_WEBHOOK_SECRET"]
+  notes: "Почти по теме: подписи вебхуков нет. Искал в docs: webhook…sign/hmac/secret/verify — совпадений нет; в src hmac встречается только в подписи файла классификатора, signed_pickle для Celery и PBKDF2HMAC шифрования экспорта. Модель WorkflowActionWebhook (src/documents/models.py) хранит url, use_params, as_json, params, body, headers, include_document — секрета для подписи нет, src/documents/workflows/webhooks.py ничего не подписывает. Допустимо предложить статический заголовок из docs/usage.md#workflow-action-webhook, но как обходной путь, а не как HMAC."
+
+- id: holdout-014
+  category: out_of_scope
+  role: user
+  question: "можно в заметке к доку отметить коллегу через @ чтоб ему уведомление прилетело?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Почти по теме: упоминаний и уведомлений в заметках нет. Искал в docs: mention, notify, notification, notes — заметки упоминаются только в правах, поиске (notes.note, notes.user) и истории API. В src модель Note содержит note, created, document, user; механизма упоминаний нет."
+
+- id: holdout-015
+  category: out_of_scope
+  role: user
+  question: "Есть ли у Paperless-ngx сертификат ФСТЭК или подтверждённое соответствие 152-ФЗ? Нужно для документов госзаказчика."
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Почти по теме: о сертификации ничего нет. Искал в docs и src: fstec, certified, certification, compliance, gdpr, hipaa, 152-fz — совпадений по смыслу нет (certif — только SSL-сертификаты почты и баз данных и «certificates» как вид бумажных документов). FAQ про приватность ИИ-функций (docs/faq.md#does-paperless-ngx-use-ai-and-is-my-data-private) о сертификации не говорит."
+
+- id: holdout-016
+  category: out_of_scope
+  role: engineer
+  question: "Как настроить ежедневный pg_dump базы PostgreSQL по cron, чтобы хранились только последние 7 дампов?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Соседняя инфраструктура: резервное копирование PostgreSQL средствами СУБД и cron. Искал в docs: pg_dump, pg_dumpall, pg_basebackup, mysqldump — совпадений нет. docs/administration.md#backup говорит лишь, что базу PostgreSQL или MariaDB нужно бэкапить отдельно, и предлагает document_exporter; как настроить pg_dump, не описано."
+
+- id: holdout-017
+  category: out_of_scope
+  role: user
+  question: "серт let's encrypt на nginx перед paperless протух. как сделать чтоб certbot сам его продлевал?"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Соседняя инфраструктура: продление сертификата certbot для nginx. Искал в docs: certbot, letsencrypt, let's encrypt, acme.sh, tls certificate — совпадений нет (acme — только пример Acme Corp). Про reverse proxy документация отсылает к вики (docs/setup.md#additional-considerations)."
+
+- id: holdout-018
+  category: out_of_scope
+  role: user
+  question: "как отстирать пятно от кофе с белой рубашки, уже засохло"
+  expected_behavior: abstain
+  expected_sources: []
+  must_include: []
+  must_not_include: []
+  notes: "Совсем вне темы: бытовой вопрос, не связанный с Paperless."

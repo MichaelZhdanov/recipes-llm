@@ -1,0 +1,76 @@
+# Канарейки для проверки модели-судьи (groundedness).
+# statement — утверждение на русском, как в ответе ассистента; quote — дословный фрагмент
+# документации Paperless-ngx v3.4.2 (переносы строк исходного markdown заменены пробелами).
+# supported: false — утверждение тонко расходится с фрагментом; судья должен это поймать.
+
+- id: canary-001
+  statement: "Теги можно вкладывать друг в друга не глубже трёх уровней; при добавлении тега к документу его родительские теги добавляются автоматически."
+  quote: "Tags can have a 'parent' tag, creating a tree-like structure, to a maximum depth of 5. When a tag is added to a document, all of its parent tags are also added automatically and similarly, when a tag is removed from a document, all of its child tags are also removed."
+  supported: false
+  notes: "Другое число: максимальная глубина вложенности 5, а не 3. Вторая половина утверждения верна. docs/usage.md:117-121."
+
+- id: canary-002
+  statement: "По умолчанию Paperless проверяет подключённые почтовые ящики каждые 5 минут."
+  quote: "Paperless is set up to check your mails every 10 minutes."
+  supported: false
+  notes: "Другое значение по умолчанию: 10 минут, а не 5. docs/usage.md:279."
+
+- id: canary-003
+  statement: "Если в загружаемом файле найден штрихкод с номером ASN, который уже есть в системе, документ не будет загружен, а в лог запишется ошибка."
+  quote: "If no ASN barcodes are detected in the uploaded file, no ASN will be set. If a barcode with an existing ASN is detected, the document will not be consumed and an error logged."
+  supported: true
+  notes: "Точный пересказ второго предложения. docs/configuration.md:1701-1703 (PAPERLESS_CONSUMER_ENABLE_ASN_BARCODE)."
+
+- id: canary-004
+  statement: "Ошибка Permission denied в папке consume означает, что Paperless не может удалять оттуда файлы; задайте PAPERLESS_UID и PAPERLESS_GID равными id пользователя и группы на хосте."
+  quote: "This happens when paperless does not have permission to delete files inside the consumption directory. Ensure that `USERMAP_UID` and `USERMAP_GID` are set to the user id and group id you use on the host operating system, if these are different from `1000`."
+  supported: false
+  notes: "Другие имена параметров: USERMAP_UID и USERMAP_GID, а не PAPERLESS_UID и PAPERLESS_GID. Причина ошибки пересказана верно. docs/troubleshooting.md:144-147."
+
+- id: canary-005
+  statement: "Изменения в документах алгоритм Auto учитывает не сразу: Paperless раз в сутки проверяет, были ли изменения, и переобучает нейросеть."
+  quote: "Changes to your documents are not immediately reflected by the matching algorithm. The neural network needs to be _trained_ on your documents after changes. Paperless periodically (default: once each hour) checks for changes and does this automatically for you."
+  supported: false
+  notes: "Другая частота по умолчанию: раз в час, а не раз в сутки. docs/advanced_usage.md:72-75."
+
+- id: canary-006
+  statement: "Алгоритм Auto учится только на документах без входящих (inbox) тегов, чтобы нейросеть опиралась на уже правильно размеченные документы."
+  quote: "The Auto matching algorithm only takes documents into account which are NOT placed in your inbox (i.e. have any inbox tags assigned to them). This ensures that the neural network only learns from documents which you have correctly tagged before."
+  supported: true
+  notes: "Точный пересказ обоих предложений. docs/advanced_usage.md:76-79."
+
+- id: canary-007
+  statement: "Действие «Move to Trash» выполняется в той позиции, где стоит в списке действий воркфлоу, поэтому действия после него уже не применяются."
+  quote: 'The "Move to Trash" action will always be executed at the end of the workflow run, regardless of its position in the action list. After a "Move to Trash" action is executed no other workflow will be executed on the document.'
+  supported: false
+  notes: "Обратный смысл: действие всегда выполняется в конце прогона независимо от позиции в списке; после него не запускаются другие воркфлоу, а не оставшиеся действия этого же. docs/usage.md:625-627."
+
+- id: canary-008
+  statement: "Если включить отклонение дубликатов, файл с уже существующим хешем всё равно загружается, но сразу перемещается в корзину Paperless."
+  quote: "When enabled, Paperless will check if a document with the same hash already exists in the system and delete the duplicate file from the consumption directory without consuming it."
+  supported: false
+  notes: "Лишнее действие: дубликат не загружается и не попадает в корзину, файл просто удаляется из папки consume. docs/configuration.md:1382-1383 (PAPERLESS_CONSUMER_DELETE_DUPLICATES)."
+
+- id: canary-009
+  statement: "document_importer нужно запускать на полностью пустой установке Paperless-ngx; при импорте только данных пустой должна быть лишь база данных."
+  quote: "The importer should be run against a completely empty installation (database and directories) of Paperless-ngx. If using a data only import, only the database must be empty."
+  supported: true
+  notes: "Точный пересказ. docs/administration.md:426-427."
+
+- id: canary-010
+  statement: "document_exporter включает в экспорт API-токены пользователей, поэтому после импорта их не нужно создавать заново."
+  quote: "The exporter does not include API tokens and they will need to be re-generated after importing."
+  supported: false
+  notes: "Обратный смысл: токены не экспортируются и после импорта их нужно создать заново. docs/administration.md:22."
+
+- id: canary-011
+  statement: "В Docker после смены языка поиска нужно вручную выполнить document_index reindex, иначе поисковый индекс не перестроится."
+  quote: "On every startup, the container runs `document_index reindex --if-needed` automatically. Schema changes, language changes, and missing indexes are all detected and rebuilt before the webserver starts. No manual step is required."
+  supported: false
+  notes: "Лишний шаг: в Docker индекс перестраивается сам при запуске контейнера, ручной reindex нужен только на bare metal. docs/administration.md:537-540."
+
+- id: canary-012
+  statement: "При окончательном удалении документа в каталог для очищенной корзины переносится только оригинальный файл, а архивная версия и данные в базе удаляются безвозвратно."
+  quote: "Note that the empty trash directory only stores the original file, the archive file and all database information is permanently removed once a document is fully deleted."
+  supported: true
+  notes: "Точный пересказ. docs/usage.md:826 (каталог задаёт PAPERLESS_EMPTY_TRASH_DIR)."

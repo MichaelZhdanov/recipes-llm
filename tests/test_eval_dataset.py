@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evals.dataset import Case, load_canaries, load_cases
+from evals.dataset import HOLDOUT_DIR, Case, load_canaries, load_cases
 
 GOOD = """\
 - id: howto-001
@@ -155,3 +155,10 @@ def test_repeated_canary_ids_are_an_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="canary-001"):
         load_canaries(file)
+
+
+def test_dataset_in_repository_follows_the_schema() -> None:
+    """Наборы в evals/dataset/ проходят схему: ошибка разметки видна в make test, а не на прогоне."""
+    assert load_cases()
+    assert load_cases(HOLDOUT_DIR)
+    assert load_canaries()
