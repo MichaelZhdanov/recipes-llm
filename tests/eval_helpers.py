@@ -1,8 +1,14 @@
-"""Общие заготовки для тестов evals: кейс, результат поиска, паспорт индекса."""
+"""Общие заготовки для тестов evals: кейс, результат поиска, паспорт индекса, ответ."""
 
+import json
 from typing import Literal
 
-from assistant.retrieval.store import IndexManifest
+from assistant.generation.answer import assemble
+from assistant.generation.citations import SourceText
+from assistant.generation.gigachat import Completion, Usage
+from assistant.indexing.chunks import Chunk
+from assistant.retrieval.store import Hit, IndexManifest
+from evals.answer_metrics import AnswerRun
 from evals.dataset import Case
 from evals.retrieval_metrics import CaseResult, RetrievalRun
 
@@ -43,3 +49,57 @@ def result(
             for rank in ranks
         ],
     )
+
+
+# --- Ответ ассистента: один источник, три утверждения, второе с выдуманной цитатой ---
+
+TEXT = """\
+## Mail
+
+Paperless can fetch attachments from IMAP mail accounts.
+It checks the mail every ten minutes by default."""
+
+CHUNK = Chunk(
+    kind="doc",
+    path="docs/usage.md",
+    start_line=10,
+    end_line=13,
+    title="Mail",
+    breadcrumb="Usage > Mail",
+    source_id="docs/usage.md#mail",
+    url="https://x/blob/v3.4.2/docs/usage.md?plain=1#L10-L13",
+    site_url=None,
+    ref="v3.4.2",
+    text=TEXT,
+)
+SOURCES = [SourceText(1, CHUNK, TEXT)]
+
+
+def answered(
+    statements: list[tuple[str, str]], finish_reason: str = "stop"
+) -> AnswerRun:
+    content = json.dumps(
+        {
+            "status": "answer",
+            "statements": [
+                {"text": text, "citations": [{"source": 1, "quote": quote}]}
+                for text, quote in statements
+            ],
+        }
+    )
+    completion = Completion(
+        content, finish_reason, "GigaChat-2-Max:1", Usage(100, 20, 0, 120)
+    )
+    result = assemble(
+        [Hit(CHUNK, 0.6)], SOURCES, completion, prompt_version="answer_v1", ref="v3.4.2"
+    )
+    return AnswerRun.from_result(result)
+
+
+RUN = answered(
+    [
+        ("Почта забирается из IMAP.", "fetch attachments from IMAP mail accounts"),
+        ("Выдумка.", "this quote is not in the source"),
+        ("Проверка раз в десять минут.", "checks the mail every ten minutes"),
+    ]
+)

@@ -2,12 +2,10 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from eval_helpers import case
+from eval_helpers import CHUNK, RUN, SOURCES, case
 
 from assistant.generation.answer import assemble
-from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
-from assistant.indexing.chunks import Chunk
 from assistant.retrieval.store import Hit
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary
@@ -18,63 +16,13 @@ from evals.judge import (
     Verdict,
     canary_scores,
     claims_of,
+    clarity,
     groundedness,
     judge_message,
     judge_results,
     must_include_judged,
 )
 from evals.run import answer_records, load_answer_cases
-
-TEXT = """\
-## Mail
-
-Paperless can fetch attachments from IMAP mail accounts.
-It checks the mail every ten minutes by default."""
-
-CHUNK = Chunk(
-    kind="doc",
-    path="docs/usage.md",
-    start_line=10,
-    end_line=13,
-    title="Mail",
-    breadcrumb="Usage > Mail",
-    source_id="docs/usage.md#mail",
-    url="https://x/blob/v3.4.2/docs/usage.md?plain=1#L10-L13",
-    site_url=None,
-    ref="v3.4.2",
-    text=TEXT,
-)
-SOURCES = [SourceText(1, CHUNK, TEXT)]
-
-
-def answered(
-    statements: list[tuple[str, str]], finish_reason: str = "stop"
-) -> AnswerRun:
-    content = json.dumps(
-        {
-            "status": "answer",
-            "statements": [
-                {"text": text, "citations": [{"source": 1, "quote": quote}]}
-                for text, quote in statements
-            ],
-        }
-    )
-    completion = Completion(
-        content, finish_reason, "GigaChat-2-Max:1", Usage(100, 20, 0, 120)
-    )
-    result = assemble(
-        [Hit(CHUNK, 0.6)], SOURCES, completion, prompt_version="answer_v1", ref="v3.4.2"
-    )
-    return AnswerRun.from_result(result)
-
-
-RUN = answered(
-    [
-        ("Почта забирается из IMAP.", "fetch attachments from IMAP mail accounts"),
-        ("Выдумка.", "this quote is not in the source"),
-        ("Проверка раз в десять минут.", "checks the mail every ten minutes"),
-    ]
-)
 
 
 class FakeJudgeLlm:
@@ -105,7 +53,7 @@ def reply(statements: list[bool], facts: list[bool] | None = None) -> str:
     return json.dumps(
         {
             "statements": [
-                {"number": n, "comment": "…", "supported": ok}
+                {"number": n, "comment": "…", "supported": ok, "clear": ok}
                 for n, ok in enumerate(statements, start=1)
             ],
             "facts": [
@@ -142,7 +90,14 @@ def test_verdicts_are_matched_by_number_and_missing_is_none() -> None:
         [
             json.dumps(
                 {
-                    "statements": [{"number": 2, "comment": "нет", "supported": False}],
+                    "statements": [
+                        {
+                            "number": 2,
+                            "comment": "нет",
+                            "supported": False,
+                            "clear": True,
+                        }
+                    ],
                     "facts": [],
                 }
             )
@@ -152,6 +107,7 @@ def test_verdicts_are_matched_by_number_and_missing_is_none() -> None:
     verdict = Judge(llm).judge("?", claims_of(RUN), [])
 
     assert verdict.supported == [None, False]
+    assert verdict.clear == [None, True]
     assert llm.calls[0][0]["content"].startswith("Ты проверяешь ответы ассистента")
 
 
@@ -160,7 +116,7 @@ def test_unparsed_judge_reply_is_counted_and_gives_no_verdict() -> None:
 
     verdict = judge.judge("?", [Claim("a", ["b"])], ["факт"])
 
-    assert verdict == Verdict([None], [None], [])
+    assert verdict == Verdict([None], [None], [], [None])
     assert judge.failures == 1
 
 
@@ -186,8 +142,7 @@ def test_refusal_means_facts_absent_without_calling_judge() -> None:
 
     verdicts = judge_results([AnswerCase(howto, [RUN, refused])], Judge(llm))
 
-    assert verdicts[("howto-001", 0)].present == [True]
-    assert verdicts[("howto-001", 1)] == Verdict([], [False], [])
+    assert verdicts[("howto-001", 1)] == Verdict([], [False], [], [])
     assert len(llm.calls) == 1
     assert groundedness(verdicts) == Rate(2, 2)
     assert must_include_judged(verdicts) == Rate(1, 2)
@@ -218,3 +173,35 @@ def test_rescore_rebuilds_answers_from_raw_data() -> None:
     assert rebuilt.runs[0].answer == RUN.answer
     assert rebuilt.runs[0].checked == RUN.checked
     assert rebuilt.runs[0].cited_source_ids() == {"docs/usage.md#mail"}
+
+
+def test_clarity_is_judged_separately_from_support() -> None:
+    llm = FakeJudgeLlm(
+        [
+            json.dumps(
+                {
+                    "statements": [
+                        {
+                            "number": 1,
+                            "comment": "ок",
+                            "supported": True,
+                            "clear": True,
+                        },
+                        {
+                            "number": 2,
+                            "comment": "обрывок разметки",
+                            "supported": True,
+                            "clear": False,
+                        },
+                    ],
+                    "facts": [],
+                }
+            )
+        ]
+    )
+
+    verdict = Judge(llm).judge("?", claims_of(RUN), [])
+
+    assert verdict.supported == [True, True]
+    assert verdict.clear == [True, False]
+    assert clarity({("howto-001", 0): verdict}) == Rate(1, 2)

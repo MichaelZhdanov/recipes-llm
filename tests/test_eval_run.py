@@ -1,11 +1,12 @@
 import json
+from pathlib import Path
 
 from eval_helpers import case, result
 
 from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement
 from evals.answer_metrics import AnswerCase, AnswerRun
-from evals.run import answer_records, raw_records
+from evals.run import answer_records, raw_records, rescore_label
 
 
 def test_raw_data_has_one_record_per_case_and_run() -> None:
@@ -59,3 +60,11 @@ def test_answer_records_are_json_with_model_output_and_checks() -> None:
     data = json.loads(json.dumps(records, ensure_ascii=False))
     assert data[0]["checked"][0]["citations"][0]["error"] == "фрагмента нет в источнике"
     assert data[0]["content"] == '{"status": "answer"}'
+
+
+def test_rescore_report_name_has_one_date() -> None:
+    assert (
+        rescore_label(Path("raw/2026-11-04-gigachat-2-pro.json"))
+        == "gigachat-2-pro-rescore"
+    )
+    assert rescore_label(Path("raw/2026-11-04.json")) == "rescore"

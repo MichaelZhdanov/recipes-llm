@@ -26,6 +26,7 @@
 import argparse
 import dataclasses
 import json
+import re
 import statistics
 import sys
 from collections import Counter
@@ -327,6 +328,12 @@ def _answer_stage(settings: Settings, runs: int, label: str | None, judge: bool)
     return _finish(results, meta, judging, label)
 
 
+def rescore_label(raw_path: Path) -> str:
+    """2026-11-04-gigachat-2-pro.json → gigachat-2-pro-rescore: дату добавит report_path."""
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2}-?", "", raw_path.stem)
+    return f"{stem}-rescore" if stem else "rescore"
+
+
 def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool) -> int:
     """Метрики заново по сохранённым ответам модели: без генерации, ссылки — текущим кодом."""
     data = json.loads(raw_path.read_text(encoding="utf-8"))
@@ -337,7 +344,7 @@ def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool)
     if judge:
         with make_http_client() as llm_http:
             judging = _judge(settings, llm_http, results)
-    return _finish(results, meta, judging, label or f"{raw_path.stem}-rescore")
+    return _finish(results, meta, judging, label or rescore_label(raw_path))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

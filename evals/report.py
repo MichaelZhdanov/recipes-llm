@@ -40,6 +40,7 @@ from evals.answer_metrics import (
 from evals.judge import (
     Judging,
     canary_scores,
+    clarity,
     groundedness,
     must_include_judged,
     unjudged,
@@ -519,6 +520,7 @@ def _judge_rows(judging: Judging | None) -> list[str]:
     return [
         f"| groundedness (судья) | {grounded} | ≥ {ANSWER_THRESHOLDS['groundedness']:.2f} "
         f"| {_status(passed)} |",
+        f"| утверждения грамотны и понятны (судья) | {clarity(judging.verdicts)} | показать | |",
         f"| must_include в howto (судья) | {must_include_judged(judging.verdicts)} | показать | |",
         f"| канарейки: судья поймал неверные | {caught} | все | |",
         f"| канарейки: судья принял верные | {accepted} | все | |",
@@ -553,8 +555,27 @@ def _judge_sections(
         for c, mark in zip(judging.canaries, judging.canary_marks, strict=True)
         if mark is not c.supported
     ]
+    unclear = [
+        f"- {r.case.id}, прогон {number + 1}: «{text}» — {comment}"
+        for r in results
+        for number, run in enumerate(r.runs)
+        if (verdict := judging.verdicts.get((r.case.id, number))) is not None
+        for text, mark, comment in zip(
+            [s.text for s in run.checked if s.kept],
+            verdict.clear,
+            verdict.comments or [""] * len(verdict.clear),
+            strict=False,
+        )
+        if mark is False
+    ]
     lines = ["", f"## Судья: неподтверждённые утверждения ({len(unsupported)})", ""]
     lines += unsupported or ["Нет."]
+    lines += [
+        "",
+        f"## Судья: неграмотные или непонятные утверждения ({len(unclear)})",
+        "",
+    ]
+    lines += unclear or ["Нет."]
     lines += ["", f"## Судья: ошибки на канарейках ({len(missed)})", ""]
     lines += missed or ["Нет."]
     return lines

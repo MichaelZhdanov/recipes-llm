@@ -3,9 +3,11 @@
 Код проверяет, что цитата есть в источнике (`citations.py`). Но он не может
 проверить смысл: подтверждает ли английский фрагмент русское утверждение.
 Это делает судья — другая, более сильная модель (GigaChat-3-Ultra) по
-рубрике `evals/prompts/judge_v1.md`:
+рубрике `evals/prompts/judge_v2.md`:
 - на каждое утверждение итогового ответа: подтверждают ли его процитированные
   строки источника (groundedness, порог 0.85);
+- на каждое утверждение: грамотно ли и понятно ли оно написано (показывается
+  без порога, смысл здесь не оценивается);
 - на каждый факт must_include у howto: есть ли он в ответе. Факты там
   записаны по-русски своими словами, подстрокой их не проверить.
 
@@ -27,7 +29,8 @@ from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary
 
 JUDGE_MODEL = "GigaChat-3-Ultra"
-JUDGE_PROMPT = "judge_v1"
+# v1 — только groundedness и факты; v2 добавила грамотность (clear).
+JUDGE_PROMPT = "judge_v2"
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_TOKENS = 2000
 
@@ -42,8 +45,9 @@ JUDGE_SCHEMA: dict[str, object] = {
                     "number": {"type": "integer"},
                     "comment": {"type": "string"},
                     "supported": {"type": "boolean"},
+                    "clear": {"type": "boolean"},
                 },
-                "required": ["number", "comment", "supported"],
+                "required": ["number", "comment", "supported", "clear"],
             },
         },
         "facts": {
@@ -67,6 +71,7 @@ class _StatementVerdict(BaseModel):
     number: int
     comment: str
     supported: bool
+    clear: bool
 
 
 class _FactVerdict(BaseModel):
@@ -95,6 +100,8 @@ class Verdict:
     supported: list[bool | None]
     present: list[bool | None]
     comments: list[str]
+    # Грамотно и понятно ли написано каждое утверждение.
+    clear: list[bool | None]
 
 
 def quoted_lines(source: SourceText, start: int, end: int) -> str:
@@ -162,7 +169,7 @@ class Judge:
         self, question: str, claims: Sequence[Claim], facts: Sequence[str]
     ) -> Verdict:
         if not claims and not facts:
-            return Verdict([], [], [])
+            return Verdict([], [], [], [])
         completion = self.llm.chat(
             [
                 {"role": "system", "content": self._prompt},
@@ -181,13 +188,19 @@ class Judge:
             parsed = _JudgeAnswer.model_validate_json(completion.content)
         except ValidationError:
             self.failures += 1
-            return Verdict([None] * len(claims), [None] * len(facts), [])
-        supported = {v.number: v.supported for v in parsed.statements}
+            return Verdict(
+                [None] * len(claims), [None] * len(facts), [], [None] * len(claims)
+            )
+        statements = {v.number: v for v in parsed.statements}
         present = {v.number: v.present for v in parsed.facts}
+        numbers = range(1, len(claims) + 1)
         return Verdict(
-            supported=[supported.get(n) for n in range(1, len(claims) + 1)],
+            supported=[
+                v.supported if (v := statements.get(n)) else None for n in numbers
+            ],
             present=[present.get(n) for n in range(1, len(facts) + 1)],
-            comments=[v.comment for v in parsed.statements],
+            comments=[v.comment if (v := statements.get(n)) else "" for n in numbers],
+            clear=[v.clear if (v := statements.get(n)) else None for n in numbers],
         )
 
 
@@ -212,7 +225,7 @@ def judge_results(results: Sequence[AnswerCase], judge: Judge) -> Verdicts:
                 verdict = judge.judge(r.case.question, claims, facts)
             else:
                 # Ответа нет — значит, и фактов в нём нет; судья не нужен.
-                verdict = Verdict([], [False] * len(facts), [])
+                verdict = Verdict([], [False] * len(facts), [], [])
             verdicts[(r.case.id, number)] = verdict
     return verdicts
 
@@ -258,6 +271,12 @@ def judge_canaries(canaries: Sequence[Canary], judge: Judge) -> list[bool | None
 
 def groundedness(verdicts: Verdicts) -> Rate:
     marks = [m for v in verdicts.values() for m in v.supported if m is not None]
+    return Rate(sum(marks), len(marks))
+
+
+def clarity(verdicts: Verdicts) -> Rate:
+    """Доля утверждений, написанных грамотно и понятно (по оценке судьи)."""
+    marks = [m for v in verdicts.values() for m in v.clear if m is not None]
     return Rate(sum(marks), len(marks))
 
 
