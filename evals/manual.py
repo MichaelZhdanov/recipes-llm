@@ -129,7 +129,7 @@ def render(result: Agreement, *, marks_file: str, raw_file: str) -> str:
         "# Ручная проверка судьи",
         "",
         f"Разметка автора — `{marks_file}`, ответы и вердикты судьи — `{raw_file}`.",
-        "Рубрика та же, что у судьи (`evals/prompts/judge_v1.md`), разметка слепая.",
+        f"Рубрика та же, что у судьи (`evals/prompts/{JUDGE_PROMPT}.md`, пункт supported), разметка слепая.",
         "",
         "| Метрика | Значение |",
         "|---|---|",
