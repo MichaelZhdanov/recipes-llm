@@ -60,6 +60,11 @@ DETERMINISTIC_TEMPERATURE = 1e-4
 # Обновлять токен за минуту до конца срока: запрос не должен уйти с истёкшим.
 TOKEN_MARGIN = 60.0
 TIMEOUT = 120.0
+# На Freemium генерация идёт в один поток, и параллельный запрос (второй
+# процесс, судья рядом с ассистентом) получает 429. Ждём дольше, чем у других
+# API: паузы 1, 2, 4, 8, 16 с — около полуминуты, прежде чем сдаться.
+CHAT_ATTEMPTS = 6
+CHAT_MAX_DELAY = 30.0
 
 KEY_HELP = (
     "получите ключ авторизации в личном кабинете developers.sber.ru "
@@ -238,6 +243,8 @@ class GigaChat:
         }
         return request_with_retries(
             lambda: self._client.post(self._chat_url, json=body, headers=headers),
+            attempts=CHAT_ATTEMPTS,
+            max_delay=CHAT_MAX_DELAY,
             sleep=self._sleep,
         )
 

@@ -266,3 +266,23 @@ def test_settings_wire_the_client() -> None:
     assert llm_model(Settings(llm_model="GigaChat-2-Max")) == "GigaChat-2-Max"
     with httpx2.Client() as client:
         assert isinstance(make_llm(settings, client), GigaChat)
+
+
+def test_busy_single_stream_is_waited_out() -> None:
+    """429 на Freemium — второй запрос в один поток: ждём дольше, чем у других API."""
+    fake = FakeGigaChat(chat_statuses=[429, 429, 429, 429, 200])
+    sleeps: list[float] = []
+    llm = GigaChat(
+        api_key=SecretStr(KEY),
+        scope="GIGACHAT_API_PERS",
+        api_url=GIGACHAT_API_URL,
+        oauth_url=GIGACHAT_OAUTH_URL,
+        client=httpx2.Client(transport=httpx2.MockTransport(fake)),
+        clock=lambda: fake.now,
+        sleep=sleeps.append,
+    )
+
+    completion = chat(llm)
+
+    assert completion.finish_reason == "stop"
+    assert sleeps == [1.0, 2.0, 4.0, 8.0]
