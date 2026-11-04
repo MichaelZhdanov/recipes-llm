@@ -118,6 +118,10 @@ class LlmStats:
         self.precached_prompt_tokens += usage.precached_prompt_tokens
         self.total_tokens += usage.total_tokens
 
+    def as_dict(self) -> dict[str, object]:
+        """Для JSON. Не dataclasses.asdict: тот превращает Counter в счётчик пар (ключ, число)."""
+        return {**vars(self), "masked": dict(self.masked)}
+
 
 class ChatModel(Protocol):
     """Что нужно ассистенту от LLM. В тестах вместо GigaChat — заглушка."""

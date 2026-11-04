@@ -3,16 +3,21 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from eval_helpers import case, result
+from eval_helpers import MANIFEST, case, result
 
 from assistant.config import Settings
 from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement
+from assistant.generation.gigachat import LlmStats
+from assistant.retrieval.embeddings import EmbeddingStats
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import Case
+from evals.report import RunMeta
 from evals.run import (
     _categories,
     answer_records,
+    load_meta,
+    meta_record,
     pick_cases,
     raw_records,
     rescore_label,
@@ -151,3 +156,24 @@ def test_sample_larger_than_set_takes_all() -> None:
 
 def test_categories_flag_is_a_comma_list() -> None:
     assert _categories("error, howto,") == frozenset({"error", "howto"})
+
+
+def test_meta_with_masked_pii_survives_json() -> None:
+    """dataclasses.asdict превратил бы Counter в счётчик пар, и json.dumps упал бы."""
+    meta = RunMeta(
+        manifest=MANIFEST,
+        revision="abc1234",
+        provider="cloud.ru",
+        query_template=None,
+        embedding_stats=EmbeddingStats(requests=1, masked=Counter({"phone": 2})),
+        llm_stats=LlmStats(requests=3, masked=Counter({"email": 1})),
+        llm_model="GigaChat-2-Pro",
+        temperature=1e-4,
+        prompt_version="answer_v1",
+    )
+
+    data = json.loads(json.dumps(meta_record(meta)))
+    loaded = load_meta(data, revision="def", rescored_from="raw.json")
+
+    assert loaded.llm_stats.masked == Counter({"email": 1})
+    assert loaded.embedding_stats.masked == Counter({"phone": 2})

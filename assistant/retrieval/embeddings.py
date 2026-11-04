@@ -56,6 +56,10 @@ class EmbeddingStats:
     tokens: int = 0
     masked: Counter[str] = field(default_factory=Counter)
 
+    def as_dict(self) -> dict[str, object]:
+        """Для JSON. Не dataclasses.asdict: тот превращает Counter в счётчик пар (ключ, число)."""
+        return {**vars(self), "masked": dict(self.masked)}
+
 
 @dataclass(frozen=True)
 class Provider:
