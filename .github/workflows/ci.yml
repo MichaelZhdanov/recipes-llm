@@ -32,8 +32,16 @@ jobs:
       - name: Линтер и типы
         run: make lint
 
+      # Тест сохранённых ответов модели (гейт точности ссылок) восстанавливает
+      # тексты источников из исходников Paperless на теге: ключа GigaChat в CI нет.
+      - name: Исходники Paperless
+        run: uv run python -m assistant.cli sources
+
       - name: Тесты
         run: make test
+        env:
+          # Без исходников тест сохранённых ответов падает, а не пропускается.
+          REQUIRE_PAPERLESS_SOURCES: "1"
 
       - name: Проверка docker-compose.yml
         run: make .env && docker compose config -q
