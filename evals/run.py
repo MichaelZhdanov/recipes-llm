@@ -55,7 +55,7 @@ from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from evals.answer_metrics import AnswerCase, AnswerRun
-from evals.dataset import HOLDOUT_DIR, Case, load_canaries, load_cases
+from evals.dataset import DATASET_DIR, HOLDOUT_DIR, Case, load_canaries, load_cases
 from evals.judge import Judge, Judging, run_judge
 from evals.report import (
     THRESHOLDS,
@@ -139,6 +139,7 @@ def meta_record(meta: RunMeta) -> dict[str, object]:
         "llm_model": meta.llm_model,
         "temperature": meta.temperature,
         "prompt_version": meta.prompt_version,
+        "split": meta.split,
     }
 
 
@@ -159,6 +160,7 @@ def load_meta(data: dict[str, Any], *, revision: str, rescored_from: str) -> Run
         llm_model=data["llm_model"],
         temperature=data["temperature"],
         prompt_version=data["prompt_version"],
+        split=data.get("split", "dev"),
         rescored_from=f"{rescored_from}, прогон на {data['revision']}",
     )
 
@@ -299,8 +301,11 @@ def _finish(
     return 1 if failed else 0
 
 
-def _answer_stage(settings: Settings, runs: int, label: str | None, judge: bool) -> int:
-    cases = [c for c in load_cases() if c.category in ANSWER_CATEGORIES]
+def _answer_stage(
+    settings: Settings, runs: int, label: str | None, judge: bool, split: str
+) -> int:
+    directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
+    cases = [c for c in load_cases(directory) if c.category in ANSWER_CATEGORIES]
     model = llm_model(settings)
     with httpx2.Client(timeout=30) as embeddings_http, make_http_client() as llm_http:
         embedder = make_embedder(settings, embeddings_http)
@@ -324,6 +329,7 @@ def _answer_stage(settings: Settings, runs: int, label: str | None, judge: bool)
         llm_model=model,
         temperature=DETERMINISTIC_TEMPERATURE,
         prompt_version=answerer.prompt_version,
+        split=split,
     )
     return _finish(results, meta, judging, label)
 
@@ -350,6 +356,12 @@ def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool)
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run", description=__doc__)
     parser.add_argument("--runs", type=int, default=RUNS)
+    parser.add_argument(
+        "--split",
+        choices=("dev", "holdout"),
+        default="dev",
+        help="holdout — отложенная выборка, её прогоняют один раз в конце",
+    )
     parser.add_argument("--label", help="суффикс имени отчёта, например имя модели")
     parser.add_argument(
         "--stage",
@@ -375,7 +387,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _rescore(settings, args.rescore, args.label, not args.no_judge)
     if args.stage == "retrieval":
         return _retrieval_stage(settings, args.runs, args.label)
-    return _answer_stage(settings, args.runs, args.label, not args.no_judge)
+    label = args.label or ("holdout" if args.split == "holdout" else None)
+    return _answer_stage(settings, args.runs, label, not args.no_judge, args.split)
 
 
 if __name__ == "__main__":

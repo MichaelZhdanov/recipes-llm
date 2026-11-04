@@ -260,6 +260,8 @@ class RunMeta:
     prompt_version: str
     # Пересчёт по сохранённому прогону: откуда взяты ответы модели.
     rescored_from: str | None = None
+    # dev — основной набор, holdout — отложенная выборка.
+    split: str = "dev"
 
 
 def _spread(values: Sequence[float]) -> str:
@@ -281,6 +283,19 @@ def _p(values: Sequence[float]) -> str:
 
 def _outcome_cell(run: AnswerRun) -> str:
     return "ответ" if run.answer.reason is None else run.answer.reason
+
+
+def _dataset_lines(split: str) -> list[str]:
+    if split == "holdout":
+        return [
+            "Этап 2: ответы со ссылками на **отложенной выборке**",
+            "`evals/dataset/holdout/holdout.yaml`. Её прогоняют один раз, когда модель,",
+            "промпт и проверка уже выбраны на dev; кейсы писал независимый субагент.",
+        ]
+    return [
+        "Этап 2: ответы со ссылками. Наборы: `evals/dataset/howto_config.yaml` и",
+        "`out_of_scope.yaml`, их писали независимые субагенты (`evals/dataset/README.md`).",
+    ]
 
 
 def render_answer_report(
@@ -307,8 +322,7 @@ def render_answer_report(
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
         "",
-        "Этап 2: ответы со ссылками. Наборы: `evals/dataset/howto_config.yaml` и",
-        "`out_of_scope.yaml`, их писали независимые субагенты (`evals/dataset/README.md`).",
+        *_dataset_lines(meta.split),
         "",
         "| Параметр | Значение |",
         "|---|---|",

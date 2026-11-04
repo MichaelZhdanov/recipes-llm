@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import date
 from typing import Literal
 
@@ -293,3 +294,14 @@ def test_report_shows_broken_answers_with_model_output() -> None:
 
     assert "## Поломки: format_error, blacklist, length (1)" in report
     assert "- howto-001: format_error, finish_reason=stop, 2 символов: «{}»" in report
+
+
+def test_holdout_report_says_so() -> None:
+    results = [AnswerCase(case("holdout-001"), [run(None)])]
+    holdout = dataclasses.replace(meta(LlmStats()), split="holdout")
+
+    report = render_answer_report(
+        results, meta=holdout, judging=None, today=date(2026, 11, 4)
+    )
+
+    assert "**отложенной выборке**" in report
