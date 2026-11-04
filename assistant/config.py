@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     llm_provider: LlmProvider = "anthropic"
     llm_model: str = ""
     llm_api_key: SecretStr = SecretStr("")
-    embedding_model: str = ""
+    # Эмбеддинги Voyage AI; ключ создаётся в MongoDB Atlas → AI Model APIs.
+    embedding_model: str = "voyage-4"
+    voyage_api_key: SecretStr = SecretStr("")
+    voyage_api_url: str = "https://ai.mongodb.com/v1"
     qdrant_url: str = "http://qdrant:6333"
     paperless_source_path: Path = Path("data/paperless-src")
     paperless_ref: str = "v3.4.2"
