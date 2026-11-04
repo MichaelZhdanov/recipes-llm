@@ -1,4 +1,4 @@
-"""Командная строка: `python -m assistant.cli index | sources | ask "вопрос" | search "вопрос"`.
+"""Командная строка: `python -m assistant.cli index [--if-needed] | sources | ask "вопрос" | search "вопрос"`.
 
 Запускается на хосте через `uv run --env-file .env` (см. Makefile). Ход
 работы пишется в stderr, результат — в stdout.
@@ -25,6 +25,7 @@ from assistant.retrieval.store import (
     IndexMismatchError,
     IndexMissingError,
     VectorStore,
+    mismatch,
 )
 
 # Ошибки, о которых пользователю достаточно одной строки без трассировки.
@@ -41,11 +42,31 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def _index(settings: Settings) -> int:
+def rebuild_reason(store: VectorStore, *, ref: str, model: str) -> str | None:
+    """Зачем строить индекс заново, или None, если он уже подходит к настройкам."""
+    try:
+        manifest = store.manifest()
+    except IndexMissingError as error:
+        return str(error)
+    return mismatch(manifest, ref=ref, model=model)
+
+
+def _index(settings: Settings, if_needed: bool = False) -> int:
     with httpx2.Client(timeout=60) as http:
         # Эмбеддер первым: без ключа ошибка сразу, ещё до сетевых вызовов.
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
+        if if_needed:
+            # Для деплоя и таймера: полная пересборка стоит ≈27 ₽, без нужды её не делаем.
+            reason = rebuild_reason(
+                store, ref=settings.paperless_ref, model=embedder.model
+            )
+            if reason is None:
+                print(
+                    f"индекс для {settings.paperless_ref} уже построен, пересборка не нужна"
+                )
+                return 0
+            _log(f"строю индекс: {reason}")
         report = build_index(
             settings, http=http, store=store, embedder=embedder, log=_log
         )
@@ -131,7 +152,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python -m assistant.cli", description=__doc__
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
+    index = commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
+    index.add_argument(
+        "--if-needed",
+        action="store_true",
+        help="только если индекса нет или он для другого тега или модели",
+    )
     commands.add_parser(
         "sources", help="только скачать исходники PAPERLESS_REF, без индекса"
     )
@@ -149,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = Settings()
     try:
         if args.command == "index":
-            return _index(settings)
+            return _index(settings, args.if_needed)
         if args.command == "sources":
             return _sources(settings)
         if args.command == "ask":

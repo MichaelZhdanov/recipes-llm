@@ -20,6 +20,7 @@ from assistant.retrieval.store import (
     IndexManifest,
     IndexMismatchError,
     VectorStore,
+    mismatch,
 )
 
 SEARCH_POOL = 20
@@ -42,11 +43,8 @@ class Retriever:
         self, store: VectorStore, embedder: Embedder, *, ref: str, exact: bool = True
     ) -> None:
         self.manifest: IndexManifest = store.manifest()
-        if self.manifest.ref != ref or self.manifest.embedding_model != embedder.model:
-            raise IndexMismatchError(
-                f"индекс построен для {self.manifest.ref} и модели {self.manifest.embedding_model}, "
-                f"а в настройках {ref} и {embedder.model}: выполните make index"
-            )
+        if reason := mismatch(self.manifest, ref=ref, model=embedder.model):
+            raise IndexMismatchError(f"{reason}: выполните make index")
         self._store = store
         self._embedder = embedder
         # exact=False — только векторный поиск: для замера вклада точного.

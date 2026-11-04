@@ -41,6 +41,16 @@ class IndexManifest(BaseModel):
     messages: dict[str, int] = {}
 
 
+def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:
+    """Почему индекс не подходит к настройкам, или None, если подходит."""
+    if manifest.ref == ref and manifest.embedding_model == model:
+        return None
+    return (
+        f"индекс построен для {manifest.ref} и модели {manifest.embedding_model}, "
+        f"а в настройках {ref} и {model}"
+    )
+
+
 @dataclass(frozen=True)
 class Hit:
     chunk: Chunk

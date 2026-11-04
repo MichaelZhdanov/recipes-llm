@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index sources ask search eval test lint format
+.PHONY: help up down index index-if-needed sources ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -37,6 +37,11 @@ RUN = uv run --env-file .env python -m assistant.cli
 index: .env ## пересобрать индекс: исходники по тегу, эмбеддинги, Qdrant
 	docker compose up -d --wait qdrant
 	$(RUN) index
+
+# Для деплоя и таймера на сервере: ничего не делает, если индекс уже для этого тега и модели.
+index-if-needed: .env ## построить индекс, только если его нет или он для другого тега
+	docker compose up -d --wait qdrant
+	$(RUN) index --if-needed
 
 sources: .env ## только скачать исходники Paperless по тегу (без ключей и Qdrant)
 	$(RUN) sources
