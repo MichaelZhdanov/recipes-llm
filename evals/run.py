@@ -18,6 +18,11 @@
 Каждый кейс прогоняется RUNS раз (правило из CLAUDE.md), в отчёте среднее
 и разброс.
 
+Быстрый прогон при работе над промптом: `--sample N --runs 1` — N кейсов,
+поровну из каждой категории, с фиксированным сидом. Одинаковый сид даёт ту же
+выборку, так что быстрые прогоны разных версий сравнимы между собой. Цифры
+такого прогона ориентировочные. В отчёт этапа идёт только полный прогон.
+
 Отчёт: evals/reports/<дата>[-метка].md, сырые данные — в evals/reports/raw/
 (эта папка в .gitignore), одна запись на каждую пару «кейс, прогон».
 Код выхода 1, если метрика ниже порога.
@@ -26,6 +31,7 @@
 import argparse
 import dataclasses
 import json
+import random
 import re
 import statistics
 import sys
@@ -83,6 +89,7 @@ from evals.retrieval_metrics import (
 )
 
 RUNS = 3
+SAMPLE_SEED = 20261104
 # Категории каждого режима.
 RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
 ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope"})
@@ -148,6 +155,7 @@ def meta_record(meta: RunMeta) -> dict[str, object]:
         "temperature": meta.temperature,
         "prompt_version": meta.prompt_version,
         "split": meta.split,
+        "sample": meta.sample,
     }
 
 
@@ -169,6 +177,7 @@ def load_meta(data: dict[str, Any], *, revision: str, rescored_from: str) -> Run
         temperature=data["temperature"],
         prompt_version=data["prompt_version"],
         split=data.get("split", "dev"),
+        sample=data.get("sample"),
         rescored_from=f"{rescored_from}, прогон на {data['revision']}",
     )
 
@@ -214,6 +223,36 @@ def load_answer_cases(
     ]
 
 
+def pick_cases(cases: Sequence[Case], size: int, seed: int = SAMPLE_SEED) -> list[Case]:
+    """size кейсов: по кругу из каждой категории, порядок набора сохраняется.
+
+    По кругу, а не просто случайно: в маленькой выборке иначе может не
+    оказаться out_of_scope, и abstention не посчитать.
+    """
+    if size >= len(cases):
+        return list(cases)
+    rng = random.Random(seed)
+    groups: dict[str, list[Case]] = {}
+    for case in cases:
+        groups.setdefault(case.category, []).append(case)
+    queues = [rng.sample(group, len(group)) for _, group in sorted(groups.items())]
+    picked: list[Case] = []
+    while len(picked) < size:
+        for queue in queues:
+            if queue and len(picked) < size:
+                picked.append(queue.pop())
+    order = {case.id: index for index, case in enumerate(cases)}
+    return sorted(picked, key=lambda case: order[case.id])
+
+
+def _choose(
+    cases: list[Case], sample: int | None, seed: int
+) -> tuple[list[Case], str | None]:
+    if sample is None or sample >= len(cases):
+        return cases, None
+    return pick_cases(cases, sample, seed), f"{sample} из {len(cases)}, сид {seed}"
+
+
 def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
@@ -251,11 +290,15 @@ def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
     return not missing
 
 
-def _retrieval_stage(settings: Settings, runs: int, label: str | None) -> int:
+def _retrieval_stage(
+    settings: Settings, runs: int, label: str | None, sample: int | None, seed: int
+) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
     revision = git_revision()
-    cases = [c for c in load_cases() if c.category in RETRIEVAL_CATEGORIES]
+    cases, sampled = _choose(
+        [c for c in load_cases() if c.category in RETRIEVAL_CATEGORIES], sample, seed
+    )
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
@@ -273,6 +316,7 @@ def _retrieval_stage(settings: Settings, runs: int, label: str | None) -> int:
         query_template=embedder.query_template,
         stats=embedder.stats,
         today=today,
+        sample=sampled,
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results))
@@ -314,11 +358,21 @@ def _finish(
 
 
 def _answer_stage(
-    settings: Settings, runs: int, label: str | None, judge: bool, split: str
+    settings: Settings,
+    runs: int,
+    label: str | None,
+    judge: bool,
+    split: str,
+    sample: int | None = None,
+    seed: int = SAMPLE_SEED,
 ) -> int:
     revision = git_revision()
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
-    cases = [c for c in load_cases(directory) if c.category in ANSWER_CATEGORIES]
+    cases, sampled = _choose(
+        [c for c in load_cases(directory) if c.category in ANSWER_CATEGORIES],
+        sample,
+        seed,
+    )
     model = llm_model(settings)
     with httpx2.Client(timeout=30) as embeddings_http, make_http_client() as llm_http:
         embedder = make_embedder(settings, embeddings_http)
@@ -343,6 +397,7 @@ def _answer_stage(
         temperature=DETERMINISTIC_TEMPERATURE,
         prompt_version=answerer.prompt_version,
         split=split,
+        sample=sampled,
     )
     return _finish(results, meta, judging, label)
 
@@ -370,6 +425,15 @@ def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool)
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run", description=__doc__)
     parser.add_argument("--runs", type=int, default=RUNS)
+    parser.add_argument(
+        "--sample",
+        type=int,
+        metavar="N",
+        help="быстрый прогон: N кейсов поровну из категорий (с --runs 1 — за минуты)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=SAMPLE_SEED, help="сид для --sample"
+    )
     parser.add_argument(
         "--split",
         choices=("dev", "holdout"),
@@ -400,9 +464,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.rescore:
         return _rescore(settings, args.rescore, args.label, not args.no_judge)
     if args.stage == "retrieval":
-        return _retrieval_stage(settings, args.runs, args.label)
+        return _retrieval_stage(settings, args.runs, args.label, args.sample, args.seed)
     label = args.label or ("holdout" if args.split == "holdout" else None)
-    return _answer_stage(settings, args.runs, label, not args.no_judge, args.split)
+    return _answer_stage(
+        settings,
+        args.runs,
+        label,
+        not args.no_judge,
+        args.split,
+        args.sample,
+        args.seed,
+    )
 
 
 if __name__ == "__main__":

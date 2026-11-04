@@ -60,6 +60,12 @@ from evals.retrieval_metrics import (
 THRESHOLDS = {"recall@5": 0.80}
 
 
+def _sample_row(sample: str | None) -> list[str]:
+    if sample is None:
+        return []
+    return [f"| Выборка кейсов | {sample} — быстрый прогон, цифры ориентировочные |"]
+
+
 def _mean_std(values: Sequence[float]) -> str:
     return f"{statistics.mean(values):.2f} ± {statistics.pstdev(values):.2f}"
 
@@ -107,6 +113,7 @@ def render_report(
     query_template: str | None,
     stats: EmbeddingStats,
     today: date,
+    sample: str | None = None,
 ) -> str:
     recall = recall_per_run(results)
     mrr = mrr_per_run(results)
@@ -132,6 +139,7 @@ def render_report(
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].ranks)} |",
         "| Промпт | не используется |",
+        *_sample_row(sample),
         "",
         "## Метрики",
         "",
@@ -263,6 +271,8 @@ class RunMeta:
     rescored_from: str | None = None
     # dev — основной набор, holdout — отложенная выборка.
     split: str = "dev"
+    # Быстрый прогон на части кейсов: «8 из 32, сид …»; None — все кейсы.
+    sample: str | None = None
 
 
 def _spread(values: Sequence[float]) -> str:
@@ -343,6 +353,7 @@ def render_answer_report(
         f"| Температура | {meta.temperature} (GigaChat не принимает 0) |",
         f"| Промпт | `{meta.prompt_version}` |",
         f"| Судья | {f'{judging.model}, рубрика `{judging.prompt_version}`' if judging else 'не запускался'} |",
+        *_sample_row(meta.sample),
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].runs) if results else 0} |",
         "",

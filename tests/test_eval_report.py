@@ -58,3 +58,18 @@ def test_revision_ignores_untracked_files_but_not_edits(tmp_path: Path) -> None:
 
     (tmp_path / "code.py").write_text("x = 2\n")
     assert git_revision(tmp_path).endswith("(есть незакоммиченные изменения)")
+
+
+def test_sampled_report_says_it_is_a_quick_run() -> None:
+    report = render_report(
+        [result("howto-001", [1])],
+        manifest=MANIFEST,
+        revision="abc1234",
+        provider="cloud.ru",
+        query_template=None,
+        stats=EmbeddingStats(),
+        today=date(2026, 11, 4),
+        sample="8 из 32, сид 20261104",
+    )
+
+    assert "| Выборка кейсов | 8 из 32, сид 20261104 — быстрый прогон" in report

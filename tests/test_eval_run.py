@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,8 @@ from assistant.config import Settings
 from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement
 from evals.answer_metrics import AnswerCase, AnswerRun
-from evals.run import answer_records, raw_records, rescore_label
+from evals.dataset import Case
+from evals.run import answer_records, pick_cases, raw_records, rescore_label
 
 
 def test_raw_data_has_one_record_per_case_and_run() -> None:
@@ -94,3 +96,48 @@ def test_revision_is_taken_before_the_run(monkeypatch: pytest.MonkeyPatch) -> No
         run._answer_stage(Settings(), 1, None, False, "dev")
 
     assert calls == ["revision", "cases"]
+
+
+def dev_cases() -> list[Case]:
+    howto = [case(f"howto-{n:03}", ["docs/a.md#x"]) for n in range(1, 13)]
+    config = [
+        case(f"config-{n:03}", ["docs/a.md#x"]).model_copy(
+            update={"category": "config"}
+        )
+        for n in range(1, 9)
+    ]
+    oos = [
+        Case(
+            id=f"out_of_scope-{n:03}",
+            category="out_of_scope",
+            role="user",
+            question="?",
+            expected_behavior="abstain",
+        )
+        for n in range(1, 13)
+    ]
+    return [*howto, *config, *oos]
+
+
+def test_sample_takes_every_category_and_is_repeatable() -> None:
+    cases = dev_cases()
+
+    picked = pick_cases(cases, 6)
+
+    assert Counter(c.category for c in picked) == {
+        "howto": 2,
+        "config": 2,
+        "out_of_scope": 2,
+    }
+    assert [c.id for c in picked] == [c.id for c in pick_cases(cases, 6)]
+    assert [c.id for c in picked] != [c.id for c in pick_cases(cases, 6, seed=1)]
+    # Порядок как в наборе: сначала howto, потом config, потом out_of_scope.
+    assert [c.id for c in picked] == sorted(
+        (c.id for c in picked), key=[c.id for c in cases].index
+    )
+
+
+def test_sample_larger_than_set_takes_all() -> None:
+    cases = dev_cases()
+
+    assert pick_cases(cases, 100) == cases
