@@ -45,6 +45,8 @@ class IndexManifest(BaseModel):
 class Hit:
     chunk: Chunk
     score: float
+    # Кусок найден точным поиском: в нём лежит шаблон сообщения, совпавший с вопросом.
+    exact: bool = False
 
 
 def point_id(chunk: Chunk) -> str:
@@ -137,6 +139,28 @@ class VectorStore:
             ).count
             > 0
         )
+
+    def chunks_with_messages(self) -> list[Chunk]:
+        """Куски кода с шаблонами сообщений — для точного поиска ошибок."""
+        with_messages = models.Filter(
+            must_not=[
+                models.IsEmptyCondition(is_empty=models.PayloadField(key="messages"))
+            ]
+        )
+        chunks: list[Chunk] = []
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                self._collection,
+                scroll_filter=with_messages,
+                limit=512,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            chunks += [Chunk.model_validate(point.payload) for point in points]
+            if offset is None:
+                return chunks
 
     def verify(self) -> int:
         """Читает все точки и проверяет, что payload — полный кусок. Возвращает число точек."""
