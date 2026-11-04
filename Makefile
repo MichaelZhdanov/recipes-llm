@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down index ask test lint format
+.PHONY: help up down index ask eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -37,6 +37,11 @@ index: .env ## пересобрать индекс: исходники по те
 ask: .env ## найти куски по вопросу: make ask Q="как включить OCR на русском"
 	@test -n "$$Q" || { echo 'Укажите вопрос: make ask Q="как включить OCR на русском"'; exit 2; }
 	$(RUN) ask "$$Q"
+
+# Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта.
+eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
+	docker compose up -d --wait qdrant
+	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL))
 
 test: ## unit-тесты (pytest)
 	uv run pytest
