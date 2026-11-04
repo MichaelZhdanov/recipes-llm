@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Деплой на сервере. Это forced command ключа деплоя в authorized_keys
-# root: по этому ключу нельзя выполнить ничего другого.
+# Деплой на сервере: deploy/deploy.sh <коммит>. Запускается от root.
 #
 # GitHub Actions вызывает его так:
-#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … | ssh root@<сервер> "deploy <sha>"
-# Команда приходит в SSH_ORIGINAL_COMMAND, логин и пароль — в stdin:
-# аргументы видны в списке процессов, stdin — нет.
+#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … \
+#     | ssh root@<сервер> /opt/paperless-assistant/deploy/deploy.sh <sha>
+# Логин и пароль — в stdin, а не аргументами: аргументы видны в списке
+# процессов (ps), stdin — нет.
 #
 # Шаги: логин и пароль в .env → код ровно того коммита, что проверил CI →
 # стек → исходники Paperless и индекс, если их ещё нет → проверка /health.
@@ -16,12 +16,11 @@
 set -euo pipefail
 
 main() {
-    local command="" sha="" extra=""
-    read -r command sha extra <<<"${SSH_ORIGINAL_COMMAND:-}" || true
-    if [[ "$command" != "deploy" || ! "$sha" =~ ^[0-9a-f]{40}$ || -n "$extra" ]]; then
-        echo "разрешена только команда: deploy <полный SHA коммита>" >&2
+    if [[ $# -ne 1 ]]; then
+        echo "использование: $0 <коммит>  (логин и пароль входа — в stdin)" >&2
         exit 2
     fi
+    local sha="$1"
 
     cd "$(dirname "$(readlink -f "$0")")/.."
     # Деплой и суточный таймер не идут одновременно: оба могут строить индекс.

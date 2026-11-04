@@ -4,19 +4,18 @@
 #   sudo bash bootstrap.sh <домен> <e-mail для Let's Encrypt> <файл публичного ключа деплоя>
 #
 # До запуска: A-запись домена указывает на сервер, порты 80 и 443 открыты.
-# Ключ деплоя — отдельный, только для GitHub Actions: ssh-keygen -t ed25519 -f ops -N ''
-# (ops.pub — сюда, ops — в секрет GitHub DEPLOY_SSH_KEY). Не тот ключ, которым
-# заходят на сервер руками: скрипт это проверяет.
+# Ключ деплоя: ssh-keygen -t ed25519 -f ops -N ''
+# (ops.pub — сюда, ops — в секрет GitHub DEPLOY_SSH_KEY).
 #
-# Деплой идёт от root (решение автора). Поэтому строка ключа деплоя в
-# /root/.ssh/authorized_keys ограничена одной командой, а сам файл только
-# дописывается: остальные ключи root не трогаются.
+# Деплой идёт от root (решение автора), ключ деплоя — обычный ключ root
+# с полным доступом. authorized_keys только дописывается: остальные ключи
+# root не трогаются.
 #
 # Что делает:
 # 1. ставит Docker (из официального apt-репозитория Docker), nginx, certbot;
 # 2. берёт uv той же версии, что в Dockerfile, из того же образа;
 # 3. клонирует репозиторий в /opt/paperless-assistant;
-# 4. разрешает ключу деплоя только deploy/deploy.sh (forced command);
+# 4. добавляет ключ деплоя в authorized_keys root, если его там ещё нет;
 # 5. создаёт .env со случайными секретами;
 # 6. настраивает nginx и получает сертификат Let's Encrypt;
 # 7. включает суточный таймер paperless-refresh.
@@ -74,7 +73,7 @@ main() {
     echo "== 3. репозиторий"
     [[ -d "$APP_DIR/.git" ]] || git clone --quiet "$REPO_URL" "$APP_DIR"
 
-    echo "== 4. ключ деплоя: только deploy/deploy.sh"
+    echo "== 4. ключ деплоя в authorized_keys root"
     add_deploy_key "$key"
 
     echo "== 5. .env со случайными секретами"
@@ -92,7 +91,7 @@ main() {
     systemctl reload nginx
     if [[ ! -d "/etc/letsencrypt/live/$domain" ]]; then
         certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email \
-            --redirect --hsts --non-interactive
+            --redirect --non-interactive
     fi
 
     echo "== 7. суточный таймер"
@@ -116,29 +115,21 @@ main() {
 DONE
 }
 
-# Строка ключа деплоя в authorized_keys root. Дописывается, а не перезаписывает
-# файл. Если тот же ключ уже стоит без ограничения, это ключ для ручного входа:
-# в GitHub он дал бы полный root, поэтому скрипт останавливается.
+# Ключ деплоя в authorized_keys root. Файл только дописывается, остальные
+# ключи не трогаются; если ключ уже есть, ничего не меняется.
 add_deploy_key() {
-    local key="$1" body line
+    local key="$1" body
     body="$(cut -d' ' -f2 <<<"$key")"
     install -d -m 700 "$(dirname "$AUTHORIZED_KEYS")"
     touch "$AUTHORIZED_KEYS"
     chmod 600 "$AUTHORIZED_KEYS"
-    # restrict: без пробросов портов, агента, X11 и терминала.
-    line="restrict,command=\"$APP_DIR/deploy/deploy.sh\" $key"
-    if grep -qxF "$line" "$AUTHORIZED_KEYS"; then
-        echo "ключ деплоя уже добавлен"
-        return
-    fi
     if grep -qF "$body" "$AUTHORIZED_KEYS"; then
-        echo "этот ключ уже есть в $AUTHORIZED_KEYS без ограничения: им заходят на сервер." >&2
-        echo "Для деплоя нужен отдельный ключ: ssh-keygen -t ed25519 -f ops -N ''" >&2
-        exit 2
+        echo "ключ деплоя уже есть"
+        return
     fi
     # Файл мог кончаться без перевода строки: тогда ключ склеился бы с последним.
     [[ ! -s "$AUTHORIZED_KEYS" || -z "$(tail -c 1 "$AUTHORIZED_KEYS")" ]] || echo >>"$AUTHORIZED_KEYS"
-    echo "$line" >>"$AUTHORIZED_KEYS"
+    echo "$key" >>"$AUTHORIZED_KEYS"
 }
 
 # main — только при запуске файла; при source (в тесте) доступны одни функции.

@@ -4,43 +4,22 @@ import re
 import subprocess
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "",
-        "bash",
-        "rm -rf /",
-        "deploy",
-        "deploy abc123",
-        "deploy " + "g" * 40,
-        "deploy " + "a" * 40 + " ; rm -rf /",
-        "deploy " + "a" * 40 + " extra",
-    ],
-)
-def test_deploy_key_runs_nothing_but_deploy_sha(command: str, tmp_path: Path) -> None:
-    """Ключ деплоя лежит в GitHub: даже с ним на сервере можно только задеплоить коммит."""
+def test_deploy_needs_a_commit(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(DEPLOY / "deploy.sh")],
-        env={
-            "SSH_ORIGINAL_COMMAND": command,
-            "HOME": str(tmp_path),
-            "PATH": "/usr/bin:/bin",
-        },
-        input="WEB_PASSWORD=x\n",
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 2
-    assert "разрешена только команда" in result.stderr
-    # Отказ — до любых действий: даже файл замка не создан.
+    assert "использование" in result.stderr
+    # Без коммита ничего не делается: даже файл замка не создан.
     assert list(tmp_path.iterdir()) == []
 
 
@@ -103,20 +82,13 @@ def test_deploy_key_is_appended_and_root_keys_stay(tmp_path: Path) -> None:
     for _ in range(2):  # повторный запуск bootstrap ничего не дублирует
         assert add_deploy_key(keys, DEPLOY_KEY).returncode == 0
 
-    lines = keys.read_text().splitlines()
-    assert lines == [
-        ADMIN_KEY,
-        f'restrict,command="/opt/paperless-assistant/deploy/deploy.sh" {DEPLOY_KEY}',
-    ]
+    assert keys.read_text().splitlines() == [ADMIN_KEY, DEPLOY_KEY]
 
 
-def test_key_that_already_gives_root_shell_is_refused(tmp_path: Path) -> None:
-    """Ключ для ручного входа в GitHub дал бы полный root: скрипт останавливается."""
+def test_key_already_in_authorized_keys_is_left_as_is(tmp_path: Path) -> None:
     keys = tmp_path / "authorized_keys"
-    keys.write_text(DEPLOY_KEY + "\n")
+    keys.write_text(f"{DEPLOY_KEY}\n{ADMIN_KEY}\n")
 
-    result = add_deploy_key(keys, DEPLOY_KEY)
+    assert add_deploy_key(keys, DEPLOY_KEY).returncode == 0
 
-    assert result.returncode == 2
-    assert "отдельный ключ" in result.stderr
-    assert keys.read_text() == DEPLOY_KEY + "\n"
+    assert keys.read_text() == f"{DEPLOY_KEY}\n{ADMIN_KEY}\n"
