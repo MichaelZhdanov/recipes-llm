@@ -1,0 +1,126 @@
+# Кейсы error_report для оценки разбора ошибок ассистентом по Paperless-ngx v3.4.2.
+# Пользователь присылает строку лога, ошибку задачи из интерфейса или пересказ ошибки.
+# expected_line — путь:строка от корня репозитория, где в коде задаётся текст этой ошибки.
+# Если сообщение собрано из нескольких строк литерала, указана первая строка, диапазон — в notes.
+# Ошибки, которые consumer оборачивает в «Error occurred while consuming document …»
+# (src/documents/consumer.py:579), привязаны к месту исходного текста, а не к обёртке.
+
+- id: error_report-001
+  category: error
+  role: user
+  question: "Загружаю скан, на нём наклейка со штрихкодом ASN. В задачах красная ошибка: «scan_2026-11-03_0042.pdf: Not consuming scan_2026-11-03_0042.pdf: Given ASN 1234 already exists!» Документ так и не появился. Что не так?"
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:1169
+  must_include: ["ASN 1234 уже присвоен другому документу, в том числе документу в корзине", "сменить или убрать ASN у существующего документа либо использовать новый номер"]
+  must_not_include: []
+  notes: "AsnCheckPlugin.pre_check_asn_value: номер ASN из штрихкода или из параметров загрузки уже есть у документа в базе. Проверка идёт по Document.global_objects, то есть с учётом корзины; тогда к сообщению добавляется «Note: existing document is in the trash.». Обработка прерывается до разбора файла."
+
+- id: error_report-002
+  category: error
+  role: user
+  question: "после переезда на новый сервер документы из папки consume не добавляются, в логе такое: [2026-11-04 09:12:44,031] [ERROR] [paperless.consumer] [a91c03e7] The following error occurred while storing document scan_0012.pdf after parsing: [Errno 13] Permission denied: '/usr/src/paperless/consume/scan_0012.pdf' помогите"
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:800
+  must_include: ["у Paperless нет прав удалить исходный файл из папки consume", "задать USERMAP_UID и USERMAP_GID как у пользователя хоста, которому принадлежит папка"]
+  must_not_include: []
+  notes: "Разбор прошёл, ошибка на этапе сохранения: после записи в базу ConsumerPlugin удаляет оригинал из consume (input_doc.original_file.unlink(), строка 778), а пользователю внутри контейнера не хватает прав на каталог. Исключение ловит общий except вокруг сохранения и превращает в _fail. Текст на строках 800–801. В docs/troubleshooting.md раздел «Permission denied errors in the consumption directory»."
+
+- id: error_report-003
+  category: error
+  role: engineer
+  question: "Подключили PAPERLESS_PRE_CONSUME_SCRIPT для предобработки сканов, теперь падает каждый документ: `[2026-11-04 11:02:17,554] [ERROR] [paperless.consumer] [5be0d4a2] Error while executing pre-consume script: Command '['/usr/src/paperless/scripts/pre-consume.sh']' returned non-zero exit status 1.` Где это обрабатывается и куда смотреть дальше?"
+  expected_behavior: answer
+  expected_line: src/documents/consumer.py:331
+  must_include: ["скрипт вернул ненулевой код выхода, и обработка документа прерывается", "stdout и stderr скрипта пишутся в лог построчно перед этой ошибкой"]
+  must_not_include: []
+  notes: "ConsumerPlugin.run_pre_consume_script: run_subprocess (src/documents/utils.py:159) логирует код выхода и вывод скрипта, затем вызывает check_returncode(). CalledProcessError ловится и превращается в _fail. Если файла скрипта нет, ошибка другая: «Configured pre-consume script … does not exist.» (строки 305–306)."
+
+- id: error_report-004
+  category: error
+  role: user
+  question: "кидаю картинку png, задача обработки падает. в ошибке что-то про DPI, мол в картинке нет информации о DPI и архивный pdf из неё сделать нельзя. что делать?"
+  expected_behavior: answer
+  expected_line: src/paperless/parsers/tesseract.py:343
+  must_include: ["задать PAPERLESS_OCR_IMAGE_DPI — DPI, с которым сделано изображение"]
+  must_not_include: []
+  notes: "TesseractParser.construct_ocrmypdf_parameters: для картинки DPI берётся из её метаданных (get_dpi), затем из PAPERLESS_OCR_IMAGE_DPI, затем оценивается по ширине под A4 (calculate_a4_dpi). Если не получилось ни одно, поднимается ParseError «Cannot produce archive PDF for image …, no DPI information is present in this image and OCR_IMAGE_DPI is not set.» Текст на строках 343–345. Перед ней в логе обычно предупреждение «Error while getting DPI from image …» (строка 212)."
+
+- id: error_report-005
+  category: error
+  role: engineer
+  question: "Часть PDF от одного контрагента не проходит. В логе воркера: `[2026-11-03 16:40:09,218] [WARNING] [paperless.parsing.tesseract] [c07e5f19] Ghostscript PDF/A rendering failed, consider setting PAPERLESS_OCR_USER_ARGS: '{\"continue_on_soft_render_error\": true}'`, а следом ERROR по этому же файлу. Откуда это и чем грозит включение этого параметра?"
+  expected_behavior: answer
+  expected_line: src/paperless/parsers/tesseract.py:482
+  must_include: ["Ghostscript не смог построить PDF/A, OCRmyPDF прервал обработку", "PAPERLESS_OCR_USER_ARGS с continue_on_soft_render_error: true заставляет продолжить, но архивная копия может отличаться от оригинала"]
+  must_not_include: []
+  notes: "_handle_subprocess_output_error (строки 474–488): на SubprocessOutputError от OCRmyPDF с «Ghostscript PDF/A rendering» в тексте пишет это предупреждение (482–484) и поднимает ParseError «SubprocessOutputError: … See logs for more information.» (строка 487). В docs/troubleshooting.md раздел «Consumption fails with \"Ghostscript PDF/A rendering failed\"»."
+
+- id: error_report-006
+  category: error
+  role: user
+  question: "включили разделение по штрихкодам, всё делится, кроме выписок из банка — они приходят с паролем и заходят одним документом. в логе мелькает предупреждение, что файл вроде как запаролен и штрихкоды не проверяются. это можно обойти?"
+  expected_behavior: answer
+  expected_line: src/documents/barcodes.py:296
+  must_include: ["PDF с паролем не открывается для поиска штрихкодов, поэтому разделения нет, а документ добавляется целиком", "снять пароль с PDF до загрузки"]
+  must_not_include: []
+  notes: "BarcodePlugin.detect: scan_pdf открывает файл через pikepdf, PasswordError ловится, пишется warning, список штрихкодов остаётся пустым. Значит, нет ни разделения, ни ASN, ни тегов из штрихкодов, а обработка продолжается как обычно."
+
+- id: error_report-007
+  category: error
+  role: user
+  question: "сканер без дуплекса, пользуюсь папкой double-sided. отсканировала нечётные, потом чётные, а в задачах ошибка: «back.pdf: This second file (even numbered pages) contains more pages than the first/odd numbered one. This means the two uploaded files don't belong to the same double-sided scan. Please retry, starting with the odd numbered pages again.» и оба файла куда-то пропали"
+  expected_behavior: answer
+  expected_line: src/documents/double_sided.py:98
+  must_include: ["начать заново: сначала снова нечётные страницы, потом чётные", "в первом скане (нечётные) оказалось меньше страниц, чем во втором, например автоподатчик пропустил лист"]
+  must_not_include: []
+  notes: "CollatePlugin.run: чётные страницы вставляются через одну в staging-файл с нечётными; если во втором файле страниц больше, возникает IndexError и ConsumerError с этим текстом. В finally удаляются и staging-файл, и загруженный скан, поэтому оба файла «пропали». Нечётной частью мог стать и другой скан, загруженный в эту папку меньше чем за 30 минут до этого. Текст на строках 98–102, описание в docs/advanced_usage.md, раздел «Things that could go wrong»."
+
+- id: error_report-008
+  category: error
+  role: user
+  question: "почта перестала забираться, в логах каждые 10 минут одно и то же: [2026-11-04 08:10:02,417] [ERROR] [paperless_mail] Error while authenticating account Рабочая почта: b'[AUTHENTICATIONFAILED] Authentication failed.' пароль вроде никто не менял"
+  expected_behavior: answer
+  expected_line: src/paperless_mail/mail.py:245
+  must_include: ["IMAP-сервер отклонил вход: проверить имя пользователя и пароль в настройках почтового аккаунта", "пока вход не проходит, правила этого аккаунта не обрабатываются"]
+  must_not_include: []
+  notes: "mailbox_login: вход по LOGIN (при пароле не в ASCII — AUTH=PLAIN через login_utf8, у OAuth-аккаунтов — XOAUTH2) бросил исключение. Оно логируется с ответом сервера и превращается в MailError «Error while authenticating account …» (строка 249), обработка аккаунта на этом заканчивается. Задача почты по умолчанию запускается раз в 10 минут (PAPERLESS_EMAIL_TASK_CRON)."
+
+- id: error_report-009
+  category: error
+  role: user
+  question: "настроила правило почты на папку со счетами, ничего не приходит. в логе: [2026-11-04 08:20:03,902] [ERROR] [paperless_mail] Rule Рабочая почта.Счета: Error while processing rule: Rule Рабочая почта.Счета: Folder INBOX/Счета does not exist in account Рабочая почта. но папка точно есть, я её вижу в почте!"
+  expected_behavior: answer
+  expected_line: src/paperless_mail/mail.py:782
+  must_include: ["разделитель подпапок зависит от почтового сервера: «.», «/» или «|», попробовать, например, INBOX.Счета", "Paperless пишет в лог список папок аккаунта строками «Located folder: …»"]
+  must_not_include: []
+  notes: "MailAccountHandler._handle_mail_rule: M.folder.set(folder) бросил MailboxFolderSelectError. Перед ошибкой Paperless пишет в лог «Unable to access folder …» (строка 770) и перечисляет найденные папки. Если действие правила — Move, проверяется и папка назначения, и ошибка может быть про неё. Внешняя обёртка «Error while processing rule» — строка 735. Текст на строках 782–783, совет про разделитель — в docs/usage.md, в заметке к правилам почты."
+
+- id: error_report-010
+  category: error
+  role: engineer
+  question: "Переносим Paperless на новый сервер через экспорт и импорт. Импорт падает сразу: `$ docker compose exec webserver document_importer ../export` → `CommandError: No passphrase was given, but this export contains encrypted fields`. Что это значит и где импортёр это проверяет?"
+  expected_behavior: answer
+  expected_line: src/documents/management/commands/document_importer.py:305
+  must_include: ["экспорт сделан с --passphrase, импорт нужно запустить с тем же --passphrase"]
+  must_not_include: []
+  notes: "Command.load_metadata: в metadata.json экспорта есть параметры шифрования (EXPORTER_CRYPTO_SETTINGS_NAME), а --passphrase не передан. Проверка идёт до загрузки данных в базу. Флаг описан в docs/administration.md: экспортёр с --passphrase шифрует часть полей, импортёру нужен тот же пароль."
+
+- id: error_report-011
+  category: error
+  role: user
+  question: "у тегов поставила алгоритм Auto, но теги сами не назначаются. в статусе системы у классификатора ERROR и что-то вроде «нет данных для обучения». документов уже штук 40, правда я их пока не разбирала"
+  expected_behavior: answer
+  expected_line: src/documents/classifier.py:349
+  must_include: ["классификатор не учится на документах с тегом входящих (inbox)", "нужны документы без inbox-тега: разобрать часть документов"]
+  must_not_include: []
+  notes: "DocumentClassifier.train: из выборки исключаются документы с тегом is_inbox_tag; если ничего не осталось, поднимается ValueError «No training data available.». Задача train_classifier (src/documents/tasks.py:147) доходит до обучения, только если есть объект с алгоритмом Auto. Ошибка видна в задачах и в статусе системы (src/documents/views.py:5455–5461). В docs/troubleshooting.md раздел «Classifier error: No training data available»."
+
+- id: error_report-012
+  category: error
+  role: engineer
+  question: "Включили PAPERLESS_TIKA_ENABLED для офисных файлов, docx не обрабатываются: `[2026-11-04 13:27:51,006] [ERROR] [paperless.consumer] [7d3e21b8] Error occurred while consuming document contract.docx: Could not parse /tmp/paperless/paperless-ngx4h1q2z9w/contract.docx with tika server at http://tika:9998: [Errno 111] Connection refused`. Где это бросается и что проверить?"
+  expected_behavior: answer
+  expected_line: src/paperless/parsers/tika.py:264
+  must_include: ["Paperless не смог подключиться к серверу Tika: проверить, что контейнер Tika запущен и PAPERLESS_TIKA_ENDPOINT указывает на него"]
+  must_not_include: []
+  notes: "TikaDocumentParser.parse: запрос текста к Tika (as_text.from_file) упал с исключением, оно оборачивается в ParseError, а consumer добавляет префикс «Error occurred while consuming document …» (src/documents/consumer.py:579). Текст на строках 264–265. Похожее сообщение «Could not parse content with tika server at» есть в src/paperless/parsers/mail.py:528, но оно про письма .eml, а не про офисные файлы."
