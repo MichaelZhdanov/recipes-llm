@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from qdrant_client import QdrantClient, models
 
 from assistant.indexing.chunks import Chunk
+from assistant.retrieval.filters import FIELD, IngredientFilter
 
 ALIAS = "recipes"
 # Пространство имён для uuid5: id точки детерминирован, повторная сборка даёт те же id.
@@ -129,7 +130,7 @@ class VectorStore:
         )
         # Фильтр «с чем и без чего» (этап 2) идёт по именам ингредиентов.
         self._client.create_payload_index(
-            name, "ingredients", field_schema=models.PayloadSchemaType.KEYWORD
+            name, FIELD, field_schema=models.PayloadSchemaType.KEYWORD
         )
         return name
 
@@ -225,10 +226,18 @@ class VectorStore:
             )
         )
 
-    def search(self, vector: list[float], limit: int) -> list[Hit]:
+    def search(
+        self,
+        vector: list[float],
+        limit: int,
+        conditions: IngredientFilter | None = None,
+    ) -> list[Hit]:
+        """Ближайшие рецепты среди тех, что прошли условия (фильтр Qdrant
+        отбрасывает остальные до ранжирования векторами)."""
         response = self._client.query_points(
             self._alias,
             query=vector,
+            query_filter=conditions.to_qdrant() if conditions else None,
             limit=limit,
             with_payload=True,
             search_params=self.search_params(),

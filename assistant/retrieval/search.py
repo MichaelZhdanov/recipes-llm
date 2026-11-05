@@ -1,11 +1,13 @@
-"""Поиск рецептов по вопросу: векторный.
+"""Поиск рецептов по вопросу: фильтр по ингредиентам плюс векторы.
 
 Вопрос уходит в API эмбеддингов только через эмбеддер, а маскирование ПДн
 стоит внутри него. Один рецепт — одна точка индекса, поэтому топ-k — это
-k разных рецептов. Фильтры по ингредиентам добавит этап 2.
+k разных рецептов. Условия «с чем и без чего» (`IngredientFilter`)
+проверяет Qdrant, векторы ранжируют то, что прошло фильтр.
 """
 
 from assistant.retrieval.embeddings import Embedder
+from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import (
     Hit,
     IndexManifest,
@@ -23,5 +25,8 @@ class Retriever:
         self._store = store
         self._embedder = embedder
 
-    def search(self, question: str, k: int = 5) -> list[Hit]:
-        return self._store.search(self._embedder.embed_query(question), limit=k)
+    def search(
+        self, question: str, k: int = 5, conditions: IngredientFilter | None = None
+    ) -> list[Hit]:
+        vector = self._embedder.embed_query(question)
+        return self._store.search(vector, limit=k, conditions=conditions)
