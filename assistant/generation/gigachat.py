@@ -6,13 +6,21 @@
    и формой `scope=GIGACHAT_API_PERS`. Токен живёт 30 минут, `expires_at`
    приходит в миллисекундах.
 2. С токеном вызывается `POST /chat/completions` в формате, похожем на OpenAI.
+3. Вызов функций (документация и живая проверка, 2026-11-05): в запросе
+   `functions` — описания с JSON Schema аргументов, `function_call` — `auto`,
+   `none` или `{"name": …}` (вызвать именно эту). Ответ с вызовом приходит с
+   `finish_reason: function_call`, в `message.function_call` — имя и аргументы
+   (объектом), рядом `functions_state_id`. Результат функции возвращается сообщением
+   `role: function`, а перед ним в истории стоит сообщение ассистента с вызовом.
 
 Почему свой адаптер, а не SDK: это два POST-запроса, а SDK — лишние
 зависимости и поверхность для сканера уязвимостей (как у эмбеддингов).
 
 Что делает клиент:
 - **маскирует ПДн в каждом сообщении** перед отправкой, здесь, а не у
-  вызывающего кода: так маскирование нельзя обойти;
+  вызывающего кода: так маскирование нельзя обойти. Маскируются и текст, и
+  строки в аргументах прошлых вызовов функций. Описания функций — константы
+  кода, данных пользователя в них нет;
 - держит токен и обновляет его заранее (за TOKEN_MARGIN до конца) или
   один раз после ответа 401;
 - пропускает запросы по одному (замок): на Freemium GigaChat генерирует
@@ -24,6 +32,7 @@ TLS серверов GigaChat подписан НУЦ Минцифры. Его �
 подписаны им. В систему, certifi и `SSL_CERT_FILE` сертификат не ставится.
 """
 
+import json
 import ssl
 import threading
 import time
@@ -32,7 +41,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 import httpx2
 from pydantic import SecretStr
@@ -76,9 +85,23 @@ class LlmError(RuntimeError):
     pass
 
 
+class FunctionCall(TypedDict):
+    name: str
+    arguments: dict[str, object]
+
+
 class Message(TypedDict):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "function"]
     content: str
+    # Ответ ассистента с вызовом функции: content у него пустой.
+    function_call: NotRequired[FunctionCall]
+    functions_state_id: NotRequired[str]
+    # У сообщения role=function — имя функции, чей результат в content.
+    name: NotRequired[str]
+
+
+# «auto» — модель решает сама, «none» — не вызывать, {"name": …} — вызвать эту.
+FunctionCallMode = Literal["auto", "none"] | Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -100,6 +123,9 @@ class Completion:
     # Модель с версией из ответа API, например «GigaChat-2:2.0.28.2».
     model: str
     usage: Usage
+    function_call: FunctionCall | None = None
+    # Нужен, чтобы вернуть результат функции: идёт в историю вместе с вызовом.
+    functions_state_id: str | None = None
 
 
 @dataclass
@@ -136,7 +162,32 @@ class ChatModel(Protocol):
         temperature: float,
         max_tokens: int,
         response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
     ) -> Completion: ...
+
+
+def call_message(completion: Completion) -> Message:
+    """Ответ модели с вызовом функции — в историю, перед результатом функции."""
+    if completion.function_call is None:
+        raise ValueError("в ответе модели нет вызова функции")
+    message: Message = {
+        "role": "assistant",
+        "content": "",
+        "function_call": completion.function_call,
+    }
+    if completion.functions_state_id is not None:
+        message["functions_state_id"] = completion.functions_state_id
+    return message
+
+
+def function_result(name: str, result: object) -> Message:
+    """Результат функции для модели: JSON строкой, как требует API."""
+    return {
+        "role": "function",
+        "name": name,
+        "content": json.dumps(result, ensure_ascii=False),
+    }
 
 
 def ssl_context() -> ssl.SSLContext:
@@ -191,12 +242,10 @@ class GigaChat:
         temperature: float,
         max_tokens: int,
         response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
     ) -> Completion:
-        masked: list[Message] = []
-        for message in messages:
-            result = mask_pii(message["content"])
-            self.stats.masked.update(result.counts)
-            masked.append({"role": message["role"], "content": result.text})
+        masked = [_masked(message, self.stats.masked) for message in messages]
         body: dict[str, object] = {
             "model": model,
             "messages": masked,
@@ -205,6 +254,10 @@ class GigaChat:
         }
         if response_format is not None:
             body["response_format"] = response_format
+        if functions is not None:
+            body["functions"] = list(functions)
+        if function_call is not None:
+            body["function_call"] = function_call
 
         with self._lock:
             response = self._post_chat(body)
@@ -225,11 +278,14 @@ class GigaChat:
             total_tokens=int(raw_usage.get("total_tokens", 0)),
         )
         self.stats.add(usage)
+        message = choice["message"]
         return Completion(
-            content=choice["message"].get("content") or "",
+            content=message.get("content") or "",
             finish_reason=choice["finish_reason"],
             model=data.get("model", model),
             usage=usage,
+            function_call=_function_call(message),
+            functions_state_id=message.get("functions_state_id"),
         )
 
     @staticmethod
@@ -281,6 +337,49 @@ class GigaChat:
         data = response.json()
         # expires_at — момент окончания в миллисекундах от эпохи.
         return SecretStr(data["access_token"]), data["expires_at"] / 1000
+
+
+def _masked(message: Message, counts: Counter[str]) -> Message:
+    result = mask_pii(message["content"])
+    counts.update(result.counts)
+    masked = message.copy()
+    masked["content"] = result.text
+    call = message.get("function_call")
+    if call is not None:
+        arguments = {k: _mask_value(v, counts) for k, v in call["arguments"].items()}
+        masked["function_call"] = {"name": call["name"], "arguments": arguments}
+    return masked
+
+
+def _mask_value(value: object, counts: Counter[str]) -> object:
+    """Маскирует строки внутри аргументов функции на любой глубине."""
+    if isinstance(value, str):
+        result = mask_pii(value)
+        counts.update(result.counts)
+        return result.text
+    if isinstance(value, list):
+        return [_mask_value(item, counts) for item in value]
+    if isinstance(value, dict):
+        return {k: _mask_value(v, counts) for k, v in value.items()}
+    return value
+
+
+def _function_call(message: Mapping[str, Any]) -> FunctionCall | None:
+    """Вызов функции из ответа. Аргументы — объект или JSON строкой: в
+    документации GigaChat встречается и то и другое, принимаем оба."""
+    raw = message.get("function_call")
+    if raw is None:
+        return None
+    name = str(raw.get("name", ""))
+    arguments = raw.get("arguments") or {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError as exc:
+            raise LlmError(f"GigaChat вернул аргументы {name} не в JSON") from exc
+    if not isinstance(arguments, dict):
+        raise LlmError(f"GigaChat вернул аргументы {name} не объектом")
+    return {"name": name, "arguments": arguments}
 
 
 def make_llm(settings: Settings, client: httpx2.Client) -> GigaChat:

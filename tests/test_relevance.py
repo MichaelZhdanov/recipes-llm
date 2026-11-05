@@ -5,7 +5,13 @@ from pathlib import Path
 
 from eval_helpers import MANIFEST, case, found, result
 
-from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
+from assistant.generation.gigachat import (
+    Completion,
+    FunctionCallMode,
+    LlmStats,
+    Message,
+    Usage,
+)
 from assistant.retrieval.embeddings import EmbeddingStats
 from evals.answer_metrics import Rate
 from evals.dataset import RelevanceCanary, load_relevance_canaries
@@ -38,6 +44,8 @@ class FakeLlm:
         temperature: float,
         max_tokens: int,
         response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
     ) -> Completion:
         assert response_format is not None and temperature > 0
         self.calls.append(list(messages))

@@ -14,7 +14,13 @@ from assistant.generation.answer import (
     load_prompt,
     render_markdown,
 )
-from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
+from assistant.generation.gigachat import (
+    Completion,
+    FunctionCallMode,
+    LlmStats,
+    Message,
+    Usage,
+)
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
@@ -54,6 +60,8 @@ class FakeLlm:
         temperature: float,
         max_tokens: int,
         response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
     ) -> Completion:
         assert temperature > 0, "GigaChat не принимает temperature = 0"
         assert response_format is not None

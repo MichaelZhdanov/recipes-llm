@@ -15,9 +15,13 @@ from assistant.generation.gigachat import (
     CA_FILE,
     CA_SHA256,
     DEFAULT_MODEL,
+    Completion,
     GigaChat,
     LlmError,
     Message,
+    Usage,
+    call_message,
+    function_result,
     llm_model,
     make_llm,
     ssl_context,
@@ -37,6 +41,7 @@ class FakeGigaChat:
         finish_reason: str = "stop",
         token_lifetime: float = 1800,
         now: float = 1_000_000.0,
+        message: dict[str, Any] | None = None,
     ) -> None:
         self.oauth: list[httpx2.Request] = []
         self.chats: list[httpx2.Request] = []
@@ -45,6 +50,7 @@ class FakeGigaChat:
         self.finish_reason = finish_reason
         self.token_lifetime = token_lifetime
         self.now = now
+        self.message = message or {"role": "assistant", "content": '{"ok": 1}'}
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         if str(request.url) == GIGACHAT_OAUTH_URL:
@@ -67,7 +73,7 @@ class FakeGigaChat:
             json={
                 "choices": [
                     {
-                        "message": {"role": "assistant", "content": '{"ok": 1}'},
+                        "message": self.message,
                         "index": 0,
                         "finish_reason": self.finish_reason,
                     }
@@ -224,6 +230,123 @@ def test_request_parameters_and_parsed_completion() -> None:
     assert completion.usage.precached_prompt_tokens == 30
     assert llm.stats.requests == 1
     assert llm.stats.total_tokens == 90
+    assert completion.function_call is None
+    assert "functions" not in body and "function_call" not in body
+
+
+SEARCH = {
+    "name": "search_recipes",
+    "description": "Найти рецепты",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+}
+STATE_ID = "77d3fb14-457a-46ba-937e-8d856156d003"
+
+
+def call_reply(arguments: object) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "function_call": {"name": "search_recipes", "arguments": arguments},
+        "functions_state_id": STATE_ID,
+    }
+
+
+def test_functions_and_forced_call_go_into_the_body() -> None:
+    fake = FakeGigaChat()
+    llm = make(fake)
+
+    llm.chat(
+        USER,
+        model="GigaChat-2-Pro",
+        temperature=1e-4,
+        max_tokens=300,
+        functions=[SEARCH],
+        function_call={"name": "search_recipes"},
+    )
+
+    body = fake.chat_bodies()[0]
+    assert body["functions"] == [SEARCH]
+    assert body["function_call"] == {"name": "search_recipes"}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"query": "курица без лука"}, '{"query": "курица без лука"}'],
+    ids=["object", "json-string"],
+)
+def test_function_call_is_parsed(arguments: object) -> None:
+    """В документации аргументы то объект, то строка JSON: принимаем оба."""
+    fake = FakeGigaChat(finish_reason="function_call", message=call_reply(arguments))
+
+    completion = chat(make(fake))
+
+    assert completion.finish_reason == "function_call"
+    assert completion.content == ""
+    assert completion.function_call == {
+        "name": "search_recipes",
+        "arguments": {"query": "курица без лука"},
+    }
+    assert completion.functions_state_id == STATE_ID
+
+
+@pytest.mark.parametrize("arguments", ["{не json", '["список"]'])
+def test_broken_arguments_are_an_error(arguments: str) -> None:
+    fake = FakeGigaChat(finish_reason="function_call", message=call_reply(arguments))
+
+    with pytest.raises(LlmError, match="search_recipes"):
+        chat(make(fake))
+
+
+def test_function_result_goes_back_after_the_call_and_is_masked() -> None:
+    """История: вопрос → вызов модели → результат функции. ПДн маскируются
+    и в аргументах прошлого вызова, и в результате функции."""
+    called = Completion(
+        content="",
+        finish_reason="function_call",
+        model="GigaChat-2-Pro",
+        usage=Usage(10, 5, 0, 15),
+        function_call={
+            "name": "search_recipes",
+            "arguments": {"query": "торт", "notes": ["пишите на ivan@example.com"]},
+        },
+        functions_state_id=STATE_ID,
+    )
+    fake = FakeGigaChat()
+    llm = make(fake)
+
+    chat(
+        llm,
+        [
+            *USER,
+            call_message(called),
+            function_result(
+                "search_recipes", {"recipes": ["Торт, тел. +7 912 345-67-89"]}
+            ),
+        ],
+    )
+
+    sent = fake.chats[0].content.decode()
+    assert "ivan@example.com" not in sent and "345-67-89" not in sent
+    assistant, result = fake.chat_bodies()[0]["messages"][1:]
+    assert assistant["content"] == ""
+    assert assistant["functions_state_id"] == STATE_ID
+    assert assistant["function_call"]["name"] == "search_recipes"
+    assert assistant["function_call"]["arguments"]["query"] == "торт"
+    assert result["role"] == "function"
+    assert result["name"] == "search_recipes"
+    assert json.loads(result["content"]) == {"recipes": ["Торт, тел. [PHONE]"]}
+    assert llm.stats.masked == {"EMAIL": 1, "PHONE": 1}
+
+
+def test_call_message_needs_a_function_call() -> None:
+    plain = Completion("текст", "stop", "GigaChat-2-Pro", Usage(1, 1, 0, 2))
+
+    with pytest.raises(ValueError):
+        call_message(plain)
 
 
 def test_requests_go_one_at_a_time() -> None:

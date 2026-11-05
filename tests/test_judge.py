@@ -5,7 +5,13 @@ from typing import Any
 from eval_helpers import CHUNK, RUN, SOURCES, case
 
 from assistant.generation.answer import assemble
-from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
+from assistant.generation.gigachat import (
+    Completion,
+    FunctionCallMode,
+    LlmStats,
+    Message,
+    Usage,
+)
 from assistant.retrieval.store import Hit
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
@@ -42,6 +48,8 @@ class FakeJudgeLlm:
         temperature: float,
         max_tokens: int,
         response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
     ) -> Completion:
         assert model == JUDGE_MODEL
         assert temperature > 0
