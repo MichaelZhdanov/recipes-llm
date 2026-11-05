@@ -43,7 +43,9 @@ import re
 import shlex
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -51,17 +53,16 @@ from typing import Any
 import httpx2
 from qdrant_client import QdrantClient
 
-from assistant.config import AnswerMode, Settings
+from assistant.config import AnswerMode, LlmProvider, Settings
 from assistant.generation import llm as assistant_llm
 from assistant.generation.answer import Answerer, assemble
 from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
+    ChatModel,
     Completion,
     LlmStats,
     Usage,
-    make_http_client,
-    make_llm,
 )
 from assistant.indexing.build import pick_sample
 from assistant.indexing.chunks import Chunk
@@ -91,7 +92,7 @@ from evals.dataset import (
     load_clarity_canaries,
     load_relevance_canaries,
 )
-from evals.judge import Judge, Judging, run_judge
+from evals.judge import JUDGE_MODELS, Judge, Judging, run_judge
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.relevance import Relevance, RelevanceJudge, judge_relevance
 from evals.report import (
@@ -140,6 +141,21 @@ ANSWER_CATEGORIES = frozenset(
     }
 )
 REPORTS_DIR = Path(__file__).parent / "reports"
+
+
+@dataclass(frozen=True)
+class JudgeChoice:
+    """Какая модель судит: `--judge-provider` и `--judge-model`."""
+
+    provider: LlmProvider = "gigachat"
+    model: str = ""
+
+    @property
+    def model_name(self) -> str:
+        return self.model or JUDGE_MODELS[self.provider]
+
+
+DEFAULT_JUDGE = JudgeChoice()
 
 
 def raw_records(
@@ -412,6 +428,7 @@ def _retrieval_stage(
     judge: bool = True,
     quantization: bool = True,
     filters: bool = True,
+    judge_choice: JudgeChoice = DEFAULT_JUDGE,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
@@ -467,7 +484,7 @@ def _retrieval_stage(
             )
     relevance = None
     if judge and any(r.case.category == "semantic" for r in results):
-        relevance = _judge_relevance(settings, results)
+        relevance = _judge_relevance(settings, results, judge_choice)
 
     today = date.today()
     report = render_report(
@@ -496,27 +513,41 @@ def _retrieval_stage(
     return 1 if failed else 0
 
 
-def _judge_relevance(settings: Settings, results: Sequence[CaseResult]) -> Relevance:
-    """Судья оценивает выдачу по вопросам «по смыслу». Ключ GigaChat нужен только здесь."""
+@contextmanager
+def _judge_llm(settings: Settings, choice: JudgeChoice) -> Iterator[ChatModel]:
+    """Свой клиент и свой экземпляр модели: токены судьи считаются отдельно от
+    ассистента, а у GigaChat свой TLS-корень. Тот же выбор провайдера, что
+    у ассистента, но со своим провайдером и без LLM_EFFORT ассистента."""
+    judge_settings = settings.model_copy(
+        update={"llm_provider": choice.provider, "llm_effort": ""}
+    )
+    with assistant_llm.make_http_client(judge_settings) as http:
+        yield assistant_llm.make_chat_model(judge_settings, http)
+
+
+def _judge_relevance(
+    settings: Settings, results: Sequence[CaseResult], choice: JudgeChoice
+) -> Relevance:
+    """Судья оценивает выдачу по вопросам «по смыслу»."""
     canaries = load_relevance_canaries() if RELEVANCE_CANARIES_FILE.exists() else []
-    with make_http_client() as http:
-        judge = RelevanceJudge(make_llm(settings, http))
+    with _judge_llm(settings, choice) as llm:
+        judge = RelevanceJudge(llm, model=choice.model_name)
         _log(f"судья {judge.model}: выдача по смыслу и {len(canaries)} канареек")
         return judge_relevance(results, judge, canaries)
 
 
 def _judge(
-    settings: Settings, http: httpx2.Client, results: Sequence[AnswerCase]
+    settings: Settings, results: Sequence[AnswerCase], choice: JudgeChoice
 ) -> Judging:
-    # Свой экземпляр клиента: токены судьи считаются отдельно от токенов ассистента.
-    judge = Judge(make_llm(settings, http))
-    _log(
-        f"судья {judge.model}: {sum(len(r.runs) for r in results)} ответов и канарейки"
-    )
-    # Канарейки пишутся вместе с промптом судьи: пока их нет, судья работает без них.
-    canaries = load_canaries() if CANARIES_FILE.exists() else []
-    clarity = load_clarity_canaries() if CLARITY_CANARIES_FILE.exists() else []
-    return run_judge(results, judge, canaries, clarity)
+    with _judge_llm(settings, choice) as llm:
+        judge = Judge(llm, model=choice.model_name)
+        _log(
+            f"судья {judge.model}: {sum(len(r.runs) for r in results)} ответов и канарейки"
+        )
+        # Канарейки пишутся вместе с промптом судьи: пока их нет, судья работает без них.
+        canaries = load_canaries() if CANARIES_FILE.exists() else []
+        clarity = load_clarity_canaries() if CLARITY_CANARIES_FILE.exists() else []
+        return run_judge(results, judge, canaries, clarity)
 
 
 def _finish(
@@ -552,6 +583,7 @@ def _answer_stage(
     resume: Path | None = None,
     command: Sequence[str] = (),
     mode: AnswerMode | None = None,
+    judge_choice: JudgeChoice = DEFAULT_JUDGE,
 ) -> int:
     revision = git_revision()
     mode = mode or settings.answer_mode
@@ -597,13 +629,7 @@ def _answer_stage(
 
         try:
             results = run_answers(cases, answerer, runs=runs, done=done, on_case=save)
-            # Судья — всегда GigaChat со своим клиентом (корень Минцифры),
-            # даже когда ассистент на Claude.
-            if judge:
-                with make_http_client() as judge_http:
-                    judging = _judge(settings, judge_http, results)
-            else:
-                judging = None
+            judging = _judge(settings, results, judge_choice) if judge else None
         except BaseException:
             # Готовые кейсы уже в журнале: подсказываем, как продолжить, и падаем как раньше.
             args = shlex.join(
@@ -689,17 +715,20 @@ def rescore_label(raw_path: Path) -> str:
     return f"{stem}-rescore" if stem else "rescore"
 
 
-def _rescore(settings: Settings, raw_path: Path, label: str | None, judge: bool) -> int:
+def _rescore(
+    settings: Settings,
+    raw_path: Path,
+    label: str | None,
+    judge: bool,
+    judge_choice: JudgeChoice = DEFAULT_JUDGE,
+) -> int:
     """Метрики заново по сохранённым ответам модели: без генерации, ссылки — текущим кодом."""
     revision = git_revision()
     data = json.loads(raw_path.read_text(encoding="utf-8"))
     cases = {c.id: c for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
     results = load_answer_cases(data["records"], cases)
     meta = load_meta(data["meta"], revision=revision, rescored_from=str(raw_path))
-    judging = None
-    if judge:
-        with make_http_client() as llm_http:
-            judging = _judge(settings, llm_http, results)
+    judging = _judge(settings, results, judge_choice) if judge else None
     return _finish(results, meta, judging, label or rescore_label(raw_path))
 
 
@@ -748,6 +777,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="STAGE=retrieval: искать по точным векторам, не используя сжатые (замер цены int8)",
     )
     parser.add_argument(
+        "--judge-provider",
+        choices=("gigachat", "anthropic"),
+        default="gigachat",
+        help="кто судит: gigachat — GigaChat-3-Ultra (по умолчанию), anthropic — Claude",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default="",
+        help="модель судьи; пусто — по умолчанию провайдера",
+    )
+    parser.add_argument(
         "--mode",
         choices=("always", "auto"),
         help="ответы: always — сначала поиск; auto — модель решает (по умолчанию ANSWER_MODE)",
@@ -772,8 +812,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = Settings()
+    judge_choice = JudgeChoice(args.judge_provider, args.judge_model)
     if args.rescore:
-        return _rescore(settings, args.rescore, args.label, not args.no_judge)
+        return _rescore(
+            settings, args.rescore, args.label, not args.no_judge, judge_choice
+        )
     if args.stage == "retrieval":
         return _retrieval_stage(
             settings,
@@ -785,6 +828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             not args.no_judge,
             not args.no_quantization,
             not args.no_filters,
+            judge_choice,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(
@@ -799,6 +843,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.resume,
         list(argv) if argv is not None else sys.argv[1:],
         args.mode,
+        judge_choice,
     )
 
 

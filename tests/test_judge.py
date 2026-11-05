@@ -16,7 +16,9 @@ from assistant.retrieval.store import Hit
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
 from evals.judge import (
+    CLARITY_SCHEMA,
     JUDGE_MODEL,
+    JUDGE_SCHEMA,
     Claim,
     Judge,
     Verdict,
@@ -31,6 +33,7 @@ from evals.judge import (
     judge_results,
     must_include_judged,
 )
+from evals.relevance import RELEVANCE_SCHEMA
 from evals.run import answer_records, load_answer_cases
 
 
@@ -221,3 +224,18 @@ def test_clarity_canaries_are_scored_by_found_problems() -> None:
 
     assert marks == [False, False]
     assert clarity_canary_scores(canaries, marks) == (Rate(1, 1), Rate(0, 1))
+
+
+def test_judge_schemas_are_strict_for_claude() -> None:
+    """Судьёй может быть Claude: у каждого объекта схемы — additionalProperties false."""
+
+    def objects(schema: Any) -> list[dict[str, Any]]:
+        found = [schema] if schema.get("type") == "object" else []
+        for value in schema.get("properties", {}).values():
+            found += objects(value)
+        if "items" in schema:
+            found += objects(schema["items"])
+        return found
+
+    for schema in (JUDGE_SCHEMA, CLARITY_SCHEMA, RELEVANCE_SCHEMA):
+        assert all(o.get("additionalProperties") is False for o in objects(schema))

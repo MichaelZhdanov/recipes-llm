@@ -28,11 +28,13 @@ RELEVANCE_PROMPT = "relevance_v1"
 
 RELEVANCE_SCHEMA: dict[str, object] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "recipes": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "number": {"type": "integer"},
                     "comment": {"type": "string"},

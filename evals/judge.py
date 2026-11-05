@@ -36,6 +36,10 @@ from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
 
 JUDGE_MODEL = "GigaChat-3-Ultra"
+# Судья на выбор (`--judge-provider`): по умолчанию GigaChat-3-Ultra — модель
+# другого семейства, чем Claude, который отвечает. Claude Sonnet — для
+# сравнения судей на одних и тех же ответах (`evals/compare_judges.py`).
+JUDGE_MODELS = {"gigachat": JUDGE_MODEL, "anthropic": "claude-sonnet-5-5"}
 # На Paperless в тот же вызов, что и смысл, пробовали добавить грамотность —
 # судья её не оценивал (канарейки 1 из 8), поэтому грамотность — отдельный вызов.
 # v1 — под Paperless (документация, английские фрагменты), v2 — под рецепты.
@@ -46,11 +50,13 @@ MAX_TOKENS = 2000
 
 JUDGE_SCHEMA: dict[str, object] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "statements": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "number": {"type": "integer"},
                     "comment": {"type": "string"},
@@ -63,6 +69,7 @@ JUDGE_SCHEMA: dict[str, object] = {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "number": {"type": "integer"},
                     "present": {"type": "boolean"},
@@ -76,11 +83,13 @@ JUDGE_SCHEMA: dict[str, object] = {
 
 CLARITY_SCHEMA: dict[str, object] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "statements": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "number": {"type": "integer"},
                     "problems": {"type": "array", "items": {"type": "string"}},
