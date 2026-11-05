@@ -62,7 +62,6 @@ from assistant.generation.gigachat import (
     make_http_client,
     make_llm,
 )
-from assistant.generation.glossary import load_glossary
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
@@ -143,7 +142,6 @@ def answer_records(
                 for s in run.sources
             ],
             "checked": [dataclasses.asdict(s) for s in run.checked],
-            "term_fixes": run.term_fixes,
             "judge": (
                 dataclasses.asdict(verdicts[(r.case.id, number)])
                 if (r.case.id, number) in verdicts
@@ -221,7 +219,6 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         question_type=record["answer"].get("question_type", "general"),
         retrieval_seconds=record["retrieval_seconds"],
         generation_seconds=record["generation_seconds"],
-        glossary=load_glossary(),
     )
     return AnswerRun.from_result(result)
 

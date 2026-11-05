@@ -27,7 +27,6 @@ from evals.answer_metrics import (
     per_run,
     routed_as_error,
     statement_coverage,
-    term_fixes,
 )
 from evals.dataset import Case
 from evals.report import RunMeta, answer_gates, render_answer_report
@@ -308,15 +307,6 @@ def test_holdout_report_says_so() -> None:
     )
 
     assert "**отложенной выборке**" in report
-
-
-def test_term_fixes_are_counted() -> None:
-    fixed = dataclasses.replace(
-        run(None), term_fixes=[("объёме", "томе"), ("объёма", "тома")]
-    )
-    results = [AnswerCase(case("howto-001"), [fixed, run(None)])]
-
-    assert term_fixes(results) == {"объёме → томе": 1, "объёма → тома": 1}
 
 
 def code_source(start: int, end: int) -> SourceText:

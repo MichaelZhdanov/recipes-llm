@@ -18,7 +18,7 @@
 import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Literal
@@ -42,13 +42,6 @@ from assistant.generation.gigachat import (
     llm_model,
     make_llm,
 )
-from assistant.generation.glossary import (
-    Term,
-    fix_terms,
-    load_glossary,
-    render_terms,
-    terms_in,
-)
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
@@ -57,12 +50,7 @@ from assistant.router import QuestionType, route
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-# answer_v1 — основной. v2 и v3 добавляли в промпт блок «Термины» из глоссария,
-# но модель с ним хуже цитировала (0.93 → 0.87 и 0.84 на одних и тех же кейсах).
-# Поэтому известные неверные переводы исправляет код после проверки ссылок
-# (fix_terms), а блок терминов идёт только в промпты, которые его ждут.
 PROMPT_VERSION = "answer_v1"
-PROMPTS_WITH_TERMS = frozenset({"answer_v2", "answer_v3"})
 # Разбор ошибки (этап 3): включается, когда точный поиск нашёл текст ошибки в коде.
 ERROR_PROMPT_VERSION = "error_v1"
 K = 5
@@ -138,8 +126,6 @@ class Trace:
     checked: list[CheckedStatement]
     retrieval_seconds: float
     generation_seconds: float
-    # Исправленные кодом неверные переводы терминов: («объёма», «тома»).
-    term_fixes: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -189,22 +175,16 @@ def user_message(
     question: str,
     sources: Sequence[SourceText],
     ref: str,
-    glossary: Sequence[Term] = (),
     error_lines: Sequence[str] = (),
 ) -> str:
-    """Источники, термины из них (если есть в глоссарии), подсказка о месте ошибки и вопрос."""
+    """Источники, подсказка о месте ошибки и вопрос."""
     blocks = [
         f'<source id="{s.number}" path="{s.chunk.path}" '
         f'lines="{s.chunk.start_line}-{s.chunk.end_line}" '
         f'title="{_attribute(s.chunk.breadcrumb)}">\n{s.text}\n</source>'
         for s in sources
     ]
-    # Термины — до источников: модель читает их раньше, чем начинает переводить.
-    parts = []
-    terms = terms_in((s.text for s in sources), glossary)
-    if terms:
-        parts.append("Термины (переводи только так):\n" + render_terms(terms))
-    parts += [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
+    parts = [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
     if error_lines:
         # Подсказка, где совпал текст ошибки. Цитату из этого куска модель всё равно
         # должна привести сама: проверка ссылок та же.
@@ -235,17 +215,11 @@ def _link(number: int, chunk: Chunk, start: int, end: int) -> SourceLink:
 def build_statements(
     checked: Sequence[CheckedStatement],
     sources: Sequence[SourceText],
-    glossary: Sequence[Term] = (),
-) -> tuple[list[AnswerStatement], list[SourceLink], list[tuple[str, str]]]:
+) -> tuple[list[AnswerStatement], list[SourceLink]]:
     """Оставляет подтверждённые утверждения и собирает список источников.
 
     Один процитированный кусок — один источник в ответе. Его строки — от первой
     до последней подтверждённой цитаты из него. Номера идут по первому упоминанию.
-
-    Известные неверные переводы терминов исправляются уже после проверки
-    ссылок, и только для терминов из процитированных кусков: «объём»
-    в ответе про Docker volume — ошибка, в ответе про размер диска — нет.
-    Цитаты и имена в обратных кавычках не меняются.
     """
     kept = [s for s in checked if s.kept]
     spans: dict[int, tuple[int, int]] = {}
@@ -262,18 +236,15 @@ def build_statements(
         _link(order[source], chunks[source], first, last)
         for source, (first, last) in spans.items()
     ]
-    texts = {s.number: s.text for s in sources}
     statements = []
-    fixes: list[tuple[str, str]] = []
     for statement in kept:
         cited = list(dict.fromkeys(c.source for c in statement.citations if c.valid))
-        terms = terms_in((texts[number] for number in cited), glossary)
-        text, fixed = fix_terms(statement.text, terms)
-        fixes += fixed
         statements.append(
-            AnswerStatement(text=text, sources=[order[number] for number in cited])
+            AnswerStatement(
+                text=statement.text, sources=[order[number] for number in cited]
+            )
         )
-    return statements, links, fixes
+    return statements, links
 
 
 def suggestions(hits: Sequence[Hit], limit: int = SUGGESTIONS) -> list[SourceLink]:
@@ -308,7 +279,6 @@ def assemble(
     ref: str,
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
-    glossary: Sequence[Term] = (),
     question_type: QuestionType = "general",
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
@@ -317,9 +287,8 @@ def assemble(
         reason: Reason | None = "no_sources"
     else:
         checked, reason = check_completion(completion, sources)
-    fixes: list[tuple[str, str]] = []
     if reason is None:
-        statements, links, fixes = build_statements(checked, sources, glossary)
+        statements, links = build_statements(checked, sources)
     else:
         statements, links = [], suggestions(hits)
     answer = Answer(
@@ -339,7 +308,6 @@ def assemble(
         checked=checked,
         retrieval_seconds=retrieval_seconds,
         generation_seconds=generation_seconds,
-        term_fixes=fixes,
     )
     return AnswerResult(answer=answer, trace=trace)
 
@@ -354,7 +322,6 @@ class Answerer:
         ref: str,
         prompt_version: str = PROMPT_VERSION,
         k: int = K,
-        glossary: Sequence[Term] | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.model = model
@@ -363,7 +330,6 @@ class Answerer:
         self._llm = llm
         self._ref = ref
         self._k = k
-        self._glossary = load_glossary() if glossary is None else glossary
         self._clock = clock
 
     def answer(self, question: str) -> AnswerResult:
@@ -391,9 +357,6 @@ class Answerer:
                             question,
                             sources,
                             self._ref,
-                            self._glossary
-                            if prompt_version in PROMPTS_WITH_TERMS
-                            else (),
                             error_lines,
                         ),
                     },
@@ -415,7 +378,6 @@ class Answerer:
             ref=self._ref,
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
-            glossary=self._glossary,
             question_type=question_type,
         )
 

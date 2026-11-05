@@ -6,7 +6,6 @@ from eval_helpers import CHUNK, RUN, SOURCES, case
 
 from assistant.generation.answer import assemble
 from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
-from assistant.generation.glossary import parse_glossary
 from assistant.retrieval.store import Hit
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
@@ -189,26 +188,6 @@ def test_refusal_means_facts_absent_without_calling_judge() -> None:
     assert groundedness(verdicts) == Rate(2, 2)
     assert clarity(verdicts) == Rate(2, 2)
     assert must_include_judged(verdicts) == Rate(1, 2)
-
-
-def test_clarity_sees_glossary_terms_from_fragments() -> None:
-    glossary = parse_glossary(
-        "volume\tтом\t-\tтом Docker, не «объём»\nimage\tобраз\t-\t\n"
-    )
-    llm = FakeJudgeLlm([clarity_reply(["Docker-объём — том"])])
-    claim = Claim(
-        "Документы лежат в Docker-объёме.",
-        ["docs/faq.md:19-19\nstored inside the docker volume"],
-    )
-
-    clear, problems = Judge(llm, glossary=glossary).clarity([claim])
-
-    message = llm.calls[0][1]["content"]
-    assert message.startswith("Термины (как их нужно переводить):\n- volume — том")
-    # «image» во фрагменте нет — и в блоке его нет.
-    assert "образ" not in message
-    assert clear == [False]
-    assert problems == [["Docker-объём — том"]]
 
 
 def test_support_canaries_skip_the_clarity_call() -> None:

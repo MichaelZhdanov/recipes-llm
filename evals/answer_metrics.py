@@ -23,7 +23,7 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from assistant.generation.answer import Answer, AnswerResult
 from assistant.generation.citations import (
@@ -92,8 +92,6 @@ class AnswerRun:
     finish_reason: str | None
     # Сырой ответ модели: для пересчёта и разбора.
     content: str
-    # Неверные переводы терминов, исправленные кодом.
-    term_fixes: list[tuple[str, str]] = field(default_factory=list)
 
     @classmethod
     def from_result(cls, result: AnswerResult) -> AnswerRun:
@@ -109,7 +107,6 @@ class AnswerRun:
             usage=completion.usage if completion else None,
             finish_reason=completion.finish_reason if completion else None,
             content=completion.content if completion else "",
-            term_fixes=trace.term_fixes,
         )
 
     @property
@@ -293,15 +290,6 @@ def top1_scores(
     results: Sequence[AnswerCase], categories: Iterable[str]
 ) -> list[float]:
     return [run.top[0][1] for run in _runs(results, categories) if run.top]
-
-
-def term_fixes(results: Sequence[AnswerCase]) -> Counter[str]:
-    """Сколько раз код исправил неверный перевод термина: «объёма → тома»."""
-    return Counter(
-        f"{wrong} → {fixed}"
-        for run in _runs(results, {r.case.category for r in results})
-        for wrong, fixed in run.term_fixes
-    )
 
 
 def cost_rub(model: str, tokens: int) -> float | None:

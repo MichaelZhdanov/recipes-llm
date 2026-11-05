@@ -32,7 +32,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel, LlmStats
-from assistant.generation.glossary import Term, load_glossary, render_terms, terms_in
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
 
@@ -193,14 +192,9 @@ def judge_message(question: str, claims: Sequence[Claim], facts: Sequence[str]) 
     return "\n".join(parts)
 
 
-def clarity_message(claims: Sequence[Claim], terms: Sequence[Term]) -> str:
-    """Утверждения с фрагментами (для смысла терминов) и тот же блок «Термины», что видел ассистент."""
-    parts = []
-    if terms:
-        parts += ["Термины (как их нужно переводить):", render_terms(terms), ""]
-    parts.append("Утверждения:")
-    parts += _statements(claims)
-    return "\n".join(parts)
+def clarity_message(claims: Sequence[Claim]) -> str:
+    """Утверждения с фрагментами: по ним судья видит, в каком смысле употреблено слово."""
+    return "\n".join(["Утверждения:", *_statements(claims)])
 
 
 class Judge:
@@ -211,10 +205,8 @@ class Judge:
         model: str = JUDGE_MODEL,
         prompt_version: str = JUDGE_PROMPT,
         clarity_version: str = CLARITY_PROMPT,
-        glossary: Sequence[Term] | None = None,
     ) -> None:
         self.llm = llm
-        self._glossary = load_glossary() if glossary is None else glossary
         self.model = model
         self.prompt_version = prompt_version
         self._prompt = (PROMPTS_DIR / f"{prompt_version}.md").read_text(
@@ -282,10 +274,8 @@ class Judge:
         """Грамотность: судья перечисляет проблемы, а «грамотно» — это «проблем нет»."""
         if not claims:
             return [], []
-        # Термины ищутся во фрагментах: это слова, которые ассистент переводил.
-        terms = terms_in((f for c in claims for f in c.fragments), self._glossary)
         content = self._ask(
-            self._clarity_prompt, clarity_message(claims, terms), CLARITY_SCHEMA
+            self._clarity_prompt, clarity_message(claims), CLARITY_SCHEMA
         )
         try:
             parsed = _ClarityAnswer.model_validate_json(content)
