@@ -2,12 +2,12 @@
 
     printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' "$login" "$password" | python scripts/set_env.py .env
 
-Деплой из GitHub Actions передаёт логин и пароль входа через stdin ssh,
-а не аргументами: аргументы команды видит любой пользователь сервера
-в списке процессов (ps), stdin — нет.
+Деплой из GitHub Actions передаёт логин и пароль входа и ключи API через
+stdin ssh, а не аргументами: аргументы команды видит любой пользователь
+сервера в списке процессов (ps), stdin — нет.
 
-Принимаются только ключи из ALLOWED: деплой не может переписать, например,
-ключ GigaChat или секрет Paperless, они живут только в .env на сервере.
+Принимаются ключи из ALLOWED — то, что задаётся в секретах GitHub.
+Секреты demo-Paperless генерирует bootstrap на сервере, деплой их не трогает.
 
 Значение пишется в одинарных кавычках: так Docker Compose и uv берут его
 буквально, и `$` или `#` в пароле не станут подстановкой или комментарием.
@@ -20,7 +20,9 @@ from pathlib import Path
 
 from init_env import write_private
 
-ALLOWED = frozenset({"WEB_LOGIN", "WEB_PASSWORD"})
+ALLOWED = frozenset(
+    {"WEB_LOGIN", "WEB_PASSWORD", "CLOUD_RU_API_KEY", "GIGACHAT_API_KEY"}
+)
 
 
 class EnvValueError(ValueError):

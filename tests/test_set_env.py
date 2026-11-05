@@ -24,8 +24,7 @@ def test_missing_key_is_appended() -> None:
 @pytest.mark.parametrize(
     "line",
     [
-        # Деплой не может переписать ключи API или секреты Paperless.
-        "GIGACHAT_API_KEY=stolen",
+        # Секреты demo-Paperless живут только на сервере.
         "PAPERLESS_SECRET_KEY=x",
         "WEB_PASSWORD=",
         "WEB_PASSWORD=it's",
@@ -60,8 +59,17 @@ def test_main_rejects_bad_input_and_leaves_env(
 ) -> None:
     target = tmp_path / ".env"
     target.write_text(ENV, encoding="utf-8")
-    monkeypatch.setattr("sys.stdin", io.StringIO("GIGACHAT_API_KEY=stolen\n"))
+    monkeypatch.setattr("sys.stdin", io.StringIO("PAPERLESS_SECRET_KEY=x\n"))
 
     assert main([str(target)]) == 2
 
     assert target.read_text(encoding="utf-8") == ENV
+
+
+def test_api_keys_from_github_replace_the_ones_on_the_server() -> None:
+    values = parse_values("CLOUD_RU_API_KEY=new-cloud\nGIGACHAT_API_KEY=bmV3LWdpZ2E=\n")
+
+    assert set_values(ENV, values) == (
+        "# комментарий\nGIGACHAT_API_KEY='bmV3LWdpZ2E='\nWEB_LOGIN=admin\n"
+        "WEB_PASSWORD=old\nCLOUD_RU_API_KEY='new-cloud'\n"
+    )
