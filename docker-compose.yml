@@ -5,39 +5,6 @@
 name: recipes-llm
 
 services:
-  # Очередь задач Paperless (Celery). Valkey — открытый форк Redis,
-  # тот же образ, что в официальном compose Paperless.
-  broker:
-    image: docker.io/valkey/valkey:9-alpine
-    restart: unless-stopped
-    volumes:
-      - broker-data:/data
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  paperless:
-    # Версия образа совпадает с PAPERLESS_REF, по которому строится индекс.
-    image: ghcr.io/paperless-ngx/paperless-ngx:3.4.2
-    restart: unless-stopped
-    depends_on:
-      broker:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8000:8000"
-    volumes:
-      - paperless-data:/usr/src/paperless/data
-      - paperless-media:/usr/src/paperless/media
-    environment:
-      PAPERLESS_REDIS: redis://broker:6379
-      PAPERLESS_DBENGINE: sqlite
-      PAPERLESS_SECRET_KEY: "${PAPERLESS_SECRET_KEY:?не задан в .env, выполните make up}"
-      PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
-      PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD:?не задан в .env, выполните make up}"
-    # healthcheck задан в самом образе Paperless (curl на localhost:8000).
-
   qdrant:
     image: docker.io/qdrant/qdrant:v1.20.0
     restart: unless-stopped
@@ -64,7 +31,6 @@ services:
       # (ASSISTANT_PORT), если 8080 занят.
       - "127.0.0.1:${ASSISTANT_PORT:-8080}:8080"
     # Все поля assistant/config.py. Пустое значение означает значение по умолчанию из config.py.
-    # Секрета Paperless и пароля администратора здесь нет: ассистенту они не нужны.
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_MODEL: ${LLM_MODEL:-}
@@ -78,18 +44,13 @@ services:
       CLOUD_RU_API_URL: ${CLOUD_RU_API_URL:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       VOYAGE_API_URL: ${VOYAGE_API_URL:-}
-      # Адреса внутри docker-сети: единственные переменные ассистента не из .env.
+      # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
       QDRANT_URL: http://qdrant:6333
       PAPERLESS_REF: ${PAPERLESS_REF:-}
-      PAPERLESS_API_URL: http://paperless:8000
-      PAPERLESS_TOKEN: ${PAPERLESS_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
       ENGINEER_TELEGRAM_IDS: ${ENGINEER_TELEGRAM_IDS:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
 
 volumes:
-  broker-data:
-  paperless-data:
-  paperless-media:
   qdrant-data:

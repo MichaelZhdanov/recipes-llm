@@ -26,8 +26,8 @@ def test_missing_key_is_appended() -> None:
 @pytest.mark.parametrize(
     "line",
     [
-        # Секреты demo-Paperless живут только на сервере.
-        "PAPERLESS_SECRET_KEY=x",
+        # Остальные настройки деплой не меняет.
+        "LOG_LEVEL=DEBUG",
         # Пароля входа на сайт больше нет: такой ключ — опечатка.
         "WEB_PASSWORD=x",
         "GIGACHAT_API_KEY=",
@@ -63,7 +63,7 @@ def test_main_rejects_bad_input_and_leaves_env(
 ) -> None:
     target = tmp_path / ".env"
     target.write_text(ENV, encoding="utf-8")
-    monkeypatch.setattr("sys.stdin", io.StringIO("PAPERLESS_SECRET_KEY=x\n"))
+    monkeypatch.setattr("sys.stdin", io.StringIO("LOG_LEVEL=DEBUG\n"))
 
     assert main([str(target)]) == 2
 

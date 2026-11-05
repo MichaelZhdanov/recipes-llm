@@ -11,7 +11,6 @@ def test_defaults_without_environment() -> None:
     assert settings.llm_model == ""
     assert settings.gigachat_scope == "GIGACHAT_API_PERS"
     assert settings.paperless_ref == "v3.4.2"
-    assert settings.paperless_api_url == "http://localhost:8000"
     assert settings.qdrant_url == "http://localhost:6333"
     assert settings.embedding_provider == "cloudru"
     # Пустая модель: берётся модель провайдера по умолчанию.
@@ -70,7 +69,7 @@ def test_unknown_llm_provider_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.parametrize(
-    "env_name", ["GIGACHAT_API_KEY", "PAPERLESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    "env_name", ["GIGACHAT_API_KEY", "CLOUD_RU_API_KEY", "TELEGRAM_BOT_TOKEN"]
 )
 def test_secrets_are_hidden_in_repr_and_dumps(
     monkeypatch: pytest.MonkeyPatch, env_name: str

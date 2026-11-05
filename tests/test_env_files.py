@@ -2,7 +2,7 @@
 
 Источник правды — поля `Settings`. Каждое поле должно быть в `.env.example`
 и в `environment` сервиса assistant в `docker-compose.yml`. Секреты в
-`.env.example` пустые, а секреты demo-Paperless ассистенту не передаются.
+`.env.example` пустые.
 """
 
 from pathlib import Path
@@ -15,15 +15,9 @@ from assistant.config import Settings
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Переменные самого Paperless: ассистенту они не нужны и не должны к нему попадать.
-PAPERLESS_ONLY_SECRETS = {"PAPERLESS_SECRET_KEY", "PAPERLESS_ADMIN_PASSWORD"}
-
 # Адреса внутри docker-сети. В .env лежат адреса для запуска с хоста (localhost),
 # поэтому контейнеру ассистента compose задаёт эти значения сам.
-CONTAINER_OVERRIDES = {
-    "QDRANT_URL": "http://qdrant:6333",
-    "PAPERLESS_API_URL": "http://paperless:8000",
-}
+CONTAINER_OVERRIDES = {"QDRANT_URL": "http://qdrant:6333"}
 
 
 def load_compose() -> dict[str, Any]:
@@ -77,12 +71,6 @@ def test_assistant_gets_exactly_its_settings_in_compose() -> None:
         # Пустое значение по умолчанию: тогда Settings берёт своё значение по умолчанию.
         expected = CONTAINER_OVERRIDES.get(name, f"${{{name}:-}}")
         assert value == expected, name
-
-
-def test_assistant_does_not_receive_paperless_secrets() -> None:
-    environment = load_compose()["services"]["assistant"]["environment"]
-
-    assert not PAPERLESS_ONLY_SECRETS & set(environment)
 
 
 def test_no_service_loads_whole_env_file() -> None:
