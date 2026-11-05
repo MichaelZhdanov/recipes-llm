@@ -23,8 +23,10 @@ from evals.answer_metrics import (
     AnswerCase,
     AnswerRun,
     abstention,
+    chat_handled,
     citation_accuracy,
     cost_rub,
+    cost_usd,
     false_refusal,
     filtered_out_share,
     language,
@@ -34,6 +36,7 @@ from evals.answer_metrics import (
     outcomes,
     per_run,
     statement_coverage,
+    tool_correctness,
     top1_scores,
 )
 from evals.judge import (
@@ -429,6 +432,7 @@ def report_path(directory: Path, today: date, label: str | None) -> Path:
 # --- Этап 2: ответы со ссылками ---
 
 ANSWER_THRESHOLDS = {
+    "tool_correctness": 0.90,
     "citation_accuracy": 0.90,
     "abstention": 0.90,
     # Не больше: доля отказов на вопросах из области.
@@ -442,6 +446,8 @@ def answer_gates(
 ) -> dict[str, bool]:
     """Метрики с порогом и прошли ли они его: по ним считается код выхода."""
     gates: dict[str, bool] = {}
+    if (tools := tool_correctness(results)).n:
+        gates["tool_correctness"] = tools.value >= ANSWER_THRESHOLDS["tool_correctness"]
     gates["citation_accuracy"] = (
         citation_accuracy(results).value >= ANSWER_THRESHOLDS["citation_accuracy"]
     )
@@ -476,6 +482,9 @@ class RunMeta:
     split: str = "dev"
     # Быстрый прогон на части кейсов: «8 из 32, сид …»; None — все кейсы.
     sample: str | None = None
+    # always — сначала поиск; auto — модель решает (решение 7).
+    mode: str = "always"
+    llm_provider: str = "gigachat"
 
 
 def _spread(values: Sequence[float]) -> str:
@@ -522,6 +531,11 @@ def _prompts_cell(runs: Sequence[AnswerRun], default: str) -> str:
     return ", ".join(f"{name} — {n}" for name, n in sorted(used.items()))
 
 
+_MODES = {
+    "always": "always — «всегда ищем»: разбор вопроса, поиск, ответ",
+    "auto": "auto — «модель решает»: модель сама вызывает search_recipes",
+}
+
 # Группы для таблиц исходов и score: только те, где есть кейсы.
 _GROUPS = (
     ("вопросы из области", IN_SCOPE),
@@ -542,6 +556,8 @@ def render_answer_report(
     api_models = sorted({run.answer.model for run in runs if run.answer.model})
     categories = Counter(r.case.category for r in results)
     cost = cost_rub(api_models[0] if api_models else llm_model, llm_stats.total_tokens)
+    dollars = cost_usd(api_models[0] if api_models else llm_model, llm_stats)
+    tools = tool_correctness(results)
     accuracy = citation_accuracy(results)
     abstain = abstention(results)
     refusal = false_refusal(results)
@@ -567,7 +583,12 @@ def render_answer_report(
         f"| Инструкция к вопросу | {_instruction_cell(meta.query_template)} |",
         f"| Индекс | {_index_cell(manifest)} |",
         f"| LLM | {llm_model}; по ответам API: {', '.join(api_models) or '—'} |",
-        f"| Температура | {meta.temperature} (GigaChat не принимает 0) |",
+        f"| Режим | {_MODES.get(meta.mode, meta.mode)} |",
+        (
+            "| Температура | не задаётся: API Anthropic на версии 2026-10-21 её не принимает |"
+            if meta.llm_provider == "anthropic"
+            else f"| Температура | {meta.temperature} (GigaChat не принимает 0) |"
+        ),
         f"| Промпт | {_prompts_cell(runs, meta.prompt_version)} |",
         f"| Судья | {f'{judging.model}, рубрика `{judging.prompt_version}`' if judging else 'не запускался'} |",
         *_sample_row(meta.sample),
@@ -580,6 +601,15 @@ def render_answer_report(
         "",
         "| Метрика | Значение | Порог | Статус |",
         "|---|---|---|---|",
+        *(
+            [
+                f"| tool correctness: искал, где нужно, и не искал на болтовне | {tools} "
+                f"{_spread(per_run(results, tool_correctness))} | "
+                f"≥ {ANSWER_THRESHOLDS['tool_correctness']:.2f} | {_status(gates['tool_correctness'])} |"
+            ]
+            if "tool_correctness" in gates
+            else []
+        ),
         f"| citation accuracy | {accuracy} {_spread(per_run(results, citation_accuracy))} | "
         f"≥ {ANSWER_THRESHOLDS['citation_accuracy']:.2f} | {_status(gates['citation_accuracy'])} |",
         *(
@@ -598,6 +628,7 @@ def render_answer_report(
             if "false_refusal" in gates
             else []
         ),
+        f"| болтовня: короткий ответ без утверждений (chit_chat) | {chat_handled(results)} | показать | |",
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
         f"| out_of_scope: отказ дал фильтр, а не модель | {filtered_out_share(results)} | показать | |",
@@ -610,9 +641,14 @@ def render_answer_report(
         "| показать | |",
         f"| токены LLM: промпт / ответ / из кэша | {llm_stats.prompt_tokens} / "
         f"{llm_stats.completion_tokens} / {llm_stats.precached_prompt_tokens} | показать | |",
-        f"| стоимость по платному тарифу | "
-        f"{'—' if cost is None else f'≈{cost:.2f} ₽ за прогон, ≈{cost / max(len(runs), 1):.3f} ₽ за ответ'}"
-        " (на Freemium бесплатно) | показать | |",
+        (
+            f"| стоимость (цены API Anthropic) | ≈${dollars:.3f} за прогон, "
+            f"≈${dollars / max(len(runs), 1):.5f} за ответ | показать | |"
+            if dollars is not None
+            else f"| стоимость по платному тарифу | "
+            f"{'—' if cost is None else f'≈{cost:.2f} ₽ за прогон, ≈{cost / max(len(runs), 1):.3f} ₽ за ответ'}"
+            " (на Freemium бесплатно) | показать | |"
+        ),
         f"| срабатывания маскера ПДн (эмбеддинги / LLM) | {sum(meta.embedding_stats.masked.values())} / "
         f"{sum(llm_stats.masked.values())} | — | |",
         *_judge_rows(judging),

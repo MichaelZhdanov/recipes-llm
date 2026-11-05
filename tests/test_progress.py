@@ -33,7 +33,7 @@ class FlakyAnswerer:
         self.fail_on = fail_on
         self.asked: list[str] = []
 
-    def answer(self, question: str) -> AnswerResult:
+    def answer(self, question: str, history: object = ()) -> AnswerResult:
         self.asked.append(question)
         if question == self.fail_on:
             raise LlmError("GigaChat ответил HTTP 429")

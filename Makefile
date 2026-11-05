@@ -60,6 +60,7 @@ search: .env ## найти рецепты, без ответа: make search Q="�
 # SPLIT=holdout — отложенная выборка (один раз в конце). ARGS — прочие флаги evals.run,
 # например ARGS="--rescore evals/reports/raw/<отчёт>.json", ARGS=--no-judge или
 # ARGS=--no-filters (поиск только векторами, базовая линия этапа 1).
+# Ответы: ARGS="--mode auto" — режим «модель решает» (по умолчанию ANSWER_MODE).
 # Прерванный прогон продолжается с --resume: команду печатает сам прогон.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant

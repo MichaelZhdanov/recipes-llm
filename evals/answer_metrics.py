@@ -6,11 +6,16 @@
 11 из 12 — это 0.92, но интервал 0.65–0.99.
 
 Метрики и пороги — из CLAUDE.md («Метрики и пороги»):
+- tool correctness — верно ли решено, искать ли: на вопросах про рецепты
+  поиск был и с непустым запросом, на болтовне поиска не было. В режиме
+  always поиск есть всегда, поэтому болтовня там — промах по построению:
+  так режимы и сравниваются;
 - citation accuracy — доля подтверждённых цитат среди всех цитат модели
   до фильтра. Считается по ответам, где модель сказала «ответ есть»;
 - abstention — доля честных отказов на out_of_scope: модель сама не нашла
-  ответ или код отбросил все утверждения. Поломки (format_error, blacklist,
-  length) честным отказом не считаются;
+  ответ, код отбросил все утверждения или модель ответила как на болтовню
+  («я подбираю только рецепты»). Поломки (format_error, blacklist, length)
+  честным отказом не считаются;
 - false refusal — доля отказов на вопросах из области (любая причина).
 
 Остальное показывается без порога: покрытие утверждений, негативный
@@ -33,12 +38,27 @@ from assistant.generation.citations import (
     SourceText,
     check_citation,
 )
-from assistant.generation.gigachat import Usage
+from assistant.generation.gigachat import LlmStats, Usage
+from assistant.tools.search_recipes import SearchArgs
 from evals.dataset import Case
 
 # Вопросы из области: на них ассистент должен отвечать, а не отказывать.
-IN_SCOPE = frozenset({"include", "exclude", "by_name", "semantic", "follow_up"})
+IN_SCOPE = frozenset(
+    {"include", "exclude", "by_name", "semantic", "follow_up", "how_to_cook"}
+)
+# Где без поиска не ответить и где он не нужен (tool correctness). follow_up
+# и out_of_scope не считаются: там верны оба решения.
+SEARCH_NEEDED = frozenset({"include", "exclude", "by_name", "semantic", "how_to_cook"})
+NO_SEARCH = frozenset({"chit_chat"})
 HONEST_REFUSALS = frozenset({"model_not_found", "filtered_out"})
+# Цена Claude, $ за 1M токенов: вход, выход, чтение кэша (официальные цены API,
+# ноябрь 2026; кэш — 0,1 входа). Запись в кэш (1,25 входа) не учтена: она один
+# раз на прогон.
+PRICE_USD_PER_MTOK = {
+    "claude-haiku-5-5": (0.10, 0.50, 0.01),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-opus-5-5": (4.0, 20.0, 0.20),
+}
 # Цена платных тарифов GigaChat, ₽ за 1M токенов (ноябрь 2026). На Freemium
 # бесплатно, цена нужна, чтобы оценить ответ в продакшене.
 PRICE_RUB_PER_MTOK = {
@@ -93,6 +113,8 @@ class AnswerRun:
     finish_reason: str | None
     # Сырой ответ модели: для пересчёта и разбора.
     content: str
+    # Поиски: в always — один разбор, в auto — сколько модель решила (может, ноль).
+    searches: tuple[SearchArgs, ...] = ()
 
     @classmethod
     def from_result(cls, result: AnswerResult) -> AnswerRun:
@@ -108,6 +130,7 @@ class AnswerRun:
             usage=completion.usage if completion else None,
             finish_reason=completion.finish_reason if completion else None,
             content=completion.content if completion else "",
+            searches=trace.searches,
         )
 
     @property
@@ -197,7 +220,10 @@ def negative_control(results: Sequence[AnswerCase]) -> Rate:
 
 def abstention(results: Sequence[AnswerCase]) -> Rate:
     runs = _runs(results, {"out_of_scope"})
-    return Rate(sum(r.answer.reason in HONEST_REFUSALS for r in runs), len(runs))
+    honest = sum(
+        r.answer.status == "chat" or r.answer.reason in HONEST_REFUSALS for r in runs
+    )
+    return Rate(honest, len(runs))
 
 
 def filtered_out_share(results: Sequence[AnswerCase]) -> Rate:
@@ -207,8 +233,28 @@ def filtered_out_share(results: Sequence[AnswerCase]) -> Rate:
 
 
 def false_refusal(results: Sequence[AnswerCase]) -> Rate:
+    """Не ответ на вопрос из области: «не нашёл» или ответ как на болтовню."""
     runs = _runs(results, IN_SCOPE)
-    return Rate(sum(r.answer.status == "not_found" for r in runs), len(runs))
+    return Rate(sum(r.answer.status != "answer" for r in runs), len(runs))
+
+
+def searched(run: AnswerRun) -> bool:
+    return any(args.query.strip() for args in run.searches)
+
+
+def tool_correctness(results: Sequence[AnswerCase]) -> Rate:
+    """Решение «искать или нет» верно: поиск с запросом там, где нужен, и без
+    поиска на болтовне."""
+    needed = _runs(results, SEARCH_NEEDED)
+    unneeded = _runs(results, NO_SEARCH)
+    right = sum(searched(r) for r in needed) + sum(not r.searches for r in unneeded)
+    return Rate(right, len(needed) + len(unneeded))
+
+
+def chat_handled(results: Sequence[AnswerCase]) -> Rate:
+    """На болтовню — короткий ответ без утверждений о рецептах (status chat)."""
+    runs = _runs(results, NO_SEARCH)
+    return Rate(sum(r.answer.status == "chat" for r in runs), len(runs))
 
 
 def must_include_found(results: Sequence[AnswerCase]) -> Rate:
@@ -268,6 +314,19 @@ def top1_scores(
     results: Sequence[AnswerCase], categories: Iterable[str]
 ) -> list[float]:
     return [run.top[0][1] for run in _runs(results, categories) if run.top]
+
+
+def cost_usd(model: str, stats: LlmStats) -> float | None:
+    """Стоимость прогона у Claude по токенам: вход без кэша, кэш и выход по своим ценам."""
+    price = PRICE_USD_PER_MTOK.get(model)
+    if price is None:
+        return None
+    uncached = stats.prompt_tokens
+    return (
+        uncached * price[0]
+        + stats.completion_tokens * price[1]
+        + stats.precached_prompt_tokens * price[2]
+    ) / 1_000_000
 
 
 def cost_rub(model: str, tokens: int) -> float | None:

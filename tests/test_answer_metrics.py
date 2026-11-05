@@ -11,13 +11,17 @@ from assistant.generation.citations import CheckedCitation, CheckedStatement, So
 from assistant.generation.gigachat import LlmStats, Usage
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import EmbeddingStats
+from assistant.retrieval.filters import IngredientFilter
+from assistant.tools.search_recipes import SearchArgs
 from evals.answer_metrics import (
     AnswerCase,
     AnswerRun,
     Rate,
     abstention,
+    chat_handled,
     citation_accuracy,
     cost_rub,
+    cost_usd,
     cyrillic_share,
     false_refusal,
     must_include_found,
@@ -25,6 +29,7 @@ from evals.answer_metrics import (
     negative_control,
     per_run,
     statement_coverage,
+    tool_correctness,
 )
 from evals.dataset import Case
 from evals.report import RunMeta, answer_gates, render_answer_report
@@ -90,11 +95,16 @@ def statement(
     )
 
 
+SEARCH = SearchArgs("курица с рисом", IngredientFilter())
+
+
 def run(
     reason: Reason | None = None,
     checked: list[CheckedStatement] | None = None,
     text: str = "Почта забирается из IMAP.",
     top: str = "recipe/1",
+    searches: tuple[SearchArgs, ...] = (SEARCH,),
+    chat: bool = False,
 ) -> AnswerRun:
     checked = (
         checked
@@ -103,10 +113,10 @@ def run(
     )
     return AnswerRun(
         answer=Answer(
-            status="answer" if reason is None else "not_found",
+            status="chat" if chat else "answer" if reason is None else "not_found",
             reason=reason,
             statements=[AnswerStatement(text=text, sources=[1])]
-            if reason is None
+            if reason is None and not chat
             else [],
             sources=[],
             model="GigaChat-2:2.0",
@@ -121,6 +131,7 @@ def run(
         usage=Usage(1000, 100, 0, 1100),
         finish_reason="stop",
         content="{}",
+        searches=searches,
     )
 
 
@@ -245,6 +256,7 @@ def test_answer_report_and_gates() -> None:
     assert "## Ответы вне области (1)" in report
     assert "| out_of_scope-001 | out_of_scope | model_not_found, ответ |" in report
     assert answer_gates(results) == {
+        "tool_correctness": True,
         "citation_accuracy": True,
         "abstention": False,
         "false_refusal": True,
@@ -272,3 +284,41 @@ def test_holdout_report_says_so() -> None:
     )
 
     assert "**отложенной выборке**" in report
+
+
+def test_tool_correctness_needs_search_for_recipes_and_none_for_chat() -> None:
+    """Режим always ищет и на «привет» — это промах по построению."""
+    results = [
+        AnswerCase(case("by_name-001"), [run(None), run(None, searches=())]),
+        AnswerCase(
+            case("chit_chat-001", "chit_chat"),
+            [run(None, chat=True, searches=()), run(None, chat=True)],
+        ),
+        # follow_up не считается: про уже названный рецепт верны оба решения.
+        AnswerCase(case("follow_up-001", "follow_up"), [run(None, searches=())]),
+    ]
+
+    assert tool_correctness(results) == Rate(2, 4)
+    assert chat_handled(results) == Rate(2, 2)
+
+
+def test_chat_on_out_of_scope_is_an_honest_refusal_but_not_in_scope() -> None:
+    """«Я подбираю только рецепты» на «напиши код» — честный отказ;
+    на вопрос про рецепт — отказ, которого быть не должно."""
+    results = [
+        AnswerCase(case("out_of_scope-001", "out_of_scope"), [run(None, chat=True)]),
+        AnswerCase(case("include-001", "include"), [run(None, chat=True)]),
+    ]
+
+    assert abstention(results) == Rate(1, 1)
+    assert false_refusal(results) == Rate(1, 1)
+
+
+def test_claude_cost_counts_input_cache_and_output_separately() -> None:
+    stats = LlmStats(
+        prompt_tokens=10_000, completion_tokens=2_000, precached_prompt_tokens=100_000
+    )
+
+    # 10k × $0.10 + 2k × $0.50 + 100k × $0.01 за 1M = $0.003.
+    assert cost_usd("claude-haiku-5-5", stats) == pytest.approx(0.003)
+    assert cost_usd("GigaChat-2-Pro", stats) is None

@@ -51,7 +51,7 @@ from typing import Any
 import httpx2
 from qdrant_client import QdrantClient
 
-from assistant.config import Settings
+from assistant.config import AnswerMode, Settings
 from assistant.generation import llm as assistant_llm
 from assistant.generation.answer import Answerer, assemble
 from assistant.generation.citations import SourceText
@@ -72,10 +72,11 @@ from assistant.indexing.dataset import (
     read_dataset,
 )
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
+from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from assistant.tools.search_recipes import PROMPT_VERSION as SEARCH_PROMPT
-from assistant.tools.search_recipes import SearchPlanner
+from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 from evals import progress
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import (
@@ -108,6 +109,7 @@ from evals.retrieval_metrics import (
     conditions,
     filtered_search,
     has_conditions,
+    history,
     mark_available,
     run_cases,
     run_score,
@@ -124,8 +126,18 @@ SAMPLE_SEED = 20261104
 RETRIEVAL_CATEGORIES = frozenset(
     {"by_name", "include", "exclude", "semantic", "follow_up"}
 )
+# Эскалация и безопасность — этапы 5 и 7.
 ANSWER_CATEGORIES = frozenset(
-    {"include", "exclude", "by_name", "semantic", "how_to_cook", "out_of_scope"}
+    {
+        "include",
+        "exclude",
+        "by_name",
+        "semantic",
+        "how_to_cook",
+        "out_of_scope",
+        "chit_chat",
+        "follow_up",
+    }
 )
 REPORTS_DIR = Path(__file__).parent / "reports"
 
@@ -195,6 +207,7 @@ def answer_records(
                 for s in run.sources
             ],
             "checked": [dataclasses.asdict(s) for s in run.checked],
+            "searches": [dataclasses.asdict(args) for args in run.searches],
             "judge": (
                 dataclasses.asdict(verdicts[(r.case.id, number)])
                 if (r.case.id, number) in verdicts
@@ -219,6 +232,8 @@ def meta_record(meta: RunMeta) -> dict[str, object]:
         "prompt_version": meta.prompt_version,
         "split": meta.split,
         "sample": meta.sample,
+        "mode": meta.mode,
+        "llm_provider": meta.llm_provider,
     }
 
 
@@ -241,6 +256,8 @@ def load_meta(data: dict[str, Any], *, revision: str, rescored_from: str) -> Run
         prompt_version=data["prompt_version"],
         split=data.get("split", "dev"),
         sample=data.get("sample"),
+        mode=data.get("mode", "always"),
+        llm_provider=data.get("llm_provider", "gigachat"),
         rescored_from=f"{rescored_from}, прогон на {data['revision']}",
     )
 
@@ -251,9 +268,23 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         SourceText(s["number"], Chunk.model_validate(s["chunk"]), s["text"])
         for s in record["sources"]
     ]
+    # Среди источников есть и рецепты прошлых ходов: найденные — по id из топа.
+    chunks = {source.chunk.source_id: source.chunk for source in sources}
     hits = [
-        Hit(chunk=source.chunk, score=score)
-        for source, (_, score) in zip(sources, record["top"], strict=True)
+        Hit(chunk=chunks[source_id], score=score)
+        for source_id, score in record["top"]
+        if source_id in chunks
+    ]
+    searches = [
+        SearchArgs(
+            query=args["query"],
+            conditions=IngredientFilter(
+                include=tuple(tuple(g) for g in args["conditions"]["include"]),
+                exclude=tuple(args["conditions"]["exclude"]),
+            ),
+            dropped=tuple(args["dropped"]),
+        )
+        for args in record.get("searches", [])
     ]
     completion = None
     if record["finish_reason"] is not None:
@@ -271,6 +302,8 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         ref=record["answer"]["dataset_revision"],
         retrieval_seconds=record["retrieval_seconds"],
         generation_seconds=record["generation_seconds"],
+        args=searches[0] if searches else None,
+        searches=searches,
     )
     return AnswerRun.from_result(result)
 
@@ -345,7 +378,8 @@ def run_answers(
             _log(f"[{index}/{len(cases)}] {case.id}: из журнала")
             continue
         case_runs = [
-            AnswerRun.from_result(answerer.answer(case.question)) for _ in range(runs)
+            AnswerRun.from_result(answerer.answer(case.question, history(case)))
+            for _ in range(runs)
         ]
         outcome = ", ".join(run.answer.reason or "ответ" for run in case_runs)
         _log(f"[{index}/{len(cases)}] {case.id}: {outcome}")
@@ -517,8 +551,10 @@ def _answer_stage(
     categories: frozenset[str] = ANSWER_CATEGORIES,
     resume: Path | None = None,
     command: Sequence[str] = (),
+    mode: AnswerMode | None = None,
 ) -> int:
     revision = git_revision()
+    mode = mode or settings.answer_mode
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
     cases, sampled = _choose(
         [c for c in load_cases(directory) if c.category in categories],
@@ -543,9 +579,12 @@ def _answer_stage(
         if journal is None:
             return 2
         done = _resumed_cases(journal, cases)
-        answerer = Answerer(retriever, llm, model=model, ref=settings.dataset_revision)
+        answerer = Answerer(
+            retriever, llm, model=model, ref=settings.dataset_revision, mode=mode
+        )
         _log(
-            f"модель {model}, {len(cases)} кейсов × {runs} прогона, журнал {journal_file}"
+            f"модель {model}, режим {mode}, {len(cases)} кейсов × {runs} прогона, "
+            f"журнал {journal_file}"
         )
 
         def save(result: AnswerCase) -> None:
@@ -586,6 +625,8 @@ def _answer_stage(
         prompt_version=answerer.prompt_version,
         split=split,
         sample=sampled,
+        mode=mode,
+        llm_provider=settings.llm_provider,
     )
     code = _finish(results, meta, judging, label)
     # Всё из журнала теперь в raw JSON, а оставленный журнал помешал бы новому прогону.
@@ -707,6 +748,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="STAGE=retrieval: искать по точным векторам, не используя сжатые (замер цены int8)",
     )
     parser.add_argument(
+        "--mode",
+        choices=("always", "auto"),
+        help="ответы: always — сначала поиск; auto — модель решает (по умолчанию ANSWER_MODE)",
+    )
+    parser.add_argument(
         "--no-filters",
         action="store_true",
         help="STAGE=retrieval: только векторы, без разбора вопроса и фильтра (базовая линия)",
@@ -752,6 +798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.categories or ANSWER_CATEGORIES,
         args.resume,
         list(argv) if argv is not None else sys.argv[1:],
+        args.mode,
     )
 
 

@@ -1,21 +1,25 @@
+import dataclasses
 import json
 from collections import Counter
 from pathlib import Path
 
 import pytest
-from eval_helpers import MANIFEST, case, found, result
+from eval_helpers import CHUNK, MANIFEST, SOURCES, answered, case, found, result
 
 from assistant.config import Settings
 from assistant.generation.answer import Answer
-from assistant.generation.citations import CheckedCitation, CheckedStatement
+from assistant.generation.citations import CheckedCitation, CheckedStatement, SourceText
 from assistant.generation.gigachat import LlmStats
 from assistant.retrieval.embeddings import EmbeddingStats
+from assistant.retrieval.filters import IngredientFilter
+from assistant.tools.search_recipes import SearchArgs
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import Case
 from evals.report import RunMeta
 from evals.run import (
     _categories,
     answer_records,
+    load_answer_run,
     load_meta,
     meta_record,
     pick_cases,
@@ -185,3 +189,26 @@ def test_without_cases_eval_explains_and_exits(
     assert run.main(["--stage", "retrieval"]) == 2
     assert run.main(["--split", "holdout"]) == 2
     assert "нет кейсов" in capsys.readouterr().err
+
+
+def test_rescore_keeps_earlier_recipes_and_searches() -> None:
+    """Среди источников есть рецепт прошлого хода, а поисков у auto — несколько:
+    пересчёт по сырым данным восстанавливает и то и другое."""
+    earlier = SourceText(
+        2, CHUNK.model_copy(update={"recipe_id": 99}), "Пирог\nМука — 1 стак."
+    )
+    searches = (
+        SearchArgs("пирог", IngredientFilter.of(include=[["мука"]], exclude=["сахар"])),
+        SearchArgs("пирог без сахара", IngredientFilter(), dropped=("мука ржаная",)),
+    )
+    original = dataclasses.replace(
+        answered([]), sources=[*SOURCES, earlier], searches=searches
+    )
+    [record] = answer_records(
+        [AnswerCase(case("follow_up-001", "follow_up"), [original])]
+    )
+
+    restored = load_answer_run(json.loads(json.dumps(record)))
+
+    assert [s.chunk.recipe_id for s in restored.sources] == [CHUNK.recipe_id, 99]
+    assert restored.searches == searches
