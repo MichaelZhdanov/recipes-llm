@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Эмбеддинги. Пустая модель — модель провайдера по умолчанию (DEFAULT_MODELS).
     embedding_provider: EmbeddingProvider = "cloudru"
     embedding_model: str = ""
+    # Дописывать ли к вопросу задачу у instruct-моделей (формат из карточки модели).
+    # 0 — вопрос уходит как есть: для сравнения на eval.
+    embedding_query_instruction: bool = True
     cloud_ru_api_key: SecretStr = SecretStr("")
     cloud_ru_api_url: str = CLOUD_RU_API_URL
     # Voyage AI; адрес должен соответствовать кабинету, где создан ключ.

@@ -281,3 +281,18 @@ def test_explicit_model_wins_over_default() -> None:
 
     assert embedder.model == "BAAI/bge-m3"
     assert embedder.query_template is None
+
+
+def test_query_instruction_can_be_turned_off() -> None:
+    """Для сравнения на eval: та же instruct-модель, но вопрос уходит как есть."""
+    with httpx2.Client() as http:
+        embedder = make_embedder(
+            Settings(
+                embedding_model="ai-sage/Giga-Embeddings-instruct-480M",
+                embedding_query_instruction=False,
+                cloud_ru_api_key=SecretStr(KEY),
+            ),
+            http,
+        )
+
+    assert embedder.query_template is None

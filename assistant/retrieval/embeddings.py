@@ -246,5 +246,7 @@ def make_embedder(settings: Settings, client: httpx2.Client) -> HttpEmbedder:
         model=model,
         base_url=base_url,
         client=client,
-        query_template=query_template(model),
+        query_template=(
+            query_template(model) if settings.embedding_query_instruction else None
+        ),
     )
