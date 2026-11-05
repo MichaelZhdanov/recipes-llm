@@ -245,7 +245,7 @@ class GigaChat:
         functions: Sequence[Mapping[str, object]] | None = None,
         function_call: FunctionCallMode | None = None,
     ) -> Completion:
-        masked = [_masked(message, self.stats.masked) for message in messages]
+        masked = [mask_message(message, self.stats.masked) for message in messages]
         body: dict[str, object] = {
             "model": model,
             "messages": masked,
@@ -339,7 +339,9 @@ class GigaChat:
         return SecretStr(data["access_token"]), data["expires_at"] / 1000
 
 
-def _masked(message: Message, counts: Counter[str]) -> Message:
+def mask_message(message: Message, counts: Counter[str]) -> Message:
+    """Сообщение с замаскированными ПДн: текст и строки в аргументах вызова
+    функции. Общее для адаптеров LLM: всё, что уходит во внешний API."""
     result = mask_pii(message["content"])
     counts.update(result.counts)
     masked = message.copy()
