@@ -1,6 +1,8 @@
 # В контекст сборки не попадают секреты, локальные заметки и данные.
 .env
 .env.*
+deploy/deploy.key
+deploy/deploy.key.pub
 ops
 ops.pub
 deploy_key

@@ -4,8 +4,8 @@
 #   sudo bash bootstrap.sh <домен> <e-mail для Let's Encrypt> <файл публичного ключа деплоя>
 #
 # До запуска: A-запись домена указывает на сервер, порты 80 и 443 открыты.
-# Ключ деплоя: ssh-keygen -t ed25519 -f ops -N ''
-# (ops.pub — сюда, ops — в секрет GitHub DEPLOY_SSH_KEY).
+# Ключ деплоя: ssh-keygen -f deploy/deploy.key -N '' (любого типа, без пароля):
+# deploy.key.pub — сюда, deploy.key — в секрет GitHub DEPLOY_SSH_KEY.
 #
 # Деплой идёт от root (решение автора), ключ деплоя — обычный ключ root
 # с полным доступом. authorized_keys только дописывается: остальные ключи
@@ -41,8 +41,8 @@ main() {
     [[ -r "$key_file" ]] || { echo "не читается файл ключа $key_file" >&2; exit 2; }
     local key
     key="$(head -n 1 "$key_file")"
-    [[ "$key" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+(\ .*)?$ ]] || {
-        echo "в $key_file не ключ ssh-ed25519" >&2
+    is_public_key "$key" || {
+        echo "в $key_file не публичный ключ SSH (нужен файл .pub, а не приватный ключ)" >&2
         exit 2
     }
     # shellcheck source=/dev/null
@@ -113,6 +113,12 @@ main() {
 3. Запустить деплой: push в main или Actions → CI → Run workflow.
    Первый деплой строит индекс (≈27 ₽ на cloud.ru, пара минут).
 DONE
+}
+
+# Строка публичного ключа OpenSSH любого типа: ssh-ed25519, ssh-rsa, ecdsa-sha2-…
+# Защита от опечатки: приватный ключ (-----BEGIN …) в authorized_keys не попадёт.
+is_public_key() {
+    [[ "$1" =~ ^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+\ [A-Za-z0-9+/=]+(\ .*)?$ ]]
 }
 
 # Ключ деплоя в authorized_keys root. Файл только дописывается, остальные

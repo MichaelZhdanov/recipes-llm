@@ -4,6 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
 
@@ -92,3 +94,35 @@ def test_key_already_in_authorized_keys_is_left_as_is(tmp_path: Path) -> None:
     assert add_deploy_key(keys, DEPLOY_KEY).returncode == 0
 
     assert keys.read_text() == f"{DEPLOY_KEY}\n{ADMIN_KEY}\n"
+
+
+@pytest.mark.parametrize(
+    ("line", "ok"),
+    [
+        (DEPLOY_KEY, True),
+        (
+            "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY= deploy",
+            True,
+        ),
+        ("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC=", True),
+        # Перепутали файлы: приватный ключ в authorized_keys не пишется.
+        ("-----BEGIN OPENSSH PRIVATE KEY-----", False),
+        ("", False),
+    ],
+)
+def test_bootstrap_accepts_any_public_key_type(line: str, ok: bool) -> None:
+    script = f'source "{DEPLOY / "bootstrap.sh"}"; is_public_key "$1"'
+    result = subprocess.run(["bash", "-c", script, "bash", line], check=False)
+
+    assert (result.returncode == 0) is ok
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["deploy/deploy.key", "deploy/deploy.key.pub", "ops", "ops.pub"],
+)
+def test_deploy_keys_are_ignored_by_git(path: str) -> None:
+    """Приватный ключ лежит в папке репозитория: git add -A не должен его взять."""
+    result = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT, check=False)
+
+    assert result.returncode == 0, f"{path} не в .gitignore"

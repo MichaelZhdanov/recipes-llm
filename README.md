@@ -230,8 +230,8 @@ systemd-таймер раз в сутки ─► deploy/refresh.sh: исходн
 
 **Один раз на сервере** (Ubuntu или Debian, A-запись домена уже указывает на сервер, порты 22, 80 и 443 открыты):
 
-1. На своей машине создать ключ деплоя: `ssh-keygen -t ed25519 -f ops -N ''`. Файлы `ops` и `ops.pub` в `.gitignore`. Скопировать на сервер `ops.pub` и `deploy/bootstrap.sh`.
-2. На сервере от root: `bash bootstrap.sh <домен> <e-mail> ops.pub`, скрипт — [`deploy/bootstrap.sh`](deploy/bootstrap.sh). Он:
+1. На своей машине создать ключ деплоя без пароля, любого типа: `ssh-keygen -f deploy/deploy.key -N ''`. Оба файла ключа в `.gitignore`, тест это проверяет. Скопировать на сервер: `scp deploy/deploy.key.pub deploy/bootstrap.sh root@<домен>:`.
+2. На сервере от root: `bash bootstrap.sh <домен> <e-mail> deploy.key.pub`, скрипт — [`deploy/bootstrap.sh`](deploy/bootstrap.sh). Он:
    - ставит Docker, nginx и certbot;
    - клонирует репозиторий в `/opt/paperless-assistant`;
    - дописывает ключ деплоя в `/root/.ssh/authorized_keys`, остальные ключи не трогает;
@@ -244,7 +244,7 @@ systemd-таймер раз в сутки ─► deploy/refresh.sh: исходн
    | Что | Имя | Значение |
    |---|---|---|
    | секрет | `DEPLOY_HOST` | домен сервера |
-   | секрет | `DEPLOY_SSH_KEY` | содержимое `ops`, целиком, вместе со строками `-----BEGIN…` и `-----END…` |
+   | секрет | `DEPLOY_SSH_KEY` | содержимое `deploy/deploy.key`, целиком, вместе со строками `-----BEGIN…` и `-----END…` |
    | секрет | `DEPLOY_KNOWN_HOSTS` | строка, которую напечатал bootstrap |
    | секрет | `WEB_PASSWORD` | пароль входа в чат |
    | переменная | `WEB_LOGIN` | логин входа, по умолчанию `admin` |

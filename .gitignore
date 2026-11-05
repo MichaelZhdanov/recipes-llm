@@ -6,6 +6,8 @@ PLAN.md
 # Секреты
 .env
 # SSH-ключи деплоя: приватный ключ живёт только в секрете GitHub DEPLOY_SSH_KEY
+/deploy/deploy.key
+/deploy/deploy.key.pub
 /ops
 /ops.pub
 /deploy_key
