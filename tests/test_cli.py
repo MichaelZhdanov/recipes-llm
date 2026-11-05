@@ -1,8 +1,10 @@
 import pytest
 from eval_helpers import MANIFEST
 
-from assistant.cli import main, rebuild_reason
+from assistant.cli import format_plan, main, rebuild_reason
+from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import VectorStore
+from assistant.tools.search_recipes import SearchArgs
 
 
 @pytest.mark.parametrize("command", ["nope", "sources"])
@@ -41,7 +43,7 @@ def test_index_is_rebuilt_only_when_needed(store: VectorStore) -> None:
 def test_search_without_embeddings_key_explains_what_to_do(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    code = main(["search", "как включить OCR"])
+    code = main(["search", "курица без лука"])
 
     assert code == 1
     error = capsys.readouterr().err
@@ -58,3 +60,31 @@ def test_ask_without_gigachat_key_explains_what_to_do(
 
     assert code == 1
     assert "GIGACHAT_API_KEY" in capsys.readouterr().err
+
+
+def test_search_without_gigachat_key_explains_what_to_do(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Разбор вопроса идёт через GigaChat: без ключа — понятная ошибка до Qdrant."""
+    monkeypatch.setenv("CLOUD_RU_API_KEY", "test-key")
+
+    assert main(["search", "курица без лука"]) == 1
+    assert "GIGACHAT_API_KEY" in capsys.readouterr().err
+
+
+def test_format_plan_shows_query_conditions_and_dropped_names() -> None:
+    args = SearchArgs(
+        query="курица без лука",
+        conditions=IngredientFilter.of(
+            include=[["курица", "филе куриное"], ["рис"]], exclude=["лук репчатый"]
+        ),
+        dropped=("куриное мясо",),
+    )
+
+    assert format_plan(args) == (
+        "запрос: курица без лука\n"
+        "с: курица или филе куриное; рис\n"
+        "без: лук репчатый\n"
+        "нет в словаре, отброшено: куриное мясо"
+    )
+    assert format_plan(SearchArgs("борщ", IngredientFilter())) == "запрос: борщ"

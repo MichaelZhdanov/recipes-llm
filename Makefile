@@ -51,9 +51,9 @@ ask: .env ## ответ со ссылками: make ask Q="как включит
 	@test -n "$$Q" || { echo 'Укажите вопрос: make ask Q="как включить OCR на русском"'; exit 2; }
 	$(RUN) ask "$$Q"
 
-search: .env ## найти куски по вопросу, без LLM: make search Q="как включить OCR на русском"
-	@test -n "$$Q" || { echo 'Укажите вопрос: make search Q="как включить OCR на русском"'; exit 2; }
-	$(RUN) search "$$Q"
+search: .env ## найти рецепты, без ответа: make search Q="курица без лука" [ARGS=--no-filters]
+	@test -n "$$Q" || { echo 'Укажите вопрос: make search Q="курица без лука"'; exit 2; }
+	$(RUN) search "$$Q" $(ARGS)
 
 # Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта,
 # STAGE=retrieval — только поиск, без GigaChat. SPLIT=holdout — отложенная выборка

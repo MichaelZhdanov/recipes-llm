@@ -15,7 +15,12 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
 from assistant.generation.answer import make_answerer, render_markdown
-from assistant.generation.gigachat import LlmError, make_http_client
+from assistant.generation.gigachat import (
+    LlmError,
+    llm_model,
+    make_http_client,
+    make_llm,
+)
 from assistant.indexing.build import (
     SAMPLE_SEED,
     IndexSource,
@@ -30,6 +35,7 @@ from assistant.indexing.dataset import (
     read_dataset,
 )
 from assistant.retrieval.embeddings import EmbeddingError, make_embedder
+from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import (
     Hit,
@@ -38,6 +44,7 @@ from assistant.retrieval.store import (
     VectorStore,
     mismatch,
 )
+from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 
 # Ошибки, о которых пользователю достаточно одной строки без трассировки.
 _EXPECTED_ERRORS = (
@@ -165,18 +172,47 @@ def format_hits(hits: Sequence[Hit]) -> str:
     return "\n\n".join(blocks)
 
 
-def _search(settings: Settings, question: str, k: int, as_json: bool) -> int:
-    with httpx2.Client(timeout=30) as http:
+def format_plan(args: SearchArgs) -> str:
+    """Во что GigaChat разобрал вопрос: запрос для векторов и условия фильтра."""
+    lines = [f"запрос: {args.query}"]
+    if args.conditions.include:
+        groups = (" или ".join(group) for group in args.conditions.include)
+        lines.append(f"с: {'; '.join(groups)}")
+    if args.conditions.exclude:
+        lines.append(f"без: {', '.join(args.conditions.exclude)}")
+    if args.dropped:
+        lines.append(f"нет в словаре, отброшено: {', '.join(args.dropped)}")
+    return "\n".join(lines)
+
+
+def _search(
+    settings: Settings, question: str, k: int, as_json: bool, filters: bool
+) -> int:
+    with httpx2.Client(timeout=30) as http, make_http_client() as llm_http:
+        # Ключи проверяются до Qdrant: ошибка настройки видна сразу.
         embedder = make_embedder(settings, http)
+        llm = make_llm(settings, llm_http) if filters else None
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        hits = Retriever(store, embedder, ref=settings.dataset_revision).search(
-            question, k=k
-        )
+        retriever = Retriever(store, embedder, ref=settings.dataset_revision)
+        if llm is None:
+            args = SearchArgs(query=question, conditions=IngredientFilter())
+        else:
+            planner = SearchPlanner(
+                llm, model=llm_model(settings), vocabulary=store.vocabulary()
+            )
+            args = planner.plan(question)
+        hits = retriever.search(args.query, k=k, conditions=args.conditions)
     if as_json:
-        payload = [{"score": hit.score, **hit.chunk.model_dump()} for hit in hits]
+        payload = {
+            "query": args.query,
+            "include": [list(group) for group in args.conditions.include],
+            "exclude": list(args.conditions.exclude),
+            "dropped": list(args.dropped),
+            "hits": [{"score": hit.score, **hit.chunk.model_dump()} for hit in hits],
+        }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(format_hits(hits))
+        print(f"{format_plan(args)}\n\n{format_hits(hits)}")
     return 0
 
 
@@ -226,10 +262,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ask = commands.add_parser("ask", help="ответ со ссылками на рецепты")
     ask.add_argument("question")
     ask.add_argument("--json", action="store_true", help="вывод в JSON")
-    search = commands.add_parser("search", help="найти рецепты по вопросу, без LLM")
+    search = commands.add_parser(
+        "search",
+        help="найти рецепты: разбор вопроса GigaChat, фильтр и векторы, без ответа",
+    )
     search.add_argument("question")
     search.add_argument("-k", type=int, default=5, help="сколько рецептов показать")
     search.add_argument("--json", action="store_true", help="вывод в JSON")
+    search.add_argument(
+        "--no-filters",
+        action="store_true",
+        help="только векторы, без разбора вопроса и фильтра (как на этапе 1)",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -248,7 +292,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "ask":
             return _ask(settings, args.question, args.json)
         if args.command == "search":
-            return _search(settings, args.question, args.k, args.json)
+            return _search(
+                settings, args.question, args.k, args.json, filters=not args.no_filters
+            )
     except _EXPECTED_ERRORS as error:
         _log(f"ошибка: {error}")
         return 1
