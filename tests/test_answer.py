@@ -37,8 +37,8 @@ WITH_EMAIL = make_chunk(
     {"Яблоко": "3 шт", "Мука пшеничная": "200 г"},
     recipe_id=9002,
 )
-# Курица с рисом: строки 2 и 3 — «Курица — 500 г» и «Рис — 200 г».
-CHICKEN_QUOTE = "Курица — 500 г\nРис — 200 г"
+# Курица с рисом: строка 2 — «Курица — 500 г». Цитата — целая строка рецепта.
+CHICKEN_QUOTE = "Курица — 500 г"
 
 
 class FakeLlm:
@@ -132,9 +132,9 @@ def test_answer_with_checked_citation_and_recipe_link(retriever: Retriever) -> N
     [link] = answer.sources
     assert (link.recipe_id, link.name) == (2001, "Курица с рисом в духовке")
     assert link.url == "https://www.povarenok.ru/recipes/show/2001/"
-    # Цитата — строки 2–3 текста рецепта: курица и рис.
+    # Цитата — строка 2 текста рецепта: курица.
     citation = result.trace.checked[0].citations[0]
-    assert (citation.start_line, citation.end_line) == (2, 3)
+    assert (citation.start_line, citation.end_line) == (2, 2)
 
 
 def test_unconfirmed_statement_is_dropped_others_kept(retriever: Retriever) -> None:
@@ -142,7 +142,7 @@ def test_unconfirmed_statement_is_dropped_others_kept(retriever: Retriever) -> N
         retriever,
         [
             ("Нужны курица и рис.", CHICKEN.recipe_id, CHICKEN_QUOTE),
-            ("Выдумка.", CHICKEN.recipe_id, "Курица — 2 кг\nАнанас — 1 шт"),
+            ("Выдумка.", CHICKEN.recipe_id, "Ананас — 1 шт"),
         ],
     )
 
@@ -154,7 +154,7 @@ def test_all_statements_dropped_means_not_found_with_suggestions(
     retriever: Retriever,
 ) -> None:
     result = answer_citing(
-        retriever, [("Выдумка.", CHICKEN.recipe_id, "Курица — 2 кг\nАнанас — 1 шт")]
+        retriever, [("Выдумка.", CHICKEN.recipe_id, "Ананас — 1 шт")]
     )
 
     assert result.answer.status == "not_found"
@@ -163,14 +163,14 @@ def test_all_statements_dropped_means_not_found_with_suggestions(
     assert len(result.answer.sources) == 3
 
 
-def test_made_up_name_drops_statement(retriever: Retriever) -> None:
+def test_made_up_quantity_drops_statement(retriever: Retriever) -> None:
     result = answer_citing(
         retriever,
-        [("Полейте `teriyaki_sauce`.", CHICKEN.recipe_id, CHICKEN_QUOTE)],
+        [("Курицы нужно 2 кг.", CHICKEN.recipe_id, CHICKEN_QUOTE)],
     )
 
     assert result.answer.reason == "filtered_out"
-    assert result.trace.checked[0].unknown_names == ["teriyaki_sauce"]
+    assert result.trace.checked[0].unknown_numbers == ["2"]
 
 
 def test_one_link_per_recipe(retriever: Retriever) -> None:
@@ -181,7 +181,7 @@ def test_one_link_per_recipe(retriever: Retriever) -> None:
             (
                 "И лук с солью.",
                 CHICKEN.recipe_id,
-                "Лук репчатый — 1 шт\nСоль — по вкусу",
+                "Лук репчатый — 1 шт",
             ),
         ],
     )

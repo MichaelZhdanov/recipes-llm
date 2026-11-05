@@ -1,57 +1,35 @@
-"""Формат ответа модели и проверка ссылок кодом, без LLM.
+"""Формат ответа модели и проверка цитат кодом, без LLM.
 
 Модель отвечает списком утверждений. У каждого утверждения есть цитаты:
-номер источника из промпта и фрагмент, скопированный из него дословно.
-Здесь проверяется, что каждая цитата действительно есть в источнике.
+номер рецепта из промпта и строка, скопированная из него дословно.
+Здесь проверяется, что каждая цитата действительно есть в рецепте.
 Утверждение без подтверждённой цитаты удаляется целиком: лучше ответить
 меньше, чем ответить выдумкой (принцип 1 из CLAUDE.md).
 
-Правила для цитаты:
-- номер источника есть в промпте;
-- в цитате не меньше MIN_QUOTE_WORDS слов и MIN_QUOTE_CHARS символов
-  (короткий фрагмент вроде «the» найдётся где угодно) и не больше
-  MAX_QUOTE_CHARS, иначе ссылка на строки теряет смысл;
-- фрагмент найден в тексте, который видела модель. Сравниваются слова,
-  а оформление выравнивается с обеих сторон одинаково (`normalize`):
-  - пробелы и переводы строк между словами любые, регистр не важен;
-  - типографские тире приводятся к `-`, кавычки любого вида не
-    учитываются;
-  - разметка Markdown не учитывается: `**`, курсив `_x_` и `*x*`,
-    обратные кавычки, ссылки `[текст](адрес)`, в том числе разбитые
-    переносом строки;
-  - знаки препинания по краям цитаты не учитываются: модель ставит
-    точку после обрезанного предложения;
-  - подчёркивание внутри слова не трогается: в `max_tokens` оно часть
-    имени;
-  - у кода не важен перенос строк у скобок и висячая запятая: модель
-    сворачивает вызов из нескольких строк в одну. Префикс строки
-    (`f"…"`, `r"…"`) не учитывается.
-  Слова, числа, имена и их порядок должны совпасть;
+Правила для цитаты (решение автора 2026-11-05):
+- номер рецепта есть в промпте;
+- цитата — **целая строка** текста рецепта: название или строка
+  ингредиента («Молоко — 250 мл»). Не кусок строки: «молок» из «Молоко —
+  250 мл» не подтверждает ничего. Сравнение терпит оформление (`normalize`):
+  тире любого вида, кавычки, разметку Markdown, пробелы, регистр и «ё».
 
-Правило для утверждения: имена с `_` в обратных кавычках (`max_tokens`)
-должны встречаться в тексте процитированных источников. Так ловится
-правдоподобное, но несуществующее имя. Для рецептов его дополнит проверка
-количеств: «250 мл» из утверждения должно быть в рецепте (этап 3).
+Правило для утверждения — **числа**: каждое число из утверждения должно
+стоять в процитированных строках. Так модель не может назвать количество,
+которого нет в рецепте («500 мл», когда в рецепте 250). Единицу правило не
+сверяет: «250 г» при «250 мл» в рецепте пройдёт.
 
-По месту совпадения считаются номера строк в тексте рецепта (первая —
-название, дальше по строке на ингредиент): по ним видно, на что опирается
-утверждение.
+Номер процитированной строки (первая — название, дальше по строке на
+ингредиент) сохраняется: по нему видно, на что опирается утверждение.
 """
 
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import pairwise
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from assistant.indexing.chunks import Chunk
-
-MIN_QUOTE_WORDS = 3
-MIN_QUOTE_CHARS = 20
-MAX_QUOTE_CHARS = 400
-
 
 # --- Формат ответа модели (JSON по схеме, см. prompts/answer_v1.md) ---
 
@@ -149,21 +127,23 @@ class CheckedCitation:
 class CheckedStatement:
     text: str
     citations: list[CheckedCitation]
-    # Имена из утверждения, которых нет в процитированных источниках.
-    unknown_names: list[str]
+    # Числа из утверждения, которых нет в процитированных строках.
+    unknown_numbers: list[str]
 
     @property
     def kept(self) -> bool:
-        return not self.unknown_names and any(c.valid for c in self.citations)
+        return not self.unknown_numbers and any(c.valid for c in self.citations)
 
 
-# --- Нормализация и поиск ---
+# --- Нормализация и сравнение строк ---
 
 _TRANSLATE = str.maketrans(
     {
         "–": "-",
         "—": "-",
         "\u00a0": " ",
+        "ё": "е",
+        "Ё": "Е",
         # Кавычки не несут смысла для проверки: модель их то добавляет, то теряет.
         "“": None,
         "”": None,
@@ -177,64 +157,26 @@ _TRANSLATE = str.maketrans(
         "`": None,
     }
 )
-# Текст ссылки может переноситься на следующую строку, адрес — нет.
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)\s]*\)")
-# Курсив: `_слово_` или `*слово*` на границе слова. Подчёркивание внутри
-# слова (max_tokens) сюда не попадает.
+# Курсив: `_слово_` или `*слово*` на границе слова.
 _EMPHASIS = re.compile(r"(?<![\w*])([_*])(?=\S)(.+?)(?<=\S)\1(?![\w*])")
-# Префикс строки Python: f"…", r'…', rb"…". Он не часть текста, а без
-# кавычек приклеился бы к слову: f"Error" → «fError». Перед префиксом
-# не может стоять буква или кавычка, поэтому ["fr", "de"] не трогается.
-_STRING_PREFIX = re.compile(r"(?<![\w\"'])[rRbBuUfF]{1,2}(?=[\"'])")
-_EDGE_PUNCTUATION = ".,;:!?"
-# Токены цитаты: скобка или кусок без пробелов и скобок.
-_TOKEN = re.compile(r"[()\[\]{}]|[^\s()\[\]{}]+")
-_OPENING = frozenset("([{")
-_CLOSING = frozenset(")]}")
-# Висячая запятая перед закрывающей скобкой: `f(a, b,)` то же, что `f(a, b)`.
-_TRAILING_COMMA = re.compile(r",\s*(?=[)\]}])")
+_EDGE_PUNCTUATION = ".,;:!?- "
+# Число: целое, десятичное через точку или запятую, дробь «1/2».
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?(?:/\d+)?")
 
 
 def normalize(text: str) -> str:
-    """Выравнивает оформление, которое модель может передать по-своему.
-
-    Переводы строк не добавляются и не удаляются: по ним считаются строки.
-    """
-    text = _STRING_PREFIX.sub("", text)
+    """Выравнивает оформление, которое модель может передать по-своему:
+    тире, кавычки, «ё», разметку Markdown. Переводы строк не трогает."""
     text = text.translate(_TRANSLATE).replace("**", "")
     text = _MARKDOWN_LINK.sub(r"\1", text)
     return _EMPHASIS.sub(r"\2", text)
 
 
-def _separator(previous: str, token: str) -> str:
-    """Что может стоять между соседними токенами цитаты в источнике.
-
-    Модель переносит код по-своему: сворачивает вызов из нескольких строк
-    в одну или наоборот. Поэтому у скобок пробелы и переводы строк
-    необязательны, а перед закрывающей скобкой может быть висячая запятая.
-    Между словами пробел обязателен, как и раньше.
-    """
-    if token in _CLOSING:
-        return r",?\s*"
-    if previous in _OPENING | _CLOSING or token in _OPENING:
-        return r"\s*"
-    return r"\s+"
-
-
-def _quote_pattern(quote: str) -> re.Pattern[str] | None:
-    text = normalize(quote).strip().strip(_EDGE_PUNCTUATION)
-    tokens = _TOKEN.findall(_TRAILING_COMMA.sub("", text))
-    if not tokens:
-        return None
-    body = re.escape(tokens[0]) + "".join(
-        _separator(previous, token) + re.escape(token)
-        for previous, token in pairwise(tokens)
-    )
-    # Цитата начинается и кончается на границе слова: «false» не совпадёт
-    # с началом «falsehood», а «anguage» — с серединой «language».
-    start = r"(?<!\w)" if re.match(r"\w", tokens[0]) else ""
-    end = r"(?!\w)" if re.search(r"\w$", tokens[-1]) else ""
-    return re.compile(start + body + end, re.IGNORECASE)
+def line_key(text: str) -> str:
+    """Строка для сравнения: оформление выровнено, пробелы схлопнуты,
+    знаки по краям и регистр не важны."""
+    return " ".join(normalize(text).split()).strip(_EDGE_PUNCTUATION).casefold()
 
 
 def check_citation(
@@ -246,57 +188,40 @@ def check_citation(
     by_number = {source.number: source for source in sources}
     source = by_number.get(citation.source)
     if source is None:
-        return fail(f"источника {citation.source} нет в промпте")
-    quote = citation.quote.strip()
-    if len(quote.split()) < MIN_QUOTE_WORDS or len(quote) < MIN_QUOTE_CHARS:
-        return fail("слишком короткая цитата")
-    if len(quote) > MAX_QUOTE_CHARS:
-        return fail("слишком длинная цитата")
-    pattern = _quote_pattern(quote)
-    if pattern is None:
+        return fail(f"рецепта {citation.source} нет в промпте")
+    if "\n" in citation.quote.strip():
+        return fail("цитата — одна строка рецепта, а не несколько")
+    key = line_key(citation.quote)
+    if not key:
         return fail("пустая цитата")
-
-    text = normalize(source.text)
-    match = pattern.search(text)
-    if match is None:
-        return fail("фрагмента нет в источнике")
-    first = text.count("\n", 0, match.start())
-    last = first + match.group().count("\n")
-    return CheckedCitation(
-        citation.source, citation.quote, start_line=first + 1, end_line=last + 1
-    )
-
-
-# Имена, которые модель может выдумать: в обратных кавычках и с подчёркиванием.
-_BACKTICKED = re.compile(r"`([^`\n]+)`")
-_SNAKE_NAME = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+    lines = [line_key(line) for line in source.text.split("\n")]
+    if key in lines:
+        number = lines.index(key) + 1
+        return CheckedCitation(
+            citation.source, citation.quote, start_line=number, end_line=number
+        )
+    if any(key in line for line in lines):
+        return fail("это часть строки, а цитата — строка целиком")
+    return fail("такой строки нет в рецепте")
 
 
-def names_in(statement: str) -> list[str]:
-    """Имена из утверждения, которые обязаны быть в процитированном источнике."""
-    names: set[str] = set()
-    for span in _BACKTICKED.findall(statement):
-        names.update(_SNAKE_NAME.findall(span))
-    return sorted(names)
-
-
-def _has_name(text: str, name: str) -> bool:
-    """Имя целиком: OCR_LANGUAGE не находится внутри OCR_LANGUAGES."""
-    return (
-        re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", text)
-        is not None
-    )
+def numbers_in(text: str) -> list[str]:
+    """Числа текста без повторов: «1,5» и «1.5» — одно число."""
+    return sorted({n.replace(",", ".") for n in _NUMBER.findall(text)})
 
 
 def check_statement(
     statement: Statement, sources: Sequence[SourceText]
 ) -> CheckedStatement:
     citations = [check_citation(c, sources) for c in statement.citations]
-    cited = {c.source for c in citations if c.valid}
-    cited_text = "\n".join(s.text for s in sources if s.number in cited)
-    unknown = [
-        name for name in names_in(statement.text) if not _has_name(cited_text, name)
+    by_number = {source.number: source for source in sources}
+    cited_lines = [
+        by_number[c.source].text.split("\n")[c.start_line - 1]
+        for c in citations
+        if c.valid and c.start_line is not None
     ]
+    known = set(numbers_in("\n".join(cited_lines)))
+    unknown = [n for n in numbers_in(statement.text) if n not in known]
     return CheckedStatement(statement.text, citations, unknown)
 
 

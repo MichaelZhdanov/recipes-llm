@@ -709,8 +709,8 @@ def _problem_sections(results: Sequence[AnswerCase]) -> list[str]:
         for s in run.checked:
             errors = "; ".join(c.error or "ок" for c in s.citations) or "без цитат"
             names = (
-                f"; нет в источнике: {', '.join(s.unknown_names)}"
-                if s.unknown_names
+                f"; чисел нет в цитатах: {', '.join(s.unknown_numbers)}"
+                if s.unknown_numbers
                 else ""
             )
             lines.append(f"  - «{s.text}» — {errors}{names}")

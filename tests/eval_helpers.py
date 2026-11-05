@@ -102,10 +102,17 @@ def answered(
     return AnswerRun.from_result(result)
 
 
+# Цитата — целая строка источника (assistant/generation/citations.py).
 RUN = answered(
     [
-        ("Почта забирается из IMAP.", "fetch attachments from IMAP mail accounts"),
+        (
+            "Почта забирается из IMAP.",
+            "Paperless can fetch attachments from IMAP mail accounts.",
+        ),
         ("Выдумка.", "this quote is not in the source"),
-        ("Проверка раз в десять минут.", "checks the mail every ten minutes"),
+        (
+            "Проверка раз в десять минут.",
+            "It checks the mail every ten minutes by default.",
+        ),
     ]
 )
