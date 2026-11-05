@@ -126,3 +126,44 @@ def test_deploy_keys_are_ignored_by_git(path: str) -> None:
     result = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT, check=False)
 
     assert result.returncode == 0, f"{path} не в .gitignore"
+
+
+def git(*args: str, cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def commit(repo: Path, path: str) -> None:
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text(path)
+    git("add", ".", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", path, cwd=repo)
+
+
+def update_repo(origin: Path, app_dir: Path) -> subprocess.CompletedProcess[str]:
+    script = (
+        f'source "{DEPLOY / "bootstrap.sh"}"; '
+        f'REPO_URL="{origin}"; APP_DIR="{app_dir}"; update_repo'
+    )
+    return subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, check=False
+    )
+
+
+def test_rerun_updates_the_clone_even_after_a_deploy(tmp_path: Path) -> None:
+    """Первый запуск — до push (на GitHub нет deploy/), второй — после."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git("init", "-q", "-b", "main", cwd=origin)
+    commit(origin, "README.md")
+    app_dir = tmp_path / "app"
+
+    first = update_repo(origin, app_dir)
+    assert first.returncode == 2
+    assert "Сначала git push" in first.stderr
+
+    commit(origin, "deploy/nginx.conf.template")
+    # Деплой оставляет клон не на ветке, а на коммите.
+    git("checkout", "-q", "--detach", "HEAD", cwd=app_dir)
+
+    assert update_repo(origin, app_dir).returncode == 0
+    assert (app_dir / "deploy" / "nginx.conf.template").exists()

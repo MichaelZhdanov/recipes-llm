@@ -20,7 +20,7 @@
 # 6. настраивает nginx и получает сертификат Let's Encrypt;
 # 7. включает суточный таймер paperless-refresh.
 # Ключи API (GigaChat, cloud.ru) скрипт не спрашивает: их вписывают в .env руками.
-# Повторный запуск безопасен: готовые шаги пропускаются.
+# Повторный запуск безопасен: готовые шаги пропускаются, клон обновляется до main.
 set -euo pipefail
 
 APP_DIR=/opt/paperless-assistant
@@ -71,7 +71,7 @@ main() {
     fi
 
     echo "== 3. репозиторий"
-    [[ -d "$APP_DIR/.git" ]] || git clone --quiet "$REPO_URL" "$APP_DIR"
+    update_repo
 
     echo "== 4. ключ деплоя в authorized_keys root"
     add_deploy_key "$key"
@@ -113,6 +113,24 @@ main() {
 3. Запустить деплой: push в main или Actions → CI → Run workflow.
    Первый деплой строит индекс (≈27 ₽ на cloud.ru, пара минут).
 DONE
+}
+
+# Клон в APP_DIR на последнем коммите main с GitHub. При повторном запуске
+# клон обновляется: иначе остались бы файлы той версии, что была при первом.
+# checkout --detach, как в deploy.sh: после деплоя клон стоит не на ветке.
+# Свои правки в отслеживаемых файлах git не затрёт: checkout тогда откажется.
+update_repo() {
+    if [[ -d "$APP_DIR/.git" ]]; then
+        git -C "$APP_DIR" fetch --quiet origin main
+        git -C "$APP_DIR" checkout --quiet --detach origin/main
+    else
+        git clone --quiet "$REPO_URL" "$APP_DIR"
+    fi
+    if [[ ! -f "$APP_DIR/deploy/nginx.conf.template" ]]; then
+        echo "в $APP_DIR нет deploy/: на GitHub ещё версия без скриптов деплоя." >&2
+        echo "Сначала git push, потом запустите bootstrap.sh снова." >&2
+        exit 2
+    fi
 }
 
 # Строка публичного ключа OpenSSH любого типа: ssh-ed25519, ssh-rsa, ecdsa-sha2-…
