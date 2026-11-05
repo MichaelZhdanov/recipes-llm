@@ -3,7 +3,7 @@
 #
 # GitHub Actions сначала переводит клон на коммит, потом вызывает скрипт:
 #   printf 'GIGACHAT_API_KEY=%s\n' … | ssh root@<сервер> \
-#     "cd /opt/paperless-assistant && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha>"
+#     "cd /opt/recipes-llm && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha>"
 # Вручную на сервере достаточно deploy/deploy.sh <sha>: checkout ниже повторится.
 # Ключи API — в stdin, а не аргументами: аргументы видны в списке
 # процессов (ps), stdin — нет.
@@ -25,7 +25,7 @@ main() {
 
     cd "$(dirname "$(readlink -f "$0")")/.."
     # Два деплоя (из CI и ручной) не идут одновременно: оба могут строить индекс.
-    exec 9>"$HOME/.paperless-deploy.lock"
+    exec 9>"$HOME/.recipes-llm-deploy.lock"
     flock -w 1800 9
 
     # На сервере не нужны линтеры и тесты: uv ставит только зависимости сервиса.

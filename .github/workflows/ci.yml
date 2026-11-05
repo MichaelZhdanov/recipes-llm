@@ -81,7 +81,7 @@ jobs:
           # Сначала клон на сервере переходит на проверенный коммит, потом
           # запускается deploy.sh уже из него: так всегда работает новая версия
           # скрипта, даже если клон на сервере старый (или скрипта там ещё нет).
-          remote="cd /opt/paperless-assistant && git fetch --quiet origin main"
+          remote="cd /opt/recipes-llm && git fetch --quiet origin main"
           remote="$remote && git checkout --quiet --detach $GITHUB_SHA"
           remote="$remote && deploy/deploy.sh $GITHUB_SHA"
           # Ключ сервера не проверяется (решение автора): сервер может переезжать.

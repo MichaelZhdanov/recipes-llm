@@ -15,15 +15,15 @@
 # Что делает:
 # 1. ставит Docker (из официального apt-репозитория Docker), git и make;
 # 2. берёт uv той же версии, что в Dockerfile, из того же образа;
-# 3. клонирует репозиторий в /opt/paperless-assistant;
+# 3. клонирует репозиторий в /opt/recipes-llm;
 # 4. добавляет ключ деплоя в authorized_keys root, если его там ещё нет;
 # 5. создаёт .env со случайными секретами.
 # Ключи API (GigaChat, cloud.ru) скрипт не спрашивает: их вписывают в .env руками.
 # Повторный запуск безопасен: готовые шаги пропускаются, клон обновляется до main.
 set -euo pipefail
 
-APP_DIR=/opt/paperless-assistant
-REPO_URL=https://github.com/MichaelZhdanov/paperless-assistant.git
+APP_DIR=/opt/recipes-llm
+REPO_URL=https://github.com/MichaelZhdanov/recipes-llm.git
 # Тот же образ, что в Dockerfile и Makefile (tests/test_deploy.py это проверяет).
 UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
 # Переменная, а не константа в функции: тест подставляет временный файл.
