@@ -35,6 +35,8 @@ _POINT_NAMESPACE = uuid.UUID("5b0c6c4e-8a35-4f3e-9d43-3c2f6f1f2a10")
 # Сколько кандидатов взять по сжатым векторам на одно место в выдаче.
 OVERSAMPLING = 2.0
 UPSERT_BATCH = 256
+# Сколько разных имён ингредиентов читать из индекса; в полном датасете их 1 097.
+VOCABULARY_LIMIT = 5000
 
 
 class IndexMissingError(RuntimeError):
@@ -196,6 +198,19 @@ class VectorStore:
         if not metadata:
             raise IndexMissingError("у коллекции нет паспорта: выполните make index")
         return IndexManifest.model_validate(metadata)
+
+    def vocabulary(self) -> dict[str, int]:
+        """Имена ингредиентов в индексе и в скольких рецептах каждое, от частых
+        к редким. Считает Qdrant по payload-индексу (facet), поэтому словарь
+        всегда совпадает с тем, что лежит в индексе, в том числе у выборки."""
+        if self.active() is None:
+            raise IndexMissingError("индекс не построен: выполните make index")
+        response = self._client.facet(
+            self._alias, key=FIELD, limit=VOCABULARY_LIMIT, exact=True
+        )
+        if len(response.hits) >= VOCABULARY_LIMIT:
+            raise RuntimeError(f"в индексе больше {VOCABULARY_LIMIT} имён ингредиентов")
+        return {str(hit.value): hit.count for hit in response.hits}
 
     def count(self, collection: str | None = None) -> int:
         return self._client.count(collection or self._alias, exact=True).count

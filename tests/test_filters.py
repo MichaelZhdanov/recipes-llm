@@ -6,7 +6,7 @@ from eval_helpers import MANIFEST
 
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.filters import IngredientFilter
-from assistant.retrieval.store import VectorStore
+from assistant.retrieval.store import IndexMissingError, VectorStore
 
 
 @pytest.fixture
@@ -98,3 +98,18 @@ def test_names_are_cleaned_and_empty_groups_are_not_conditions() -> None:
     )
     assert not IngredientFilter.of(include=[[]], exclude=[""])
     assert IngredientFilter.of(include=[[]]).to_qdrant() is None
+
+
+def test_vocabulary_counts_recipes_per_ingredient(indexed: VectorStore) -> None:
+    """Словарь для разбора вопроса берётся из самого индекса."""
+    vocabulary = indexed.vocabulary()
+
+    assert next(iter(vocabulary)) == "сахар"
+    assert vocabulary["сахар"] == 2
+    assert vocabulary["лук репчатый"] == 1
+    assert len(vocabulary) == len({n for c in RECIPES for n in c.ingredients})
+
+
+def test_vocabulary_needs_an_index(store: VectorStore) -> None:
+    with pytest.raises(IndexMissingError, match="make index"):
+        store.vocabulary()
