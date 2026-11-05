@@ -8,7 +8,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # LLM ассистента: GigaChat (данные в РФ) или Claude через API Anthropic.
@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     dataset_revision: str = "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
     # Куда скачивается датасет: файл ревизии лежит в <путь>/<DATASET_REVISION>/.
     data_path: Path = Path("data/recipes")
+    # Индекс на выборке из N рецептов (сид SAMPLE_SEED); пусто — весь датасет.
+    # На сервере пока выборка: полный индекс — ≈195 ₽ и ≈80 минут (решение автора).
+    index_sample: int | None = Field(default=None, gt=0)
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.
     escalation_chat_id: int | None = None

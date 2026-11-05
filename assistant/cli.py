@@ -56,15 +56,35 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def rebuild_reason(store: VectorStore, *, ref: str, model: str) -> str | None:
-    """Зачем строить индекс заново, или None, если он уже подходит к настройкам."""
+def rebuild_reason(
+    store: VectorStore,
+    *,
+    ref: str,
+    model: str,
+    sample: int | None = None,
+    seed: int = SAMPLE_SEED,
+) -> str | None:
+    """Зачем строить индекс заново, или None, если он уже подходит к настройкам:
+    та же ревизия, модель и размер выборки (у выборки — и сид)."""
     try:
         manifest = store.manifest()
     except IndexMissingError as error:
         return str(error)
-    if manifest.sample is not None:
-        return f"индекс построен на выборке из {manifest.sample} рецептов"
-    return mismatch(manifest, ref=ref, model=model)
+    if reason := mismatch(manifest, ref=ref, model=model):
+        return reason
+    if manifest.sample != sample or (sample is not None and manifest.seed != seed):
+        have = (
+            f"выборке из {manifest.sample} (сид {manifest.seed})"
+            if manifest.sample
+            else "всём датасете"
+        )
+        want = (
+            f"нужна выборка из {sample} (сид {seed})"
+            if sample
+            else "нужен весь датасет"
+        )
+        return f"индекс построен на {have}, а {want}"
+    return None
 
 
 def _data(settings: Settings) -> int:
@@ -96,7 +116,11 @@ def _index(
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
         if if_needed:
             reason = rebuild_reason(
-                store, ref=settings.dataset_revision, model=embedder.model
+                store,
+                ref=settings.dataset_revision,
+                model=embedder.model,
+                sample=sample,
+                seed=seed,
             )
             if reason is None:
                 print(
@@ -244,7 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--sample",
         type=int,
         metavar="N",
-        help="только N рецептов (для сравнения моделей)",
+        help="только N рецептов; без флага — INDEX_SAMPLE из окружения, пусто — весь датасет",
     )
     index.add_argument("--seed", type=int, default=SAMPLE_SEED, help="сид выборки")
     index.add_argument(
@@ -280,7 +304,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _index(
                 settings,
                 if_needed=args.if_needed,
-                sample=args.sample,
+                sample=args.sample
+                if args.sample is not None
+                else settings.index_sample,
                 seed=args.seed,
                 yes=args.yes,
                 quantization=not args.no_quantization,

@@ -40,6 +40,29 @@ def test_index_is_rebuilt_only_when_needed(store: VectorStore) -> None:
     )
 
 
+def test_sample_index_is_kept_when_the_sample_is_wanted(store: VectorStore) -> None:
+    """INDEX_SAMPLE на сервере: выборка того же размера и сида не пересобирается
+    на каждом деплое, другая — пересобирается."""
+    store.recreate(MANIFEST.model_copy(update={"sample": 10000, "seed": 7}))
+
+    def reason(sample: int | None, seed: int = 7) -> str:
+        return (
+            rebuild_reason(
+                store, ref="v3.4.2", model="fake-model", sample=sample, seed=seed
+            )
+            or ""
+        )
+
+    assert reason(10000) == ""
+    assert "нужна выборка из 5000" in reason(5000)
+    assert "сид 8" in reason(10000, seed=8)
+    assert "нужен весь датасет" in reason(None)
+
+    store.recreate(MANIFEST)
+
+    assert "всём датасете, а нужна выборка из 10000" in reason(10000)
+
+
 def test_search_without_embeddings_key_explains_what_to_do(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

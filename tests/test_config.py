@@ -58,3 +58,16 @@ def test_secrets_are_hidden_in_repr_and_dumps(
     assert secret not in str(settings)
     assert secret not in settings.model_dump_json()
     assert getattr(settings, env_name.lower()).get_secret_value() == secret
+
+
+def test_index_sample_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """INDEX_SAMPLE= (пусто) — весь датасет; число — выборка; ноль и минус — ошибка."""
+    monkeypatch.setenv("INDEX_SAMPLE", "")
+    assert Settings().index_sample is None
+
+    monkeypatch.setenv("INDEX_SAMPLE", "10000")
+    assert Settings().index_sample == 10000
+
+    monkeypatch.setenv("INDEX_SAMPLE", "0")
+    with pytest.raises(ValidationError):
+        Settings()
