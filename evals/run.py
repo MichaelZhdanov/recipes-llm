@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import httpx2
 from qdrant_client import QdrantClient
@@ -399,8 +399,14 @@ def _no_cases(directory: Path, categories: frozenset[str]) -> int:
     return 2
 
 
+class RecipeIndex(Protocol):
+    """Откуда берутся рецепты по id: поиск ассистента или само хранилище."""
+
+    def recipes(self, ids: Sequence[int]) -> list[Chunk]: ...
+
+
 def mark_answerable(
-    results: Sequence[AnswerCase], retriever: Retriever
+    results: Sequence[AnswerCase], index: RecipeIndex
 ) -> list[AnswerCase]:
     """Отмечает уточнения, рецептов прошлого ответа которых нет в индексе.
 
@@ -416,7 +422,7 @@ def mark_answerable(
         ids = recipe_ids_in(
             "\n".join(turn.text for turn in r.case.turns if turn.role == "assistant")
         )
-        found = {chunk.recipe_id for chunk in retriever.recipes(ids)}
+        found = {chunk.recipe_id for chunk in index.recipes(ids)}
         marked.append(dataclasses.replace(r, available=set(ids) <= found))
     return marked
 
@@ -779,6 +785,10 @@ def _rescore(
     data = json.loads(raw_path.read_text(encoding="utf-8"))
     cases = {c.id: c for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
     results = load_answer_cases(data["records"], cases)
+    if any(needs_earlier_recipes(r.case) and r.available is None for r in results):
+        # Старые сырые данные без отметки: проверяем по текущему индексу.
+        store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
+        results = mark_answerable(results, store)
     meta = load_meta(data["meta"], revision=revision, rescored_from=str(raw_path))
     judging = _judge(settings, results, judge_choice) if judge else None
     return _finish(results, meta, judging, label or rescore_label(raw_path))
