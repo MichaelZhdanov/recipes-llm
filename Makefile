@@ -56,9 +56,10 @@ search: .env ## найти рецепты, без ответа: make search Q="�
 	$(RUN) search "$$Q" $(ARGS)
 
 # Код выхода 1, если метрика ниже порога из CLAUDE.md. LABEL — суффикс имени отчёта,
-# STAGE=retrieval — только поиск, без GigaChat. SPLIT=holdout — отложенная выборка
-# (один раз в конце). ARGS — прочие флаги evals.run,
-# например ARGS="--rescore evals/reports/raw/<отчёт>.json" или ARGS=--no-judge.
+# STAGE=retrieval — только поиск (разбор вопроса GigaChat, фильтр, векторы, без ответа).
+# SPLIT=holdout — отложенная выборка (один раз в конце). ARGS — прочие флаги evals.run,
+# например ARGS="--rescore evals/reports/raw/<отчёт>.json", ARGS=--no-judge или
+# ARGS=--no-filters (поиск только векторами, базовая линия этапа 1).
 # Прерванный прогон продолжается с --resume: команду печатает сам прогон.
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant

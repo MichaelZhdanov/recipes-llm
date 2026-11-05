@@ -5,9 +5,18 @@ from pathlib import Path
 import pytest
 from eval_helpers import MANIFEST, case, found, result
 
+from assistant.generation.gigachat import LlmStats
 from assistant.retrieval.embeddings import EmbeddingStats
-from evals.report import git_revision, render_report, report_path
-from evals.retrieval_metrics import CaseResult
+from assistant.retrieval.filters import IngredientFilter
+from assistant.tools.search_recipes import SearchArgs
+from evals.report import (
+    Parsing,
+    git_revision,
+    render_report,
+    report_path,
+    retrieval_gates,
+)
+from evals.retrieval_metrics import CaseResult, RetrievalRun
 
 PLOV = found("Плов с курицей", ("курица", "рис"))
 PANCAKES = found("Блины", ("молоко", "мука пшеничная"))
@@ -18,6 +27,7 @@ def render(
     *,
     query_template: str | None = "Instruct: {task}\nQuery: {query}",
     sample: str | None = None,
+    parsing: Parsing | None = None,
 ) -> str:
     return render_report(
         results,
@@ -28,6 +38,7 @@ def render(
         stats=EmbeddingStats(tokens=42),
         today=date(2026, 11, 4),
         sample=sample,
+        parsing=parsing,
     )
 
 
@@ -56,15 +67,20 @@ def test_report_shows_metrics_categories_and_misses() -> None:
     assert "| Модель эмбеддингов | cloud.ru: fake-model, размерность 64 |" in report
     # Перевод строки в инструкции не должен ломать таблицу markdown.
     assert "\\nQuery: <вопрос>` |" in report
-    assert "(by_name) | 0.75 |" in report
-    assert "(include) | 0.50 |" in report
+    assert "(by_name) | 0.75 | ≥ 0.85 ❌ |" in report
+    assert "(include) | 0.50 | — |" in report
     assert (
-        "**основная: среднее name_hit@5 и include_precision@5** | **0.62** |" in report
+        "| M этапа 1: среднее name_hit@5 и include_precision@5 | 0.62 | — |" in report
     )
+    # include-001: половина топа без риса — условия выполнены на 0.50.
+    assert "(include, exclude, follow_up)** | **0.50** | ≥ 0.90 ❌ |" in report
     assert "| by_name | 3 | 0.75 |" in report
     assert "- by_name-003 — «кенгуру»" in report
-    assert "## Промахи (1)" in report
+    assert "| Разбор вопроса | нет (--no-filters)" in report
+    # Промахи: by_name без нужного названия и include, где не весь топ подходит.
+    assert "## Промахи (2)" in report
     assert "### by_name-002 — «борщ»" in report
+    assert "### include-001 — «?»" in report
     assert "1. Блины (0.500) — молоко, мука пшеничная" in report
     assert "## Вопросы по смыслу: что нашлось" in report
 
@@ -102,3 +118,77 @@ def test_sampled_report_says_it_is_a_quick_run() -> None:
 
     assert "| Выборка кейсов | 8 из 32, сид 20261104 — быстрый прогон" in report
     assert "| Инструкция к вопросу | нет, вопрос уходит как есть |" in report
+
+
+def test_gates_follow_thresholds() -> None:
+    """Пороги: conditions ≥ 0.90, exclude_violations ≤ 0.05, name_hit ≥ 0.85."""
+    good = [
+        result(case("by_name-001", expected_name=["плов"]), [[PLOV]]),
+        result(case("exclude-001", "exclude", expected_exclude=["молоко"]), [[PLOV]]),
+    ]
+    bad = [
+        result(case("by_name-001", expected_name=["борщ"]), [[PLOV]]),
+        result(case("exclude-001", "exclude", expected_exclude=["рис"]), [[PLOV]]),
+    ]
+
+    assert retrieval_gates(good) == {
+        "conditions": True,
+        "exclude_violations": True,
+        "name_hit": True,
+    }
+    assert retrieval_gates(bad) == {
+        "conditions": False,
+        "exclude_violations": False,
+        "name_hit": False,
+    }
+    assert retrieval_gates([]) == {}
+
+
+def test_report_shows_how_questions_were_parsed() -> None:
+    args = SearchArgs(
+        query="плов без молока",
+        conditions=IngredientFilter.of(include=[["рис"]], exclude=["молоко"]),
+        dropped=("рис басмати",),
+    )
+    kase = case(
+        "exclude-001",
+        "exclude",
+        question="плов, молоко нельзя",
+        expected_exclude=["молоко"],
+    )
+    results = [
+        CaseResult(kase, [RetrievalRun(top=[PLOV], latency=1.5, args=args)], True),
+        CaseResult(
+            case("by_name-001", question="борщ", expected_name=["борщ"]),
+            [
+                RetrievalRun(
+                    top=[], latency=0.2, error="GigaChat не вызвал search_recipes"
+                )
+            ],
+            True,
+        ),
+    ]
+    stats = LlmStats(requests=2, total_tokens=9000, precached_prompt_tokens=8000)
+    parsing = Parsing(
+        model="GigaChat-2-Pro",
+        served=("GigaChat-2-Pro:2.0.30.01",),
+        prompt_version="search_v1",
+        vocabulary=820,
+        stats=stats,
+    )
+
+    report = render(results, parsing=parsing)
+
+    assert "(из ответа API: GigaChat-2-Pro:2.0.30.01), промпт `search_v1`" in report
+    assert "словарь индекса — 820 имён" in report
+    assert "| имена из разбора не из словаря (отброшены) | 1 | — |" in report
+    assert "| сбои разбора (выдача пустая) | 1 | — |" in report
+    assert "| токены GigaChat на разбор: всего / из кэша | 9000 / 8000 | — |" in report
+    assert (
+        "- exclude-001 «плов, молоко нельзя» → запрос «плов без молока» · с: рис"
+        " · без: молоко · нет в словаре: рис басмати"
+    ) in report
+    assert (
+        "- by_name-001 «борщ» → сбой разбора: GigaChat не вызвал search_recipes"
+        in report
+    )

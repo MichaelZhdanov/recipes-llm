@@ -3,13 +3,25 @@ from itertools import count
 from chunk_helpers import COOKIES, RECIPES, ROWS
 from eval_helpers import MANIFEST, case, found, result
 
+from assistant.generation.gigachat import LlmError
 from assistant.retrieval.embeddings import Embedder
+from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.search import Retriever
-from assistant.retrieval.store import VectorStore
+from assistant.retrieval.store import Hit, VectorStore
+from assistant.tools.search_recipes import SearchArgs
+from evals.dataset import Case
 from evals.retrieval_metrics import (
+    CaseResult,
+    RetrievalRun,
+    conditions,
+    conditions_score,
+    dropped_names,
+    errors,
     exclude_violated,
     exclude_violations,
     fits,
+    has_conditions,
+    history,
     include_matches,
     include_precision,
     mark_available,
@@ -19,6 +31,7 @@ from evals.retrieval_metrics import (
     run_cases,
     run_score,
     unknown_ingredients,
+    vector_search,
 )
 
 CHICKEN_RICE = found("Курица с рисом", ("курица", "рис", "лук репчатый"))
@@ -114,7 +127,7 @@ def test_run_cases_measures_top_and_latency(
 
     [result_] = run_cases(
         [case("by_name-001", question="овсяное печенье", expected_name=["печенье"])],
-        retriever,
+        vector_search(retriever),
         runs=3,
         clock=lambda: float(next(ticks)),
     )
@@ -122,3 +135,93 @@ def test_run_cases_measures_top_and_latency(
     assert result_.latencies == [1.0, 1.0, 1.0]
     assert result_.runs[0].top[0].recipe_id == COOKIES.recipe_id
     assert result_.runs[0].top[0].ingredients == tuple(COOKIES.ingredients)
+
+
+def test_conditions_score_checks_every_recipe_of_the_top() -> None:
+    """«Курица без лука»: курица с рисом и луком не подходит, плов с филе — нет курицы."""
+    kase = case(
+        "exclude-001",
+        "exclude",
+        expected_include=[["курица"]],
+        expected_exclude=["лук репчатый"],
+    )
+    no_onion = found("Курица в сметане", ("курица", "сметана"))
+
+    assert (
+        conditions_score(kase, RetrievalRun([no_onion, CHICKEN_RICE, FILLET_RICE], 0.1))
+        == 1 / 3
+    )
+    assert conditions_score(kase, RetrievalRun([], 0.1)) == 0.0
+    # У by_name и semantic условий для conditions@5 нет.
+    assert (
+        conditions_score(case("by_name-001"), RetrievalRun([CHICKEN_RICE], 0.1)) is None
+    )
+
+
+def test_follow_up_with_conditions_counts_and_without_does_not() -> None:
+    with_onion = case(
+        "follow_up-001",
+        "follow_up",
+        expected_exclude=["лук репчатый"],
+        question="а без лука?",
+    )
+    quantity = case("follow_up-002", "follow_up", must_include=["200 г"])
+    results = [
+        result(with_onion, [[CHICKEN_RICE, FILLET_RICE]]),
+        result(quantity, [[CHICKEN_RICE]]),
+    ]
+
+    assert has_conditions(with_onion) and not has_conditions(quantity)
+    assert run_score(with_onion, results[0].runs[0]) == 0.5
+    assert conditions(results) == 0.5
+
+
+def test_conditions_skip_cases_without_answer_in_the_index() -> None:
+    kase = case("include-001", "include", expected_include=[["рис"]])
+    results = [
+        result(kase, [[CHICKEN_RICE]]),
+        result(
+            case("include-002", "include", expected_include=[["кенгуру"]]),
+            [[PANCAKES]],
+            False,
+        ),
+    ]
+
+    assert conditions(results) == 1.0
+
+
+def test_parse_failure_is_an_empty_run_not_a_crash() -> None:
+    def search(kase: Case) -> tuple[SearchArgs | None, list[Hit]]:
+        raise LlmError("GigaChat не вызвал search_recipes (finish_reason: blacklist)")
+
+    [result_] = run_cases([case("include-001", "include")], search, runs=2)
+
+    assert [run.top for run in result_.runs] == [[], []]
+    assert errors([result_]) == 2
+    assert conditions([result_]) == 0.0
+
+
+def test_dropped_names_are_collected_once_per_case() -> None:
+    args = SearchArgs("плов", IngredientFilter(), dropped=("рис басмати",))
+    runs = [RetrievalRun([], 0.1, args=args), RetrievalRun([], 0.1, args=args)]
+
+    results = [CaseResult(case("include-001", "include"), runs)]
+
+    assert dropped_names(results) == [("include-001", "рис басмати")]
+
+
+def test_history_turns_become_messages() -> None:
+    kase = case(
+        "follow_up-001",
+        "follow_up",
+        expected_exclude=["лук репчатый"],
+        turns=[
+            {"role": "user", "text": "что из курицы?"},
+            {"role": "assistant", "text": "Курица с рисом"},
+        ],
+    )
+
+    assert history(kase) == [
+        {"role": "user", "content": "что из курицы?"},
+        {"role": "assistant", "content": "Курица с рисом"},
+    ]

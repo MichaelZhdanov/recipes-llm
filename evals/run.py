@@ -8,7 +8,9 @@
 Режимы (`--stage`):
 - `answer` (по умолчанию) — ассистент целиком: поиск, GigaChat, проверка
   ссылок (промпт под рецепты — этап 3);
-- `retrieval` — только поиск: метрики считает код, ключ GigaChat не нужен.
+- `retrieval` — только поиск: GigaChat разбирает вопрос в фильтры
+  (search_recipes), Qdrant фильтрует, векторы ранжируют; метрики считает
+  код. `--no-filters` — только векторы, как на этапе 1 (без GigaChat).
 
 После генерации модель-судья (`evals/judge.py`) оценивает groundedness
 и проверяется на канарейках; `--no-judge` её выключает. `--rescore RAW`
@@ -72,6 +74,8 @@ from assistant.indexing.dataset import (
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
+from assistant.tools.search_recipes import PROMPT_VERSION as SEARCH_PROMPT
+from assistant.tools.search_recipes import SearchPlanner
 from evals import progress
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import (
@@ -90,27 +94,36 @@ from evals.judge import Judge, Judging, run_judge
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.relevance import Relevance, RelevanceJudge, judge_relevance
 from evals.report import (
+    Parsing,
     RunMeta,
     answer_gates,
     git_revision,
     render_answer_report,
     render_report,
     report_path,
+    retrieval_gates,
 )
 from evals.retrieval_metrics import (
     CaseResult,
+    conditions,
+    filtered_search,
+    has_conditions,
     mark_available,
-    primary,
     run_cases,
     run_score,
     unknown_ingredients,
+    vector_search,
 )
 
 RUNS = 3
 SAMPLE_SEED = 20261104
 # Категории каждого режима.
-# У by_name, include и exclude поиск проверяет код, у semantic — судья.
-RETRIEVAL_CATEGORIES = frozenset({"by_name", "include", "exclude", "semantic"})
+# У by_name, include, exclude и follow_up поиск проверяет код, у semantic — судья.
+# Из follow_up в поиск идут только кейсы с условиями: вопросы о количестве
+# в уже найденном рецепте проверяет ответ (этап 3).
+RETRIEVAL_CATEGORIES = frozenset(
+    {"by_name", "include", "exclude", "semantic", "follow_up"}
+)
 ANSWER_CATEGORIES = frozenset(
     {"include", "exclude", "by_name", "semantic", "how_to_cook", "out_of_scope"}
 )
@@ -130,6 +143,8 @@ def raw_records(
             "available": r.available,
             "top": [dataclasses.asdict(found) for found in run.top],
             "latency": run.latency,
+            "args": dataclasses.asdict(run.args) if run.args else None,
+            "error": run.error,
             # Вердикты судьи по рецептам топа: судится только первый прогон.
             "relevance": marks.get(r.case.id) if number == 0 else None,
         }
@@ -362,17 +377,22 @@ def _retrieval_stage(
     categories: frozenset[str] = RETRIEVAL_CATEGORIES,
     judge: bool = True,
     quantization: bool = True,
+    filters: bool = True,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
     revision = git_revision()
-    cases, sampled = _choose(
-        [c for c in load_cases() if c.category in categories], sample, seed
-    )
+    selected = [
+        c
+        for c in load_cases()
+        if c.category in categories and (c.category != "follow_up" or has_conditions(c))
+    ]
+    cases, sampled = _choose(selected, sample, seed)
     if not cases:
         return _no_cases(DATASET_DIR, categories)
-    with httpx2.Client(timeout=30) as http:
+    with httpx2.Client(timeout=30) as http, make_http_client() as llm_http:
         embedder = make_embedder(settings, http)
+        llm = make_llm(settings, llm_http) if filters else None
         store = VectorStore(
             QdrantClient(url=settings.qdrant_url, timeout=30), quantization=quantization
         )
@@ -385,7 +405,24 @@ def _retrieval_stage(
                 sep="\n  ",
             )
             return 2
-        results = mark_available(run_cases(cases, retriever, runs=runs), recipes)
+        parsing = None
+        if llm is None:
+            search = vector_search(retriever)
+        else:
+            index_vocabulary = store.vocabulary()
+            planner = SearchPlanner(
+                llm, model=llm_model(settings), vocabulary=index_vocabulary
+            )
+            search = filtered_search(planner, retriever)
+        results = mark_available(run_cases(cases, search, runs=runs), recipes)
+        if llm is not None:
+            parsing = Parsing(
+                model=llm_model(settings),
+                served=tuple(sorted(planner.served)),
+                prompt_version=SEARCH_PROMPT,
+                vocabulary=len(index_vocabulary),
+                stats=llm.stats,
+            )
     relevance = None
     if judge and any(r.case.category == "semantic" for r in results):
         relevance = _judge_relevance(settings, results)
@@ -402,16 +439,19 @@ def _retrieval_stage(
         sample=sampled,
         relevance=relevance,
         quantization=quantization,
+        parsing=parsing,
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results, relevance))
-    value = primary(results)
+    value = conditions(results)
+    gates = retrieval_gates(results, relevance)
+    failed = [name for name, passed in gates.items() if not passed]
     print(
-        "основная метрика (среднее name_hit@5 и include_precision@5) = "
-        f"{'—' if value is None else f'{value:.2f}'}, отчёт: {path}"
+        f"conditions@5 = {'—' if value is None else f'{value:.2f}'}, "
+        f"пороги: {'не пройдены — ' + ', '.join(failed) if failed else 'пройдены'}, "
+        f"отчёт: {path}"
     )
-    # Порогов у метрик поиска пока нет: их выставит этап 2 (CLAUDE.md, «Верификация»).
-    return 0
+    return 1 if failed else 0
 
 
 def _judge_relevance(settings: Settings, results: Sequence[CaseResult]) -> Relevance:
@@ -637,7 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--stage",
         choices=("answer", "retrieval"),
         default="answer",
-        help="answer — ассистент целиком; retrieval — только поиск, без GigaChat",
+        help="answer — ассистент целиком; retrieval — только поиск (разбор вопроса, фильтр, векторы)",
     )
     parser.add_argument(
         "--no-judge",
@@ -648,6 +688,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--no-quantization",
         action="store_true",
         help="STAGE=retrieval: искать по точным векторам, не используя сжатые (замер цены int8)",
+    )
+    parser.add_argument(
+        "--no-filters",
+        action="store_true",
+        help="STAGE=retrieval: только векторы, без разбора вопроса и фильтра (базовая линия)",
     )
     parser.add_argument(
         "--resume",
@@ -676,6 +721,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.categories or RETRIEVAL_CATEGORIES,
             not args.no_judge,
             not args.no_quantization,
+            not args.no_filters,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(

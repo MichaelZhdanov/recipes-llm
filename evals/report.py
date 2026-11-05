@@ -50,8 +50,14 @@ from evals.retrieval_metrics import (
     CODE_CHECKED,
     CaseResult,
     K,
+    RetrievalRun,
     category_mean,
+    conditions,
+    conditions_score,
+    dropped_names,
+    errors,
     exclude_violations,
+    has_conditions,
     include_precision,
     name_hit,
     percentile,
@@ -125,15 +131,86 @@ def _mark(value: bool | None) -> str:
     return {True: "✅ ", False: "❌ ", None: "? "}[value]
 
 
-def _relevance_rows(relevance: Relevance | None) -> list[str]:
+# Пороги поиска (этап 2): записаны до первого прогона с фильтрами,
+# менять только с записью в отчёте. Код выхода 1, если какой-то не пройден.
+RETRIEVAL_THRESHOLDS = {
+    "conditions": 0.90,
+    # Не больше: доля топа с исключённым ингредиентом.
+    "exclude_violations": 0.05,
+    "name_hit": 0.85,
+    "semantic_relevance": 0.80,
+}
+
+
+def retrieval_gates(
+    results: Sequence[CaseResult], relevance: Relevance | None = None
+) -> dict[str, bool]:
+    """Метрики поиска с порогом и прошли ли они его. Метрики без кейсов порога не имеют."""
+    t = RETRIEVAL_THRESHOLDS
+    gates: dict[str, bool] = {}
+    if (value := conditions(results)) is not None:
+        gates["conditions"] = value >= t["conditions"]
+    if (value := exclude_violations(results)) is not None:
+        gates["exclude_violations"] = value <= t["exclude_violations"]
+    if (value := name_hit(results)) is not None:
+        gates["name_hit"] = value >= t["name_hit"]
+    if relevance is not None and (rate := semantic_relevance(relevance)).n:
+        gates["semantic_relevance"] = rate.value >= t["semantic_relevance"]
+    return gates
+
+
+def _gate(gates: dict[str, bool], name: str, sign: str) -> str:
+    threshold = f"{sign} {RETRIEVAL_THRESHOLDS[name]:.2f}"
+    return f"{threshold} {_status(gates[name])}" if name in gates else threshold
+
+
+@dataclass(frozen=True)
+class Parsing:
+    """Как разбирались вопросы: для шапки отчёта поиска."""
+
+    # Модель из настроек и модели с версией из ответов API.
+    model: str
+    served: tuple[str, ...]
+    prompt_version: str
+    vocabulary: int
+    stats: LlmStats
+
+
+def _parsing_cell(parsing: Parsing | None) -> str:
+    if parsing is None:
+        return "нет (--no-filters): только векторы по вопросу, как на этапе 1"
+    served = ", ".join(parsing.served) or "—"
+    return (
+        f"{parsing.model} (из ответа API: {served}), промпт `{parsing.prompt_version}`, "
+        f"принудительный вызов search_recipes; словарь индекса — {parsing.vocabulary} имён"
+    )
+
+
+def _plan_line(run: RetrievalRun) -> str:
+    if run.error is not None:
+        return f"сбой разбора: {run.error}"
+    if run.args is None:
+        return "без разбора"
+    parts = [f"запрос «{run.args.query}»"]
+    if run.args.conditions.include:
+        groups = (" или ".join(g) for g in run.args.conditions.include)
+        parts.append(f"с: {'; '.join(groups)}")
+    if run.args.conditions.exclude:
+        parts.append(f"без: {', '.join(run.args.conditions.exclude)}")
+    if run.args.dropped:
+        parts.append(f"нет в словаре: {', '.join(run.args.dropped)}")
+    return " · ".join(parts)
+
+
+def _relevance_rows(relevance: Relevance | None, gates: dict[str, bool]) -> list[str]:
     if relevance is None:
         return []
     caught, accepted = relevance_canary_scores(relevance)
     return [
         f"| semantic_relevance@{K}: доля подходящих рецептов в топе (semantic, судья) "
-        f"| {semantic_relevance(relevance)} |",
-        f"| канарейки: судья отверг неподходящие / принял подходящие | {caught} / {accepted} |",
-        f"| неразобранных ответов судьи, токены судьи | {relevance.failures}, {relevance.tokens} |",
+        f"| {semantic_relevance(relevance)} | {_gate(gates, 'semantic_relevance', '≥')} |",
+        f"| канарейки: судья отверг неподходящие / принял подходящие | {caught} / {accepted} | — |",
+        f"| неразобранных ответов судьи, токены судьи | {relevance.failures}, {relevance.tokens} | — |",
     ]
 
 
@@ -157,17 +234,24 @@ def render_report(
     sample: str | None = None,
     relevance: Relevance | None = None,
     quantization: bool = True,
+    parsing: Parsing | None = None,
 ) -> str:
     latencies = [lat for r in results for lat in r.latencies]
     cost = estimate_cost(manifest.embedding_model, stats.tokens)
     categories = Counter(r.case.category for r in results)
     unavailable = [r for r in results if r.available is False]
+    gates = retrieval_gates(results, relevance)
+    dropped = dropped_names(results)
+    masked = sum(stats.masked.values()) + (
+        sum(parsing.stats.masked.values()) if parsing else 0
+    )
 
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
         "",
-        "Проверяется только поиск (LLM нет). Наборы — `evals/dataset/`, кто и как их",
-        "составлял — `evals/dataset/README.md`.",
+        "Проверяется поиск: разбор вопроса GigaChat в аргументы search_recipes, фильтр",
+        "Qdrant «с чем и без чего» и векторы. Ответа модели нет. Наборы — `evals/dataset/`,",
+        "кто и как их составлял — `evals/dataset/README.md`.",
         "",
         "| Параметр | Значение |",
         "|---|---|",
@@ -183,30 +267,49 @@ def render_report(
                 "| Поиск | по точным векторам, сжатые не используются (--no-quantization) |"
             ]
         ),
+        f"| Разбор вопроса | {_parsing_cell(parsing)} |",
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].runs) if results else 0} |",
-        "| Промпт | не используется |",
         f"| Судья | {f'{relevance.model}, рубрика `{relevance.prompt_version}`' if relevance else 'не запускался'} |",
         *_sample_row(sample),
         "",
         "## Метрики",
         "",
-        "Считает код по топ-5 поиска. Кейсы без подходящего рецепта в индексе в метрику",
-        f"не идут (их {len(unavailable)}, список ниже). Порогов пока нет: их выставит этап 2.",
+        "Считает код по топ-5 поиска, `semantic_relevance` — судья. Кейсы без подходящего",
+        f"рецепта в индексе в метрику не идут (их {len(unavailable)}, список ниже).",
+        "Пороги записаны до первого прогона с фильтрами (`RETRIEVAL_THRESHOLDS`).",
         "",
-        "| Метрика | Значение |",
-        "|---|---|",
-        f"| name_hit@{K}: в топе есть рецепт с нужным словом в названии (by_name) | {_value(name_hit(results))} |",
-        f"| include_precision@{K}: доля топа, где есть все нужные ингредиенты (include) | {_value(include_precision(results))} |",
-        f"| exclude_violations@{K}: доля топа с исключённым ингредиентом (exclude, меньше — лучше) | {_value(exclude_violations(results))} |",
-        f"| **основная: среднее name_hit@{K} и include_precision@{K}** | **{_value(primary(results))}** |",
-        *_relevance_rows(relevance),
+        "| Метрика | Значение | Порог |",
+        "|---|---|---|",
+        f"| **conditions@{K}: доля топа, где выполнены все условия кейса (include, exclude, follow_up)** "
+        f"| **{_value(conditions(results))}** | {_gate(gates, 'conditions', '≥')} |",
+        f"| exclude_violations@{K}: доля топа с исключённым ингредиентом (exclude, меньше — лучше) "
+        f"| {_value(exclude_violations(results))} | {_gate(gates, 'exclude_violations', '≤')} |",
+        f"| name_hit@{K}: в топе есть рецепт с нужным словом в названии (by_name) "
+        f"| {_value(name_hit(results))} | {_gate(gates, 'name_hit', '≥')} |",
+        f"| include_precision@{K}: доля топа, где есть все нужные ингредиенты (include) "
+        f"| {_value(include_precision(results))} | — |",
+        f"| M этапа 1: среднее name_hit@{K} и include_precision@{K} | {_value(primary(results))} | — |",
+        *_relevance_rows(relevance, gates),
+        f"| имена из разбора не из словаря (отброшены) | {len(dropped)} | — |",
+        f"| сбои разбора (выдача пустая) | {errors(results)} | — |",
         f"| задержка поиска p50 / p95 | {percentile(latencies, 0.5):.2f} / "
-        f"{percentile(latencies, 0.95):.2f} с |",
-        f"| токены запросов к API эмбеддингов | {stats.tokens}{f' ({cost})' if cost else ''} |",
-        f"| срабатывания маскера ПДн | {sum(stats.masked.values())} |",
+        f"{percentile(latencies, 0.95):.2f} с | — |",
+        *(
+            [
+                f"| токены GigaChat на разбор: всего / из кэша | {parsing.stats.total_tokens} / "
+                f"{parsing.stats.precached_prompt_tokens} | — |"
+            ]
+            if parsing
+            else []
+        ),
+        f"| токены запросов к API эмбеддингов | {stats.tokens}{f' ({cost})' if cost else ''} | — |",
+        f"| срабатывания маскера ПДн | {masked} | — |",
         "",
         "## По категориям",
+        "",
+        "Метрика категории: by_name — name_hit, include — include_precision,",
+        "exclude — exclude_violations (меньше — лучше), follow_up — conditions.",
         "",
         "| Категория | Кейсов | Метрика |",
         "|---|---|---|",
@@ -223,25 +326,34 @@ def render_report(
         "",
         "## По кейсам",
         "",
-        "| id | категория | стиль | метрика по прогонам | топ-1 |",
-        "|---|---|---|---|---|",
+        "| id | категория | стиль | метрика по прогонам | conditions по прогонам | топ-1 |",
+        "|---|---|---|---|---|---|",
     ]
     for r in results:
         scores = ", ".join(_value(run_score(r.case, run)) for run in r.runs)
+        met = ", ".join(_value(conditions_score(r.case, run)) for run in r.runs)
         top1 = r.runs[-1].top[0].name if r.runs and r.runs[-1].top else "—"
         lines.append(
-            f"| {r.case.id} | {r.case.category} | {r.case.style} | {scores} | {top1} |"
+            f"| {r.case.id} | {r.case.category} | {r.case.style} | {scores} | {met} | {top1} |"
         )
 
-    # Промах: в by_name нет нужного названия, в include ни один рецепт не подошёл,
-    # в exclude больше половины топа с исключённым ингредиентом.
+    if parsing is not None:
+        lines += ["", "## Разбор вопросов (последний прогон)", ""]
+        lines += [
+            f"- {r.case.id} «{r.case.question}» → {_plan_line(r.runs[-1])}"
+            for r in results
+            if r.runs
+        ]
+
+    # Промах: у кейса с условиями в топе есть рецепт, который их не выполняет;
+    # у by_name в топе нет ни одного рецепта с нужным названием.
     def missed(r: CaseResult) -> bool:
         if r.available is False or not r.runs:
             return False
-        score = run_score(r.case, r.runs[-1])
-        if score is None:
-            return False
-        return score > 0.5 if r.case.category == "exclude" else score == 0.0
+        if has_conditions(r.case):
+            met = conditions_score(r.case, r.runs[-1])
+            return met is not None and met < 1.0
+        return run_score(r.case, r.runs[-1]) == 0.0
 
     misses = [r for r in results if missed(r)]
     lines += ["", f"## Промахи ({len(misses)})", ""]
@@ -258,6 +370,8 @@ def render_report(
             f"### {r.case.id} — «{r.case.question}»",
             "",
             "Ожидалось: " + "; ".join(expected),
+            "",
+            f"Разбор: {_plan_line(r.runs[-1])}",
             "",
             "Найдено:",
             *_found_lines(r),

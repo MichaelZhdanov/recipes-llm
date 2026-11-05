@@ -186,6 +186,8 @@ class SearchPlanner:
         self._model = model
         self._vocabulary = frozenset(vocabulary)
         self._system: Message = {"role": "system", "content": system_prompt(vocabulary)}
+        # Модели с версией из ответов API: пишутся в отчёт eval.
+        self.served: set[str] = set()
 
     def plan(self, question: str, history: Sequence[Message] = ()) -> SearchArgs:
         messages: list[Message] = [
@@ -201,6 +203,7 @@ class SearchPlanner:
             functions=[SEARCH_RECIPES],
             function_call={"name": NAME},
         )
+        self.served.add(completion.model)
         call = completion.function_call
         if call is None or call["name"] != NAME:
             raise LlmError(
