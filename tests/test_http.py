@@ -74,3 +74,11 @@ def test_raises_network_error_after_last_attempt() -> None:
 
     with pytest.raises(httpx2.ConnectError):
         request_with_retries(send, attempts=2, sleep=lambda _: None)
+
+
+def test_retries_overloaded_529() -> None:
+    """529 — «перегружен» у Anthropic: временная ошибка, как 503."""
+    calls, send = make_send([httpx2.Response(529), httpx2.Response(200)])
+
+    assert request_with_retries(send, sleep=lambda _: None).status_code == 200
+    assert len(calls) == 2

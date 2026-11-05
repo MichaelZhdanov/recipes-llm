@@ -1,6 +1,7 @@
-"""Повторы HTTP-запросов к внешним сервисам (cloud.ru, Voyage, GigaChat, позже Telegram и Grocy).
+"""Повторы HTTP-запросов к внешним сервисам (cloud.ru, Voyage, GigaChat, Anthropic, позже Telegram и Grocy).
 
-Повторяются сетевые ошибки и ответы «попробуйте позже»: 429 и 5xx. Пауза
+Повторяются сетевые ошибки и ответы «попробуйте позже»: 429 и 5xx, включая
+529 — так Anthropic отвечает, когда перегружен. Пауза
 берётся из заголовка Retry-After, если сервер его прислал, иначе растёт
 экспоненциально. Остальные коды (400, 401, 404) не повторяются: повтор
 их не исправит.
@@ -11,7 +12,7 @@ from collections.abc import Callable
 
 import httpx2
 
-RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 
 
 def _backoff(attempt: int, base_delay: float, max_delay: float) -> float:
