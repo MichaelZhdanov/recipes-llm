@@ -159,16 +159,17 @@ def test_code_comments_are_not_headings() -> None:
 
 
 def test_names_that_must_be_in_the_source() -> None:
+    """Имя — слово с подчёркиванием в обратных кавычках; без кавычек не проверяется."""
     assert names_in(
-        "Задайте PAPERLESS_OCR_LANGUAGE, затем выполните `manage.py document_exporter` "
-        "или `document_index reindex`; слово `eng` не имя"
+        "Задайте `PAPERLESS_OCR_LANGUAGE`, затем `manage.py document_exporter` "
+        "или `document_index reindex`; `eng` не имя, и OCR_MODE без кавычек тоже"
     ) == ["PAPERLESS_OCR_LANGUAGE", "document_exporter", "document_index"]
 
 
 def test_statement_with_valid_quote_is_kept() -> None:
     checked = check_statement(
         Statement(
-            text="Язык OCR задаёт PAPERLESS_OCR_LANGUAGE, по умолчанию `eng`.",
+            text="Язык OCR задаёт `PAPERLESS_OCR_LANGUAGE`, по умолчанию `eng`.",
             citations=[
                 cite(1, "Customize the language that paperless"),
                 cite(1, "выдуманная цитата, которой нет"),
@@ -184,7 +185,7 @@ def test_statement_with_valid_quote_is_kept() -> None:
 def test_made_up_parameter_drops_statement() -> None:
     checked = check_statement(
         Statement(
-            text="Язык OCR задаёт PAPERLESS_OCR_LANG.",
+            text="Язык OCR задаёт `PAPERLESS_OCR_LANG`.",
             citations=[cite(1, "Customize the language that paperless")],
         ),
         SOURCES,
@@ -203,7 +204,7 @@ def test_name_must_match_whole_not_as_prefix() -> None:
 
     checked = check_statement(
         Statement(
-            text="Нужен PAPERLESS_OCR_LANGUAGE.",
+            text="Нужен `PAPERLESS_OCR_LANGUAGE`.",
             citations=[cite(1, "Customize the language that paperless")],
         ),
         source,
@@ -216,7 +217,7 @@ def test_name_must_be_in_a_cited_source_not_just_any() -> None:
     # Имя есть в источнике 1, но процитирован только источник 2.
     checked = check_statement(
         Statement(
-            text="Язык задаёт PAPERLESS_OCR_LANGUAGE.",
+            text="Язык задаёт `PAPERLESS_OCR_LANGUAGE`.",
             citations=[cite(2, "The default language is always installed")],
         ),
         SOURCES,
