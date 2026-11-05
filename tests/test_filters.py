@@ -113,3 +113,11 @@ def test_vocabulary_counts_recipes_per_ingredient(indexed: VectorStore) -> None:
 def test_vocabulary_needs_an_index(store: VectorStore) -> None:
     with pytest.raises(IndexMissingError, match="make index"):
         store.vocabulary()
+
+
+def test_recipes_by_id_keep_the_order_and_skip_missing(indexed: VectorStore) -> None:
+    """Рецепты прошлых ходов диалога: по id, без поиска; нет в индексе — пропуск."""
+    ids = [COOKIES.recipe_id, 999999, CHICKEN.recipe_id, COOKIES.recipe_id]
+
+    assert indexed.recipes(ids) == [COOKIES, CHICKEN]
+    assert indexed.recipes([]) == []

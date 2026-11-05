@@ -46,6 +46,8 @@ JUNK_NAME = "вместо названия навигация сайта"
 BAD_URL = "url не страница рецепта"
 
 _RECIPE_URL = re.compile(r"^https://www\.povarenok\.ru/recipes/show/(\d+)/?$")
+# Ссылка на рецепт внутри текста: в прошлых ответах ассистента.
+_RECIPE_LINK = re.compile(r"povarenok\.ru/recipes/show/(\d+)")
 # Артефакт сбора с сайта: у 610 рецептов вместо названия хлебные крошки
 # «Главная > Рецепты > версия для печати».
 _JUNK_NAME = re.compile(r"^Главная\s*>\s*Рецепты", re.IGNORECASE)
@@ -185,3 +187,8 @@ def read_dataset(path: Path) -> Dataset:
         else:
             skipped[parsed] += 1
     return Dataset(recipes=recipes, skipped=skipped, sha256=file_sha256(path))
+
+
+def recipe_ids_in(text: str) -> list[int]:
+    """id рецептов из ссылок povarenok.ru в тексте, по порядку, без повторов."""
+    return list(dict.fromkeys(int(m) for m in _RECIPE_LINK.findall(text)))

@@ -20,6 +20,7 @@ from assistant.indexing.dataset import (
     known_sha256,
     parse_row,
     read_dataset,
+    recipe_ids_in,
 )
 
 REVISION = "abc123"
@@ -152,3 +153,15 @@ def test_http_error_is_clear(tmp_path: Path) -> None:
 
     with pytest.raises(DatasetError, match="HTTP 404"):
         ensure_dataset(REVISION, tmp_path, client, sha256="0" * 64)
+
+
+def test_recipe_ids_from_links_in_an_answer() -> None:
+    """Прошлый ответ ассистента: ссылки на рецепты — по ним находятся источники."""
+    text = (
+        "1. Блины — https://www.povarenok.ru/recipes/show/103053/\n"
+        "2. Оладьи — povarenok.ru/recipes/show/2001 и снова первый: "
+        "https://www.povarenok.ru/recipes/show/103053/"
+    )
+
+    assert recipe_ids_in(text) == [103053, 2001]
+    assert recipe_ids_in("рецептов нет") == []

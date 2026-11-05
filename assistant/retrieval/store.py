@@ -84,8 +84,14 @@ class Hit:
     score: float
 
 
+def recipe_point_id(ref: str, recipe_id: int) -> str:
+    """id точки рецепта: один и тот же для той же ревизии, поэтому рецепт
+    находится по id без поиска."""
+    return str(uuid.uuid5(_POINT_NAMESPACE, f"{ref}:{recipe_id}"))
+
+
 def point_id(chunk: Chunk) -> str:
-    return str(uuid.uuid5(_POINT_NAMESPACE, f"{chunk.ref}:{chunk.recipe_id}"))
+    return recipe_point_id(chunk.ref, chunk.recipe_id)
 
 
 def _quantization(manifest: IndexManifest) -> models.ScalarQuantization | None:
@@ -198,6 +204,24 @@ class VectorStore:
         if not metadata:
             raise IndexMissingError("у коллекции нет паспорта: выполните make index")
         return IndexManifest.model_validate(metadata)
+
+    def recipes(self, ids: Sequence[int]) -> list[Chunk]:
+        """Рецепты по id в том же порядке — те, что нашлись раньше в диалоге
+        («сколько муки во втором?»). Которых нет в индексе, пропускаются:
+        на выборке из датасета есть не все рецепты."""
+        ref = self.manifest().ref
+        points = self._client.retrieve(
+            self._alias,
+            ids=[recipe_point_id(ref, recipe_id) for recipe_id in ids],
+            with_payload=True,
+        )
+        found = {}
+        for point in points:
+            chunk = Chunk.model_validate(point.payload)
+            found[chunk.recipe_id] = chunk
+        return [
+            found[recipe_id] for recipe_id in dict.fromkeys(ids) if recipe_id in found
+        ]
 
     def vocabulary(self) -> dict[str, int]:
         """Имена ингредиентов в индексе и в скольких рецептах каждое, от частых
