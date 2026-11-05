@@ -10,7 +10,7 @@ def test_defaults_without_environment() -> None:
     assert settings.llm_provider == "gigachat"
     assert settings.llm_model == ""
     assert settings.gigachat_scope == "GIGACHAT_API_PERS"
-    assert settings.paperless_ref == "v3.4.2"
+    assert settings.dataset_revision == "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
     assert settings.qdrant_url == "http://localhost:6333"
     assert settings.embedding_provider == "cloudru"
     # Пустая модель: берётся модель провайдера по умолчанию.
@@ -45,13 +45,13 @@ def test_engineer_ids_reject_non_numbers(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_empty_values_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ESCALATION_CHAT_ID", "")
-    monkeypatch.setenv("PAPERLESS_REF", "")
+    monkeypatch.setenv("DATASET_REVISION", "")
     monkeypatch.setenv("ENGINEER_TELEGRAM_IDS", "")
 
     settings = Settings()
 
     assert settings.escalation_chat_id is None
-    assert settings.paperless_ref == "v3.4.2"
+    assert settings.dataset_revision == "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
     assert settings.engineer_telegram_ids == frozenset()
 
 

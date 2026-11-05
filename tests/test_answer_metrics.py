@@ -119,7 +119,7 @@ def run(
             sources=[],
             model="GigaChat-2:2.0",
             prompt_version="answer_v1",
-            paperless_ref="v3.4.2",
+            dataset_revision="v3.4.2",
         ),
         checked=checked,
         sources=SOURCES,

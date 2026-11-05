@@ -39,7 +39,7 @@ MAX_QUESTION_CHARS = 2000
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     version: str
-    paperless_ref: str
+    dataset_revision: str
 
 
 class AskRequest(BaseModel):
@@ -124,7 +124,7 @@ def create_app(
     def health() -> HealthResponse:
         """Liveness: процесс жив и отвечает. Qdrant и Paperless здесь не проверяются."""
         return HealthResponse(
-            status="ok", version=__version__, paperless_ref=config.paperless_ref
+            status="ok", version=__version__, dataset_revision=config.dataset_revision
         )
 
     @app.post("/ask", responses={503: {"description": "поиск или LLM недоступны"}})

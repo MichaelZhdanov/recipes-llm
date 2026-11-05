@@ -46,7 +46,7 @@ services:
       VOYAGE_API_URL: ${VOYAGE_API_URL:-}
       # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
       QDRANT_URL: http://qdrant:6333
-      PAPERLESS_REF: ${PAPERLESS_REF:-}
+      DATASET_REVISION: ${DATASET_REVISION:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
       ENGINEER_TELEGRAM_IDS: ${ENGINEER_TELEGRAM_IDS:-}

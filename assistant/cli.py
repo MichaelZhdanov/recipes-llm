@@ -63,7 +63,7 @@ def _search(settings: Settings, question: str, k: int, as_json: bool) -> int:
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        hits = Retriever(store, embedder, ref=settings.paperless_ref).search(
+        hits = Retriever(store, embedder, ref=settings.dataset_revision).search(
             question, k=k
         )
     if as_json:

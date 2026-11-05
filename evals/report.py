@@ -136,7 +136,7 @@ def render_report(
         "| Параметр | Значение |",
         "|---|---|",
         f"| Коммит ассистента | {revision} |",
-        f"| Paperless | {manifest.ref} ({manifest.commit or 'коммит неизвестен'}) |",
+        f"| Данные | ревизия {manifest.ref} |",
         f"| Модель эмбеддингов | {provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
         f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
         f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
@@ -370,7 +370,7 @@ def render_answer_report(
             if meta.rescored_from
             else []
         ),
-        f"| Paperless | {manifest.ref} ({manifest.commit or 'коммит неизвестен'}) |",
+        f"| Данные | ревизия {manifest.ref} |",
         f"| Модель эмбеддингов | {meta.provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
         f"| Инструкция к вопросу | {_instruction_cell(meta.query_template)} |",
         f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",

@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     voyage_api_url: str = VOYAGE_API_URL
     # Умолчания рассчитаны на запуск с хоста; контейнеру ассистента адреса docker-сети задаёт compose.
     qdrant_url: str = "http://localhost:6333"
-    paperless_ref: str = "v3.4.2"
+    # Ревизия (коммит) датасета rogozinushka/povarenok-recipes на HuggingFace:
+    # по ней строится индекс, и её же паспорт индекса сверяет с настройками.
+    dataset_revision: str = "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.
     escalation_chat_id: int | None = None

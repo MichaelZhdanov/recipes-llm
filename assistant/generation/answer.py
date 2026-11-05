@@ -108,7 +108,7 @@ class Answer(BaseModel):
     # Модель с версией из ответа API; пусто, если модель не вызывалась.
     model: str
     prompt_version: str
-    paperless_ref: str
+    dataset_revision: str
 
 
 @dataclass(frozen=True)
@@ -287,7 +287,7 @@ def assemble(
         sources=links,
         model=completion.model if completion else "",
         prompt_version=prompt_version,
-        paperless_ref=ref,
+        dataset_revision=ref,
     )
     trace = Trace(
         hits=hits,
@@ -383,7 +383,9 @@ def _source_lines(link: SourceLink) -> list[str]:
 def render_markdown(answer: Answer) -> str:
     """Ответ текстом для консоли и чата: утверждения с [n], источники, пометка GigaChat."""
     if answer.reason is not None:
-        lines = [f"{_REASON_TEXT[answer.reason]} Paperless-ngx {answer.paperless_ref}."]
+        lines = [
+            f"{_REASON_TEXT[answer.reason]} Paperless-ngx {answer.dataset_revision}."
+        ]
         if answer.sources:
             lines += ["", "Вот что может пригодиться:"]
     else:
@@ -398,7 +400,7 @@ def render_markdown(answer: Answer) -> str:
         lines += [
             "",
             f"Ответ сгенерирован GigaChat ({answer.model}) по документации и коду "
-            f"Paperless-ngx {answer.paperless_ref}.",
+            f"Paperless-ngx {answer.dataset_revision}.",
         ]
     return "\n".join(lines)
 
@@ -414,7 +416,7 @@ def make_answerer(
     # Сначала то, что падает без ключей: ошибка понятна ещё до сетевых вызовов.
     embedder = make_embedder(settings, embeddings_http)
     llm = make_llm(settings, llm_http)
-    retriever = Retriever(VectorStore(qdrant), embedder, ref=settings.paperless_ref)
+    retriever = Retriever(VectorStore(qdrant), embedder, ref=settings.dataset_revision)
     return Answerer(
-        retriever, llm, model=llm_model(settings), ref=settings.paperless_ref
+        retriever, llm, model=llm_model(settings), ref=settings.dataset_revision
     )

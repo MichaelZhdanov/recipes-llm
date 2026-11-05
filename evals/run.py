@@ -214,7 +214,7 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         sources,
         completion,
         prompt_version=record["answer"]["prompt_version"],
-        ref=record["answer"]["paperless_ref"],
+        ref=record["answer"]["dataset_revision"],
         retrieval_seconds=record["retrieval_seconds"],
         generation_seconds=record["generation_seconds"],
     )
@@ -336,7 +336,7 @@ def _retrieval_stage(
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        retriever = Retriever(store, embedder, ref=settings.paperless_ref)
+        retriever = Retriever(store, embedder, ref=settings.dataset_revision)
         if not _check_sources(cases, store):
             return 2
         results = run_cases(cases, retriever, runs=runs)
@@ -424,14 +424,14 @@ def _answer_stage(
         embedder = make_embedder(settings, embeddings_http)
         llm = make_llm(settings, llm_http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        retriever = Retriever(store, embedder, ref=settings.paperless_ref)
+        retriever = Retriever(store, embedder, ref=settings.dataset_revision)
         if not _check_sources(cases, store):
             return 2
         journal = _open_journal(journal_file, resume is not None, revision, cases, runs)
         if journal is None:
             return 2
         done = _resumed_cases(journal, cases)
-        answerer = Answerer(retriever, llm, model=model, ref=settings.paperless_ref)
+        answerer = Answerer(retriever, llm, model=model, ref=settings.dataset_revision)
         _log(
             f"модель {model}, {len(cases)} кейсов × {runs} прогона, журнал {journal_file}"
         )

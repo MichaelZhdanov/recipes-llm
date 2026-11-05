@@ -13,8 +13,8 @@ from assistant.retrieval.store import IndexMissingError
 SETTINGS = Settings()
 
 
-def test_health_reports_version_and_paperless_ref() -> None:
-    client = TestClient(create_app(Settings(paperless_ref="v9.9.9")))
+def test_health_reports_version_and_dataset_revision() -> None:
+    client = TestClient(create_app(Settings(dataset_revision="v9.9.9")))
 
     response = client.get("/health")
 
@@ -22,17 +22,17 @@ def test_health_reports_version_and_paperless_ref() -> None:
     assert response.json() == {
         "status": "ok",
         "version": __version__,
-        "paperless_ref": "v9.9.9",
+        "dataset_revision": "v9.9.9",
     }
 
 
 def test_settings_come_from_environment_when_not_passed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("PAPERLESS_REF", "v1.2.3")
+    monkeypatch.setenv("DATASET_REVISION", "v1.2.3")
     client = TestClient(create_app())
 
-    assert client.get("/health").json()["paperless_ref"] == "v1.2.3"
+    assert client.get("/health").json()["dataset_revision"] == "v1.2.3"
 
 
 class FakeAnswerer:
@@ -51,7 +51,7 @@ class FakeAnswerer:
             sources=[],
             model="GigaChat-2:1.0",
             prompt_version="answer_v1",
-            paperless_ref="v3.4.2",
+            dataset_revision="v3.4.2",
         )
         trace = Trace(
             hits=[],

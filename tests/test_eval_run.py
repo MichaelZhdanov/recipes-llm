@@ -43,7 +43,7 @@ def test_answer_records_are_json_with_model_output_and_checks() -> None:
         sources=[],
         model="GigaChat-2:1.0",
         prompt_version="answer_v1",
-        paperless_ref="v3.4.2",
+        dataset_revision="v3.4.2",
     )
     checked = [
         CheckedStatement(
