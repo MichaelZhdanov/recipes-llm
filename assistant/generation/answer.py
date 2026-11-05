@@ -46,13 +46,10 @@ from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, VectorStore
-from assistant.router import QuestionType, route
 from assistant.security.pii import mask_pii
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_VERSION = "answer_v1"
-# Разбор ошибки (этап 3): включается, когда точный поиск нашёл текст ошибки в коде.
-ERROR_PROMPT_VERSION = "error_v1"
 K = 5
 # Сколько найденных кусков приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -112,8 +109,6 @@ class Answer(BaseModel):
     model: str
     prompt_version: str
     paperless_ref: str
-    # error — в вопросе текст ошибки из кода (router.py), general — обычный вопрос.
-    question_type: QuestionType = "general"
 
 
 @dataclass(frozen=True)
@@ -175,26 +170,21 @@ def user_message(
     question: str,
     sources: Sequence[SourceText],
     ref: str,
-    error_lines: Sequence[str] = (),
 ) -> str:
-    """Источники, подсказка о месте ошибки и вопрос."""
+    """Источники и вопрос."""
     blocks = [
         f'<source id="{s.number}" path="{s.chunk.path}" '
         f'lines="{s.chunk.start_line}-{s.chunk.end_line}" '
         f'title="{_attribute(s.chunk.breadcrumb)}">\n{s.text}\n</source>'
         for s in sources
     ]
-    parts = [f"Источники (Paperless-ngx {ref}):", "\n\n".join(blocks)]
-    if error_lines:
-        # Подсказка, где совпал текст ошибки. Цитату из этого куска модель всё равно
-        # должна привести сама: проверка ссылок та же.
-        parts.append(
-            "Текст ошибки из вопроса совпал со строкой кода: "
-            + ", ".join(error_lines)
-            + "."
-        )
-    parts.append(f"Вопрос пользователя: {question}")
-    return "\n\n".join(parts)
+    return "\n\n".join(
+        [
+            f"Источники (Paperless-ngx {ref}):",
+            "\n\n".join(blocks),
+            f"Вопрос пользователя: {question}",
+        ]
+    )
 
 
 def _link(number: int, chunk: Chunk, start: int, end: int) -> SourceLink:
@@ -279,7 +269,6 @@ def assemble(
     ref: str,
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
-    question_type: QuestionType = "general",
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
     if completion is None:
@@ -299,7 +288,6 @@ def assemble(
         model=completion.model if completion else "",
         prompt_version=prompt_version,
         paperless_ref=ref,
-        question_type=question_type,
     )
     trace = Trace(
         hits=hits,
@@ -337,28 +325,14 @@ class Answerer:
         hits = self._retriever.search(question, k=self._k)
         retrieved = self._clock()
         sources = prepare_sources(hits)
-        question_type = route(hits)
-        prompt_version = (
-            ERROR_PROMPT_VERSION if question_type == "error" else self.prompt_version
-        )
-        error_lines = [
-            f"`{hit.chunk.path}:{hit.line}` (источник {number})"
-            for number, hit in enumerate(hits, start=1)
-            if hit.exact
-        ]
         completion = None
         if sources:
             completion = self._llm.chat(
                 [
-                    {"role": "system", "content": load_prompt(prompt_version)},
+                    {"role": "system", "content": load_prompt(self.prompt_version)},
                     {
                         "role": "user",
-                        "content": user_message(
-                            question,
-                            sources,
-                            self._ref,
-                            error_lines,
-                        ),
+                        "content": user_message(question, sources, self._ref),
                     },
                 ],
                 model=self.model,
@@ -374,11 +348,10 @@ class Answerer:
             hits,
             sources,
             completion,
-            prompt_version=prompt_version,
+            prompt_version=self.prompt_version,
             ref=self._ref,
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
-            question_type=question_type,
         )
 
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.search import Retriever
-from evals.dataset import Case, parse_line
+from evals.dataset import Case
 
 K = 5
 
@@ -27,8 +27,6 @@ class RetrievalRun:
     # Ранг первого ожидаемого источника (с 1), None — его нет в топ-K.
     rank: int | None
     latency: float
-    # Сколько кусков в топе нашёл точный поиск по тексту ошибки.
-    exact: int = 0
 
 
 @dataclass(frozen=True)
@@ -80,35 +78,18 @@ def percentile(values: Sequence[float], share: float) -> float:
 
 
 def hit_rank(case: Case, chunks: Sequence[Chunk]) -> int | None:
-    """Ранг первого подходящего куска (с 1) или None.
-
-    У ошибки подходящий кусок — тот, где лежит строка expected_line: место
-    ошибки известно до строки, а не до раздела. У остальных — по expected_sources.
-    """
-    if case.expected_line is not None:
-        path, line = parse_line(case.expected_line)
-        for rank, chunk in enumerate(chunks, start=1):
-            if chunk.path == path and chunk.start_line <= line <= chunk.end_line:
-                return rank
-        return None
+    """Ранг первого куска из expected_sources (с 1) или None."""
     return first_hit_rank(case.expected_sources, [c.source_id for c in chunks])
 
 
 def missing_sources(
     cases: Sequence[Case],
     has_source: Callable[[str], bool],
-    has_line: Callable[[str, int], bool] = lambda _path, _line: True,
 ) -> list[str]:
     """Кейсы, ссылающиеся на источник, которого нет в индексе: такой кейс не засчитается никогда."""
-    missing = [
+    return [
         f"{c.id}: {s}" for c in cases for s in c.expected_sources if not has_source(s)
     ]
-    missing += [
-        f"{c.id}: {c.expected_line}"
-        for c in cases
-        if c.expected_line is not None and not has_line(*parse_line(c.expected_line))
-    ]
-    return missing
 
 
 def run_cases(
@@ -128,20 +109,11 @@ def run_cases(
             latency = clock() - started
             top = [(h.chunk.source_id, h.score) for h in hits]
             rank = hit_rank(case, [h.chunk for h in hits])
-            exact = sum(h.exact for h in hits)
-            case_runs.append(
-                RetrievalRun(top=top, rank=rank, latency=latency, exact=exact)
-            )
+            case_runs.append(RetrievalRun(top=top, rank=rank, latency=latency))
         results.append(CaseResult(case=case, runs=case_runs))
     return results
 
 
 def has_expectation(case: Case) -> bool:
     """Есть ли у кейса, что искать: у out_of_scope ожидаемого источника нет."""
-    return bool(case.expected_sources) or case.expected_line is not None
-
-
-def exact_share(results: Sequence[CaseResult]) -> float:
-    """Доля прогонов, где сработал точный поиск. На howto и config — ложные срабатывания."""
-    runs = [run for r in results for run in r.runs]
-    return sum(run.exact > 0 for run in runs) / len(runs) if runs else 0.0
+    return bool(case.expected_sources)

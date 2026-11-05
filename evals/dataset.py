@@ -27,7 +27,6 @@ CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 Category = Literal[
     "howto",
     "config",
-    "error",
     "out_of_scope",
     "security",
     "tool",
@@ -35,14 +34,6 @@ Category = Literal[
 ]
 # Категории, где кейс проверяет поиск раздела: у них обязан быть хотя бы один источник.
 RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
-# «путь:строка» от корня репозитория Paperless: src/documents/consumer.py:478.
-LINE_PATTERN = r"^[\w./-]+\.\w+:\d+$"
-
-
-def parse_line(location: str) -> tuple[str, int]:
-    """`src/documents/consumer.py:478` → (`src/documents/consumer.py`, 478)."""
-    path, _, line = location.rpartition(":")
-    return path, int(line)
 
 
 class Case(BaseModel):
@@ -56,16 +47,7 @@ class Case(BaseModel):
     expected_sources: list[str] = []
     must_include: list[str] = []
     must_not_include: list[str] = []
-    # error: строка кода, где задаётся текст ошибки. Кусок с ней находится по
-    # строке, поэтому expected_sources у таких кейсов не нужен.
-    expected_line: str | None = Field(default=None, pattern=LINE_PATTERN)
     notes: str = ""
-
-    @model_validator(mode="after")
-    def _error_cases_have_a_line(self) -> Self:
-        if self.category == "error" and self.expected_line is None:
-            raise ValueError(f"{self.id}: у кейса error нет expected_line")
-        return self
 
     @model_validator(mode="after")
     def _retrieval_cases_have_sources(self) -> Self:

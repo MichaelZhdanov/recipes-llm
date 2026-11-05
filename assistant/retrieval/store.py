@@ -36,9 +36,6 @@ class IndexManifest(BaseModel):
     built_at: str
     chunks: dict[str, int]
     assistant_version: str
-    # Шаблоны сообщений для точного поиска: сколько извлечено и из скольких
-    # вызовов raise/логгера/_fail. В индексах до этапа 3 — пусто.
-    messages: dict[str, int] = {}
 
 
 def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:
@@ -55,10 +52,6 @@ def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:
 class Hit:
     chunk: Chunk
     score: float
-    # Кусок найден точным поиском: в нём лежит шаблон сообщения, совпавший с вопросом.
-    exact: bool = False
-    # Строка файла, где задан совпавший текст ошибки (только у точных).
-    line: int | None = None
 
 
 def point_id(chunk: Chunk) -> str:
@@ -135,44 +128,6 @@ class VectorStore:
             ).count
             > 0
         )
-
-    def has_line(self, path: str, line: int) -> bool:
-        """Есть ли в индексе кусок файла path, который содержит строку line."""
-        line_filter = models.Filter(
-            must=[
-                models.FieldCondition(key="path", match=models.MatchValue(value=path)),
-                models.FieldCondition(key="start_line", range=models.Range(lte=line)),
-                models.FieldCondition(key="end_line", range=models.Range(gte=line)),
-            ]
-        )
-        return (
-            self._client.count(
-                self._collection, count_filter=line_filter, exact=True
-            ).count
-            > 0
-        )
-
-    def chunks_with_messages(self) -> list[Chunk]:
-        """Куски кода с шаблонами сообщений — для точного поиска ошибок."""
-        with_messages = models.Filter(
-            must_not=[
-                models.IsEmptyCondition(is_empty=models.PayloadField(key="messages"))
-            ]
-        )
-        chunks: list[Chunk] = []
-        offset = None
-        while True:
-            points, offset = self._client.scroll(
-                self._collection,
-                scroll_filter=with_messages,
-                limit=512,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False,
-            )
-            chunks += [Chunk.model_validate(point.payload) for point in points]
-            if offset is None:
-                return chunks
 
     def verify(self) -> int:
         """Читает все точки и проверяет, что payload — полный кусок. Возвращает число точек."""

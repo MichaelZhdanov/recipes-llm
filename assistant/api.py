@@ -32,8 +32,7 @@ from assistant.retrieval.store import IndexMismatchError, IndexMissingError
 
 logger = logging.getLogger(__name__)
 
-# Вопрос в чат поддержки, а не документ: длиннее 2000 символов — скорее
-# вставленный лог целиком, его разбор — этап 3.
+# Вопрос, а не документ: длиннее 2000 символов вопросы не бывают.
 MAX_QUESTION_CHARS = 2000
 
 

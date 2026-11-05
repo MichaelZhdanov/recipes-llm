@@ -20,13 +20,11 @@ from assistant.retrieval.embeddings import RETRIEVAL_TASK, EmbeddingStats
 from assistant.retrieval.store import IndexManifest
 from evals.answer_metrics import (
     IN_SCOPE,
-    LINE_SLACK,
     AnswerCase,
     AnswerRun,
     abstention,
     citation_accuracy,
     cost_rub,
-    error_localization,
     expected_source_cited,
     false_refusal,
     filtered_out_share,
@@ -36,7 +34,6 @@ from evals.answer_metrics import (
     negative_control,
     outcomes,
     per_run,
-    routed_as_error,
     statement_coverage,
     top1_scores,
 )
@@ -53,7 +50,6 @@ from evals.retrieval_metrics import (
     CaseResult,
     K,
     RetrievalRun,
-    exact_share,
     has_expectation,
     hit_rank,
     mrr_per_run,
@@ -119,7 +115,6 @@ def render_report(
     stats: EmbeddingStats,
     today: date,
     sample: str | None = None,
-    exact: bool = True,
 ) -> str:
     # recall и MRR — только по кейсам, где есть что искать (у out_of_scope нечего).
     all_results = results
@@ -148,7 +143,6 @@ def render_report(
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].ranks)} |",
         "| Промпт | не используется |",
-        f"| Точный поиск по тексту ошибки | {'включён' if exact else 'выключен (--no-exact)'} |",
         *_sample_row(sample),
         "",
         "## Метрики",
@@ -166,11 +160,8 @@ def render_report(
         "",
         "## По категориям и ролям",
         "",
-        "Для error recall@5 — кусок кода со строкой ошибки в топ-5. «Точный поиск» — доля",
-        "прогонов, где он сработал; на howto, config и out_of_scope это ложные срабатывания.",
-        "",
-        "| Группа | Кейсов | recall@5 | точный поиск |",
-        "|---|---|---|---|",
+        "| Группа | Кейсов | recall@5 |",
+        "|---|---|---|",
     ]
     for label, key in (("категория", "category"), ("роль", "role")):
         for value in sorted({getattr(r.case, key) for r in all_results}):
@@ -179,9 +170,7 @@ def render_report(
             recall_cell = (
                 f"{statistics.mean(recall_per_run(scored)):.2f}" if scored else "—"
             )
-            lines.append(
-                f"| {label} {value} | {len(group)} | {recall_cell} | {exact_share(group):.2f} |"
-            )
+            lines.append(f"| {label} {value} | {len(group)} | {recall_cell} |")
 
     lines += [
         "",
@@ -227,7 +216,6 @@ ANSWER_THRESHOLDS = {
     # Не больше: доля отказов на вопросах из области.
     "false_refusal": 0.10,
     "groundedness": 0.85,
-    "error_localization": 0.80,
 }
 
 
@@ -267,11 +255,6 @@ def answer_gates(
         gates["abstention"] = abstain.value >= ANSWER_THRESHOLDS["abstention"]
     if (refusal := false_refusal(results)).n:
         gates["false_refusal"] = refusal.value <= ANSWER_THRESHOLDS["false_refusal"]
-    localization = error_localization(results)
-    if localization.n:
-        gates["error_localization"] = (
-            localization.value >= ANSWER_THRESHOLDS["error_localization"]
-        )
     if judging is not None:
         gates["groundedness"] = (
             groundedness(judging.verdicts).value >= ANSWER_THRESHOLDS["groundedness"]
@@ -307,19 +290,6 @@ def _spread(values: Sequence[float]) -> str:
     return f"по прогонам {min(finite):.2f}–{max(finite):.2f}"
 
 
-def _error_rows(results: Sequence[AnswerCase], gates: dict[str, bool]) -> list[str]:
-    localization = error_localization(results)
-    if not localization.n:
-        return []
-    return [
-        f"| error localization (ответ указывает на функцию с ошибкой) | {localization} | "
-        f"≥ {ANSWER_THRESHOLDS['error_localization']:.2f} | "
-        f"{_status(gates['error_localization'])} |",
-        f"| … до строки (±{LINE_SLACK}) | {error_localization(results, exact_line=True)} | показать | |",
-        f"| роутер распознал ошибку | {routed_as_error(results)} | показать | |",
-    ]
-
-
 def _status(passed: bool) -> str:
     return "✅" if passed else "❌"
 
@@ -348,11 +318,9 @@ def _dataset_lines(split: str, categories: Iterable[str]) -> list[str]:
 
 
 def _prompts_cell(runs: Sequence[AnswerRun], default: str) -> str:
-    """Версии промптов из самих ответов: роутер выбирает промпт по типу вопроса."""
+    """Версии промптов из самих ответов: прогон по сохранённым ответам может их смешать."""
     used = Counter(
-        f"`{run.answer.prompt_version}` ({run.answer.question_type})"
-        for run in runs
-        if run.answer.prompt_version
+        f"`{run.answer.prompt_version}`" for run in runs if run.answer.prompt_version
     )
     if not used:
         return f"`{default}`"
@@ -363,7 +331,6 @@ def _prompts_cell(runs: Sequence[AnswerRun], default: str) -> str:
 _GROUPS = (
     ("howto, config", IN_SCOPE),
     ("out_of_scope", frozenset({"out_of_scope"})),
-    ("error", frozenset({"error"})),
 )
 
 
@@ -447,7 +414,6 @@ def render_answer_report(
             if "false_refusal" in gates
             else []
         ),
-        *_error_rows(results, gates),
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
         f"| ответ ссылается на ожидаемый источник | {expected_source_cited(results)} | показать | |",

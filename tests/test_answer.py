@@ -14,7 +14,6 @@ from assistant.generation.answer import (
     render_markdown,
 )
 from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
-from assistant.indexing.code import chunk_python
 from assistant.indexing.docs import chunk_markdown
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
@@ -314,60 +313,3 @@ def test_render_not_found_offers_what_was_found(retriever: Retriever) -> None:
         "Не нашёл ответа в документации и коде Paperless-ngx v3.4.2."
     )
     assert "Вот что может пригодиться:" in text
-
-
-ERROR_CODE = """\
-class ConsumerPlugin:
-    def run(self, mime_type):
-        if not parser_class:
-            self._fail(
-                ConsumerStatusShortMessage.UNSUPPORTED_TYPE,
-                f"Unsupported mime type {mime_type}",
-            )
-"""
-
-
-def test_error_question_gets_error_prompt_and_location_hint(
-    store: VectorStore, fake_embedder: Embedder
-) -> None:
-    chunks = [
-        *chunk_markdown(
-            DOCS, path="docs/configuration.md", ref="v3.4.2", repo_url="https://x"
-        ),
-        *chunk_python(
-            ERROR_CODE,
-            path="src/documents/consumer.py",
-            ref="v3.4.2",
-            repo_url="https://x",
-        ),
-    ]
-    store.recreate(MANIFEST)
-    store.upsert(
-        chunks, fake_embedder.embed_documents([c.embedding_text() for c in chunks])
-    )
-    llm = FakeLlm({"status": "not_found", "statements": []})
-
-    result = ask(
-        Retriever(store, fake_embedder, ref="v3.4.2"),
-        llm,
-        question="[ERROR] [paperless.consumer] Unsupported mime type application/zip",
-    )
-
-    system, user = llm.calls[0]
-    assert system["content"] == load_prompt("error_v1")
-    assert (
-        "совпал со строкой кода: `src/documents/consumer.py:6` (источник 1)"
-        in user["content"]
-    )
-    assert result.answer.question_type == "error"
-    assert result.answer.prompt_version == "error_v1"
-
-
-def test_general_question_keeps_the_main_prompt(retriever: Retriever) -> None:
-    llm = FakeLlm({"status": "not_found", "statements": []})
-
-    result = ask(retriever, llm, question="OCR language")
-
-    assert llm.calls[0][0]["content"] == load_prompt(PROMPT_VERSION)
-    assert "совпал со строкой кода" not in llm.calls[0][1]["content"]
-    assert result.answer.question_type == "general"

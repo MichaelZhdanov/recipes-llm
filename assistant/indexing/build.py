@@ -16,7 +16,7 @@ import httpx2
 from assistant import __version__
 from assistant.config import Settings
 from assistant.indexing.chunks import Chunk
-from assistant.indexing.code import chunk_code, message_coverage
+from assistant.indexing.code import chunk_code
 from assistant.indexing.docs import chunk_docs
 from assistant.indexing.sources import SourceTree, ensure_sources
 from assistant.retrieval.embeddings import Embedder
@@ -90,11 +90,6 @@ def build_index(
             f"эмбеддинги: {len(vectors)}/{len(chunks)}, токенов {embedder.stats.tokens}"
         )
 
-    coverage = message_coverage(tree.root)
-    log(
-        f"шаблонов сообщений: {sum(len(c.messages) for c in chunks)}, "
-        f"извлечено у {coverage.covered} из {coverage.calls} вызовов raise/логгера"
-    )
     manifest = IndexManifest(
         ref=tree.ref,
         commit=tree.commit,
@@ -103,11 +98,6 @@ def build_index(
         built_at=datetime.now(UTC).isoformat(timespec="seconds"),
         chunks=dict(counts),
         assistant_version=__version__,
-        messages={
-            "templates": sum(len(c.messages) for c in chunks),
-            "calls": coverage.calls,
-            "covered": coverage.covered,
-        },
     )
     store.recreate(manifest)
     store.upsert(chunks, vectors)

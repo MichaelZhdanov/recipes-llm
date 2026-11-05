@@ -34,7 +34,7 @@ from assistant.generation.citations import (
     check_citation,
 )
 from assistant.generation.gigachat import Usage
-from evals.dataset import Case, parse_line
+from evals.dataset import Case
 
 IN_SCOPE = frozenset({"howto", "config"})
 HONEST_REFUSALS = frozenset({"model_not_found", "filtered_out"})
@@ -296,62 +296,3 @@ def cost_rub(model: str, tokens: int) -> float | None:
     """Стоимость по платному тарифу. Модель из ответа API: «GigaChat-2-Max:2.0.30.01»."""
     price = PRICE_RUB_PER_MTOK.get(model.split(":")[0])
     return None if price is None else price * tokens / 1_000_000
-
-
-# Сообщение бывает собрано из нескольких строк кода, а expected_line — первая.
-# «До строки» засчитывается, если ссылка задевает её или LINE_SLACK следующих.
-LINE_SLACK = 3
-
-
-def _touches(run: AnswerRun, path: str, line: int) -> bool:
-    """Ссылка ответа задевает строку или LINE_SLACK следующих."""
-    return run.answer.status == "answer" and any(
-        link.path == path
-        and link.start_line <= line + LINE_SLACK
-        and link.end_line >= line
-        for link in run.answer.sources
-    )
-
-
-def _localized(run: AnswerRun, path: str, line: int, *, exact_line: bool) -> bool:
-    if run.answer.status != "answer":
-        return False
-    if exact_line:
-        return _touches(run, path, line)
-    links = [link for link in run.answer.sources if link.path == path]
-    # Кусок кода (функция), где лежит строка ошибки, и ссылка ответа внутри него.
-    owners = [
-        s.chunk
-        for s in run.sources
-        if s.chunk.path == path and s.chunk.start_line <= line <= s.chunk.end_line
-    ]
-    return any(
-        link.start_line <= c.end_line and link.end_line >= c.start_line
-        for c in owners
-        for link in links
-    )
-
-
-def error_localization(
-    results: Sequence[AnswerCase], *, exact_line: bool = False
-) -> Rate:
-    """Доля прогонов error, где ответ указывает на место ошибки.
-
-    По умолчанию — на кусок кода (функцию) со строкой ошибки; exact_line —
-    до строки (±LINE_SLACK вниз). Отказ «не нашёл» — промах.
-    """
-    k = n = 0
-    for r in results:
-        if r.case.category != "error" or r.case.expected_line is None:
-            continue
-        path, line = parse_line(r.case.expected_line)
-        for run in r.runs:
-            n += 1
-            k += _localized(run, path, line, exact_line=exact_line)
-    return Rate(k, n)
-
-
-def routed_as_error(results: Sequence[AnswerCase]) -> Rate:
-    """Доля прогонов error, которые роутер распознал как ошибку (сработал точный поиск)."""
-    runs = _runs(results, {"error"})
-    return Rate(sum(run.answer.question_type == "error" for run in runs), len(runs))

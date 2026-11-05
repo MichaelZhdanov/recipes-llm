@@ -100,8 +100,8 @@ from evals.retrieval_metrics import (
 RUNS = 3
 SAMPLE_SEED = 20261104
 # Категории каждого режима.
-RETRIEVAL_CATEGORIES = frozenset({"howto", "config", "error"})
-ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope", "error"})
+RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
+ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope"})
 REPORTS_DIR = Path(__file__).parent / "reports"
 
 
@@ -114,7 +114,6 @@ def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
             "rank": run.rank,
             "top": run.top,
             "latency": run.latency,
-            "exact": run.exact,
         }
         for r in results
         for number, run in enumerate(r.runs)
@@ -216,7 +215,6 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         completion,
         prompt_version=record["answer"]["prompt_version"],
         ref=record["answer"]["paperless_ref"],
-        question_type=record["answer"].get("question_type", "general"),
         retrieval_seconds=record["retrieval_seconds"],
         generation_seconds=record["generation_seconds"],
     )
@@ -311,7 +309,7 @@ def _write(path: Path, report: str, raw: object) -> None:
 
 
 def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
-    missing = missing_sources(cases, store.has_source, store.has_line)
+    missing = missing_sources(cases, store.has_source)
     if missing:
         print(
             "кейсы ссылаются на источники, которых нет в индексе:",
@@ -328,7 +326,6 @@ def _retrieval_stage(
     sample: int | None,
     seed: int,
     categories: frozenset[str] = RETRIEVAL_CATEGORIES,
-    exact: bool = True,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
@@ -339,7 +336,7 @@ def _retrieval_stage(
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
-        retriever = Retriever(store, embedder, ref=settings.paperless_ref, exact=exact)
+        retriever = Retriever(store, embedder, ref=settings.paperless_ref)
         if not _check_sources(cases, store):
             return 2
         results = run_cases(cases, retriever, runs=runs)
@@ -354,7 +351,6 @@ def _retrieval_stage(
         stats=embedder.stats,
         today=today,
         sample=sampled,
-        exact=exact,
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results))
@@ -565,14 +561,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--seed", type=int, default=SAMPLE_SEED, help="сид для --sample"
     )
     parser.add_argument(
-        "--no-exact",
-        action="store_true",
-        help="без точного поиска по тексту ошибки: для замера его вклада (STAGE=retrieval)",
-    )
-    parser.add_argument(
         "--categories",
         type=_categories,
-        help="только эти категории через запятую, например error или howto,config",
+        help="только эти категории через запятую, например howto,config",
     )
     parser.add_argument(
         "--split",
@@ -617,7 +608,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.sample,
             args.seed,
             args.categories or RETRIEVAL_CATEGORIES,
-            not args.no_exact,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(
