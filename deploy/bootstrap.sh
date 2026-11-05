@@ -18,7 +18,7 @@
 # 3. клонирует репозиторий в /opt/recipes-llm;
 # 4. добавляет ключ деплоя в authorized_keys root, если его там ещё нет;
 # 5. создаёт .env со случайными секретами.
-# Ключи API (GigaChat, cloud.ru) скрипт не спрашивает: их вписывают в .env руками.
+# Ключи API (Anthropic, cloud.ru, GigaChat) скрипт не спрашивает: их передаёт деплой из секретов GitHub.
 # Повторный запуск безопасен: готовые шаги пропускаются, клон обновляется до main.
 set -euo pipefail
 
@@ -82,10 +82,11 @@ main() {
 Готово. Осталось:
 1. В GitHub → Settings → Environments → prod:
    секреты DEPLOY_HOST (адрес сервера), DEPLOY_SSH_KEY (приватный ключ деплоя),
-   CLOUD_RU_API_KEY, GIGACHAT_API_KEY. Деплой запишет ключи API в $APP_DIR/.env.
+   ANTHROPIC_API_KEY, CLOUD_RU_API_KEY, GIGACHAT_API_KEY. Деплой запишет ключи API
+   в $APP_DIR/.env.
 2. Запустить деплой: push в main или Actions → CI → Run workflow.
-   Первый деплой скачивает датасет и строит индекс: до 40 минут, цена — по модели
-   эмбеддингов (make index печатает оценку).
+   Первый деплой скачивает датасет и строит полный индекс: на Giga-Embeddings-3B
+   около 80 минут и около 195 ₽ (make index печатает оценку).
 DONE
 }
 
