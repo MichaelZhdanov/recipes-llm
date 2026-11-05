@@ -109,9 +109,9 @@ CLOUD_RU = Provider(
     },
 )
 PROVIDERS: dict[EmbeddingProvider, Provider] = {"cloudru": CLOUD_RU, "voyage": VOYAGE}
-# Модель, если EMBEDDING_MODEL пустой. Для cloud.ru выбрана по eval: лучшие
-# recall@5 и MRR из четырёх моделей (evals/reports/2026-11-04-models.md).
-# Voyage — модель из документации Anthropic.
+# Модель, если EMBEDDING_MODEL пустой. Для cloud.ru выбрана сравнением шести
+# вариантов на выборке рецептов по правилу, записанному до прогона
+# (evals/reports/2026-11-05-models.md). Voyage — модель из документации Anthropic.
 DEFAULT_MODELS: dict[EmbeddingProvider, str] = {
     "cloudru": "ai-sage/Giga-Embeddings-instruct-3B",
     "voyage": "voyage-4",
@@ -123,7 +123,8 @@ DEFAULT_MODELS: dict[EmbeddingProvider, str] = {
 # на cloud.ru с инструкцией из своей карточки ищет хуже, чем без неё
 # (recall@5 0.35 против 0.75), поэтому его вопрос уходит как есть.
 # Voyage вместо инструкции получает input_type.
-# Нужна ли инструкция для рецептов и какая, решит сравнение моделей на этапе 1.
+# На рецептах 3B с инструкцией и без неё в пределах шума (M 0.87 и 0.88),
+# правило выбрало вариант без неё: EMBEDDING_QUERY_INSTRUCTION=0 по умолчанию.
 RETRIEVAL_TASK = (
     "Given a user question about cooking, retrieve recipes whose name and "
     "ingredients match it"

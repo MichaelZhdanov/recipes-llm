@@ -263,7 +263,8 @@ def test_make_embedder_picks_provider_and_its_default_model() -> None:
         )
 
     assert (cloudru.provider, cloudru.model) == (CLOUD_RU, DEFAULT_MODELS["cloudru"])
-    assert cloudru.query_template is not None
+    # По итогам сравнения моделей вопрос уходит без инструкции.
+    assert cloudru.query_template is None
     assert (voyage.provider, voyage.model) == (VOYAGE, "voyage-4")
     assert voyage.query_template is None
 
@@ -283,16 +284,16 @@ def test_explicit_model_wins_over_default() -> None:
     assert embedder.query_template is None
 
 
-def test_query_instruction_can_be_turned_off() -> None:
-    """Для сравнения на eval: та же instruct-модель, но вопрос уходит как есть."""
+def test_query_instruction_can_be_turned_on() -> None:
+    """Для сравнения на eval: та же instruct-модель с задачей к вопросу."""
     with httpx2.Client() as http:
         embedder = make_embedder(
             Settings(
                 embedding_model="ai-sage/Giga-Embeddings-instruct-480M",
-                embedding_query_instruction=False,
+                embedding_query_instruction=True,
                 cloud_ru_api_key=SecretStr(KEY),
             ),
             http,
         )
 
-    assert embedder.query_template is None
+    assert embedder.query_template == "Instruct: {task}\nQuery: {query}"

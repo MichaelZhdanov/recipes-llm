@@ -52,8 +52,8 @@ class Settings(BaseSettings):
     embedding_provider: EmbeddingProvider = "cloudru"
     embedding_model: str = ""
     # Дописывать ли к вопросу задачу у instruct-моделей (формат из карточки модели).
-    # 0 — вопрос уходит как есть: для сравнения на eval.
-    embedding_query_instruction: bool = True
+    # По умолчанию нет: так выбрало сравнение моделей (evals/reports/2026-11-05-models.md).
+    embedding_query_instruction: bool = False
     cloud_ru_api_key: SecretStr = SecretStr("")
     cloud_ru_api_url: str = CLOUD_RU_API_URL
     # Voyage AI; адрес должен соответствовать кабинету, где создан ключ.
