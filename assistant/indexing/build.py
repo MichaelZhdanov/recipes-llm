@@ -1,9 +1,13 @@
-"""Сборка индекса: куски → эмбеддинги → Qdrant → проверка.
+"""Сборка индекса: рецепты → эмбеддинги → новая коллекция Qdrant → проверка → алиас.
 
-Откуда берутся куски, решает вызывающий код: загрузчик рецептов появится
-на этапе 1. Эмбеддинги считаются до того, как трогается коллекция. Если
-API эмбеддингов упадёт на середине, старый индекс останется рабочим, а не
-окажется удалённым наполовину.
+Рецепты идут пачками: пачка превращается в точки индекса, получает
+эмбеддинги и сразу пишется в новую коллекцию. Все векторы в памяти не
+держатся — на 146 тыс. рецептов это были бы гигабайты.
+
+Поиск всё это время работает по старому индексу. Алиас переключается
+на новую коллекцию, только когда в ней все точки и каждая проверена.
+Если что-то упало посередине (API эмбеддингов, Qdrant, Ctrl+C),
+недостроенная коллекция удаляется, а старый индекс остаётся рабочим.
 """
 
 import time
@@ -13,7 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from assistant import __version__
-from assistant.indexing.chunks import Chunk
+from assistant.indexing.chunks import recipe_chunk
+from assistant.indexing.dataset import Recipe
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.store import IndexManifest, VectorStore
 
@@ -29,7 +34,8 @@ PRICE_PER_MTOK: dict[str, tuple[float, str]] = {
     "BAAI/bge-m3": (0.61, "₽"),
     "Qwen/Qwen3-Embedding-0.6B": (0.854, "₽"),
 }
-_PROGRESS_STEP = 512
+# Рецептов в пачке: эмбеддер сам делит её на запросы к API.
+BATCH = 512
 
 
 @dataclass(frozen=True)
@@ -50,43 +56,53 @@ def estimate_cost(model: str, tokens: int) -> str | None:
 
 
 def build_index(
-    chunks: Sequence[Chunk],
+    recipes: Sequence[Recipe],
     *,
     ref: str,
     commit: str | None,
     store: VectorStore,
     embedder: Embedder,
     log: Callable[[str], None],
+    quantization: bool = True,
 ) -> BuildReport:
     """Строит индекс заново. ref и commit — версия данных, они попадут в паспорт."""
-    if not chunks:
+    if not recipes:
         raise ValueError("нет рецептов для индекса")
     started = time.monotonic()
-    counts = {"recipe": len(chunks)}
-    log(f"рецептов: {len(chunks)}")
-
-    vectors: list[list[float]] = []
-    for start in range(0, len(chunks), _PROGRESS_STEP):
-        part = chunks[start : start + _PROGRESS_STEP]
-        vectors.extend(embedder.embed_documents([c.embedding_text() for c in part]))
-        log(
-            f"эмбеддинги: {len(vectors)}/{len(chunks)}, токенов {embedder.stats.tokens}"
-        )
-
-    manifest = IndexManifest(
-        ref=ref,
-        commit=commit,
-        embedding_model=embedder.model,
-        dim=len(vectors[0]),
-        built_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        chunks=dict(counts),
-        assistant_version=__version__,
-    )
-    store.recreate(manifest)
-    store.upsert(chunks, vectors)
-    stored = store.verify()
-    if stored != len(chunks):
-        raise RuntimeError(f"в индексе {stored} точек вместо {len(chunks)}")
+    log(f"рецептов: {len(recipes)}")
+    collection: str | None = None
+    manifest: IndexManifest | None = None
+    try:
+        for start in range(0, len(recipes), BATCH):
+            chunks = [recipe_chunk(r, ref) for r in recipes[start : start + BATCH]]
+            vectors = embedder.embed_documents([c.embedding_text() for c in chunks])
+            if manifest is None:
+                # Размерность известна только после первого ответа API.
+                manifest = IndexManifest(
+                    ref=ref,
+                    commit=commit,
+                    embedding_model=embedder.model,
+                    dim=len(vectors[0]),
+                    built_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                    chunks={"recipe": len(recipes)},
+                    assistant_version=__version__,
+                    quantization="int8" if quantization else None,
+                )
+                collection = store.create(manifest)
+            store.upsert(chunks, vectors, collection=collection)
+            log(
+                f"эмбеддинги: {start + len(chunks)}/{len(recipes)}, "
+                f"токенов {embedder.stats.tokens}"
+            )
+        stored = store.verify(collection)
+        if stored != len(recipes):
+            raise RuntimeError(f"в индексе {stored} точек вместо {len(recipes)}")
+    except BaseException:
+        if collection is not None:
+            store.drop(collection)
+        raise
+    assert collection is not None and manifest is not None
+    store.activate(collection)
 
     return BuildReport(
         manifest=manifest,

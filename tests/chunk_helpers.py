@@ -10,6 +10,18 @@ from assistant.indexing.chunks import Chunk, recipe_chunk
 from assistant.indexing.dataset import Ingredient, Recipe
 
 
+def make_recipe(
+    name: str, ingredients: dict[str, str | None] | None = None, *, recipe_id: int = 1
+) -> Recipe:
+    items = ingredients if ingredients is not None else {"Соль": "по вкусу"}
+    return Recipe(
+        id=recipe_id,
+        url=f"https://www.povarenok.ru/recipes/show/{recipe_id}/",
+        name=name,
+        ingredients=tuple(Ingredient(k, v) for k, v in items.items()),
+    )
+
+
 def make_chunk(
     name: str,
     ingredients: dict[str, str | None] | None = None,
@@ -17,14 +29,7 @@ def make_chunk(
     recipe_id: int = 1,
     ref: str = "v3.4.2",
 ) -> Chunk:
-    items = ingredients if ingredients is not None else {"Соль": "по вкусу"}
-    recipe = Recipe(
-        id=recipe_id,
-        url=f"https://www.povarenok.ru/recipes/show/{recipe_id}/",
-        name=name,
-        ingredients=tuple(Ingredient(k, v) for k, v in items.items()),
-    )
-    return recipe_chunk(recipe, ref)
+    return recipe_chunk(make_recipe(name, ingredients, recipe_id=recipe_id), ref)
 
 
 def text_chunk(text: str, *, recipe_id: int = 1, ref: str = "v3.4.2") -> Chunk:
@@ -39,19 +44,22 @@ def text_chunk(text: str, *, recipe_id: int = 1, ref: str = "v3.4.2") -> Chunk:
 
 
 # Небольшой набор рецептов для тестов поиска, сборки индекса и ответов.
-COCKTAIL = make_chunk(
-    "Густой молочно-клубничный коктейль",
-    {"Молоко": "250 мл", "Клубника": "200 г", "Сахар": "15 г"},
-    recipe_id=164365,
-)
-CHICKEN = make_chunk(
-    "Курица с рисом в духовке",
-    {"Курица": "500 г", "Рис": "200 г", "Лук репчатый": "1 шт", "Соль": "по вкусу"},
-    recipe_id=2001,
-)
-COOKIES = make_chunk(
-    "Овсяное печенье",
-    {"Хлопья овсяные": "200 г", "Яйцо куриное": "2 шт", "Сахар": "100 г"},
-    recipe_id=3001,
-)
-RECIPES = [COCKTAIL, CHICKEN, COOKIES]
+ROWS = [
+    make_recipe(
+        "Густой молочно-клубничный коктейль",
+        {"Молоко": "250 мл", "Клубника": "200 г", "Сахар": "15 г"},
+        recipe_id=164365,
+    ),
+    make_recipe(
+        "Курица с рисом в духовке",
+        {"Курица": "500 г", "Рис": "200 г", "Лук репчатый": "1 шт", "Соль": "по вкусу"},
+        recipe_id=2001,
+    ),
+    make_recipe(
+        "Овсяное печенье",
+        {"Хлопья овсяные": "200 г", "Яйцо куриное": "2 шт", "Сахар": "100 г"},
+        recipe_id=3001,
+    ),
+]
+RECIPES = [recipe_chunk(row, "v3.4.2") for row in ROWS]
+COCKTAIL, CHICKEN, COOKIES = RECIPES

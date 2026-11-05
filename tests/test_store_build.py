@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 
 import pytest
-from chunk_helpers import CHICKEN, RECIPES
+from chunk_helpers import CHICKEN, RECIPES, ROWS
+from qdrant_client import QdrantClient
 
 from assistant.indexing.build import build_index, estimate_cost
 from assistant.indexing.chunks import Chunk
@@ -76,7 +77,7 @@ def test_build_index_end_to_end(store: VectorStore, fake_embedder: Embedder) -> 
     messages: list[str] = []
 
     report = build_index(
-        RECIPES,
+        ROWS,
         ref="v3.4.2",
         commit=None,
         store=store,
@@ -86,8 +87,10 @@ def test_build_index_end_to_end(store: VectorStore, fake_embedder: Embedder) -> 
 
     assert report.manifest.ref == "v3.4.2"
     assert report.manifest.chunks == {"recipe": 3}
+    assert report.manifest.quantization == "int8"
     assert store.count() == 3
     assert store.manifest() == report.manifest
+    assert store.verify() == 3
     assert any("рецептов: 3" in m for m in messages)
 
 
@@ -120,7 +123,7 @@ def test_failed_embedding_keeps_old_index(
 
     with pytest.raises(RuntimeError, match="эмбеддингов"):
         build_index(
-            RECIPES,
+            ROWS,
             ref="v3.5.0",
             commit=None,
             store=store,
@@ -138,3 +141,94 @@ def test_cost_is_estimated_in_model_currency() -> None:
     )
     assert estimate_cost("voyage-4", 500_000) == "≈0.0300 $"
     assert estimate_cost("unknown-model", 10) is None
+
+
+def collections(client: QdrantClient) -> list[str]:
+    return sorted(c.name for c in client.get_collections().collections)
+
+
+def test_rebuild_switches_alias_and_removes_old_collection(
+    fake_embedder: Embedder,
+) -> None:
+    client = QdrantClient(":memory:")
+    store = VectorStore(client)
+
+    def build(ref: str) -> None:
+        build_index(
+            ROWS, ref=ref, commit=None, store=store, embedder=fake_embedder, log=print
+        )
+
+    build("v1")
+    first = store.active()
+    build("v2")
+
+    assert store.active() != first
+    assert collections(client) == [store.active()]
+    assert store.manifest().ref == "v2"
+
+
+class FailsOnSecondBatch:
+    """Первая пачка проходит, вторая падает: коллекция уже создана и наполовину заполнена."""
+
+    model = "fake-model"
+
+    def __init__(self, inner: Embedder) -> None:
+        self.inner = inner
+        self.stats = EmbeddingStats()
+        self.calls = 0
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("API эмбеддингов упал посередине")
+        return self.inner.embed_documents(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.inner.embed_query(text)
+
+
+def test_failure_in_the_middle_drops_the_unfinished_collection(
+    fake_embedder: Embedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("assistant.indexing.build.BATCH", 2)
+    client = QdrantClient(":memory:")
+    store = VectorStore(client)
+    build_index(
+        ROWS, ref="v1", commit=None, store=store, embedder=fake_embedder, log=print
+    )
+    old = store.active()
+
+    with pytest.raises(RuntimeError, match="посередине"):
+        build_index(
+            ROWS,
+            ref="v2",
+            commit=None,
+            store=store,
+            embedder=FailsOnSecondBatch(fake_embedder),
+            log=print,
+        )
+
+    assert collections(client) == [old]
+    assert store.manifest().ref == "v1"
+    assert store.count() == 3
+
+
+def test_vectors_are_on_disk_and_int8_can_be_turned_off(
+    fake_embedder: Embedder,
+) -> None:
+    client = QdrantClient(":memory:")
+    store = VectorStore(client)
+
+    report = build_index(
+        ROWS,
+        ref="v1",
+        commit=None,
+        store=store,
+        embedder=fake_embedder,
+        log=print,
+        quantization=False,
+    )
+
+    params = client.get_collection(store.active() or "").config.params
+    assert params.vectors.on_disk is True  # type: ignore[union-attr]
+    assert report.manifest.quantization is None

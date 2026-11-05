@@ -1,23 +1,39 @@
-"""Векторное хранилище: коллекция Qdrant с кусками и паспортом индекса.
+"""Векторное хранилище: коллекция Qdrant с рецептами и паспортом индекса.
 
 В метаданных коллекции лежит паспорт: версия данных, модель эмбеддингов,
 размерность. Поиск сверяет паспорт с настройками. Если версия данных или
 модель поменялись, а индекс старый, будет понятная ошибка, а не тихие
 ответы по чужой версии.
+
+**Алиас вместо одной коллекции.** Поиск ходит в алиас `recipes`, а каждая
+сборка индекса пишет в свою новую коллекцию `recipes-<id>`. Когда все точки
+на месте и проверены, алиас одной операцией переключается на новую
+коллекцию, а старая удаляется. Если сборка упала посередине, удаляется
+только недостроенная коллекция: поиск всё это время работает по старой.
+
+**Векторы на диске, в памяти — сжатые копии.** На сервере 2 ГБ RAM, а
+полный индекс в float32 — 0,6–1,2 ГБ. Поэтому точные векторы лежат на
+диске (`on_disk`), а в памяти держится их копия в int8 (1 байт на число
+вместо 4). Поиск идёт по сжатым векторам, а лучшие кандидаты
+переранжируются по точным (`rescore`, с запасом `oversampling`).
 """
 
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel
 from qdrant_client import QdrantClient, models
 
 from assistant.indexing.chunks import Chunk
 
-COLLECTION = "recipes"
+ALIAS = "recipes"
 # Пространство имён для uuid5: id точки детерминирован, повторная сборка даёт те же id.
 _POINT_NAMESPACE = uuid.UUID("5b0c6c4e-8a35-4f3e-9d43-3c2f6f1f2a10")
+# Сколько кандидатов взять по сжатым векторам на одно место в выдаче.
+OVERSAMPLING = 2.0
+UPSERT_BATCH = 256
 
 
 class IndexMissingError(RuntimeError):
@@ -36,6 +52,8 @@ class IndexManifest(BaseModel):
     built_at: str
     chunks: dict[str, int]
     assistant_version: str
+    # Сжатие векторов в памяти: int8 или None — без сжатия.
+    quantization: Literal["int8"] | None = None
 
 
 def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:
@@ -55,74 +73,125 @@ class Hit:
 
 
 def point_id(chunk: Chunk) -> str:
-    return str(
-        uuid.uuid5(
-            _POINT_NAMESPACE,
-            f"{chunk.ref}:{chunk.recipe_id}",
+    return str(uuid.uuid5(_POINT_NAMESPACE, f"{chunk.ref}:{chunk.recipe_id}"))
+
+
+def _quantization(manifest: IndexManifest) -> models.ScalarQuantization | None:
+    if manifest.quantization is None:
+        return None
+    return models.ScalarQuantization(
+        scalar=models.ScalarQuantizationConfig(
+            type=models.ScalarType.INT8,
+            # Крайний 1 % значений не растягивает шкалу int8.
+            quantile=0.99,
+            always_ram=True,
         )
     )
 
 
 class VectorStore:
-    def __init__(self, client: QdrantClient, collection: str = COLLECTION) -> None:
+    def __init__(self, client: QdrantClient, alias: str = ALIAS) -> None:
         self._client = client
-        self._collection = collection
+        self._alias = alias
 
-    def recreate(self, manifest: IndexManifest) -> None:
-        """Удаляет старую коллекцию и создаёт пустую с паспортом."""
-        if self._client.collection_exists(self._collection):
-            self._client.delete_collection(self._collection)
+    def active(self) -> str | None:
+        """Коллекция, на которую сейчас указывает алиас, или None."""
+        for item in self._client.get_aliases().aliases:
+            if item.alias_name == self._alias:
+                return item.collection_name
+        return None
+
+    def create(self, manifest: IndexManifest) -> str:
+        """Новая пустая коллекция с паспортом. Поиск её не видит до activate()."""
+        name = f"{self._alias}-{uuid.uuid4().hex[:12]}"
         self._client.create_collection(
-            self._collection,
-            # Векторы Voyage нормированы, поэтому косинус и скалярное произведение совпадают.
+            name,
+            # Векторы моделей нормированы, поэтому косинус и скалярное произведение совпадают.
             vectors_config=models.VectorParams(
-                size=manifest.dim, distance=models.Distance.COSINE
+                size=manifest.dim, distance=models.Distance.COSINE, on_disk=True
             ),
+            quantization_config=_quantization(manifest),
             metadata=manifest.model_dump(),
         )
         # Фильтр «с чем и без чего» (этап 2) идёт по именам ингредиентов.
         self._client.create_payload_index(
-            self._collection,
-            "ingredients",
-            field_schema=models.PayloadSchemaType.KEYWORD,
+            name, "ingredients", field_schema=models.PayloadSchemaType.KEYWORD
         )
+        return name
+
+    def activate(self, name: str) -> None:
+        """Переключает алиас на коллекцию name одной операцией и удаляет прежнюю."""
+        previous = self.active()
+        operations: list[models.AliasOperations] = []
+        if previous is not None:
+            operations.append(
+                models.DeleteAliasOperation(
+                    delete_alias=models.DeleteAlias(alias_name=self._alias)
+                )
+            )
+        operations.append(
+            models.CreateAliasOperation(
+                create_alias=models.CreateAlias(
+                    collection_name=name, alias_name=self._alias
+                )
+            )
+        )
+        self._client.update_collection_aliases(change_aliases_operations=operations)
+        if previous is not None and previous != name:
+            self._client.delete_collection(previous)
+
+    def drop(self, name: str) -> None:
+        if self._client.collection_exists(name):
+            self._client.delete_collection(name)
+
+    def recreate(self, manifest: IndexManifest) -> str:
+        """Пустой индекс с паспортом сразу под алиасом: для маленьких индексов и тестов."""
+        name = self.create(manifest)
+        self.activate(name)
+        return name
 
     def upsert(
-        self, chunks: Sequence[Chunk], vectors: Sequence[list[float]], batch: int = 256
+        self,
+        chunks: Sequence[Chunk],
+        vectors: Sequence[list[float]],
+        *,
+        collection: str | None = None,
     ) -> None:
         if len(chunks) != len(vectors):
             raise ValueError(f"{len(chunks)} рецептов, но {len(vectors)} векторов")
-        for start in range(0, len(chunks), batch):
+        target = collection or self._alias
+        for start in range(0, len(chunks), UPSERT_BATCH):
             points = [
                 models.PointStruct(
                     id=point_id(chunk), vector=vector, payload=chunk.model_dump()
                 )
                 for chunk, vector in zip(
-                    chunks[start : start + batch],
-                    vectors[start : start + batch],
+                    chunks[start : start + UPSERT_BATCH],
+                    vectors[start : start + UPSERT_BATCH],
                     strict=True,
                 )
             ]
-            self._client.upsert(self._collection, points=points, wait=True)
+            self._client.upsert(target, points=points, wait=True)
 
     def manifest(self) -> IndexManifest:
-        if not self._client.collection_exists(self._collection):
+        name = self.active()
+        if name is None:
             raise IndexMissingError("индекс не построен: выполните make index")
-        metadata = self._client.get_collection(self._collection).config.metadata
+        metadata = self._client.get_collection(name).config.metadata
         if not metadata:
             raise IndexMissingError("у коллекции нет паспорта: выполните make index")
         return IndexManifest.model_validate(metadata)
 
-    def count(self) -> int:
-        return self._client.count(self._collection, exact=True).count
+    def count(self, collection: str | None = None) -> int:
+        return self._client.count(collection or self._alias, exact=True).count
 
-    def verify(self) -> int:
+    def verify(self, collection: str | None = None) -> int:
         """Читает все точки и проверяет, что payload — полный рецепт. Возвращает число точек."""
         total = 0
         offset = None
         while True:
             points, offset = self._client.scroll(
-                self._collection,
+                collection or self._alias,
                 limit=512,
                 offset=offset,
                 with_payload=True,
@@ -136,7 +205,16 @@ class VectorStore:
 
     def search(self, vector: list[float], limit: int) -> list[Hit]:
         response = self._client.query_points(
-            self._collection, query=vector, limit=limit, with_payload=True
+            self._alias,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+            # Без сжатия в коллекции Qdrant эти параметры просто не использует.
+            search_params=models.SearchParams(
+                quantization=models.QuantizationSearchParams(
+                    rescore=True, oversampling=OVERSAMPLING
+                )
+            ),
         )
         return [
             Hit(chunk=Chunk.model_validate(point.payload), score=point.score)

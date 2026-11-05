@@ -57,5 +57,9 @@ testpaths = ["tests"]
 # "." — чтобы тесты импортировали пакет evals из корня репозитория.
 pythonpath = ["scripts", "."]
 # Локальный режим Qdrant в тестах предупреждает, что payload-индексы в нём не работают.
-filterwarnings = ["ignore:Payload indexes have no effect in the local Qdrant"]
+filterwarnings = [
+    "ignore:Payload indexes have no effect in the local Qdrant",
+    # Локальный режим ищет перебором: параметры сжатия (rescore) ему не нужны.
+    "ignore:Local mode performs exact",
+]
 addopts = "-ra --strict-markers"
