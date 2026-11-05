@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Деплой на сервере: deploy/deploy.sh <коммит>. Запускается от root.
 #
-# GitHub Actions вызывает его так:
-#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … \
-#     | ssh root@<сервер> /opt/paperless-assistant/deploy/deploy.sh <sha>
+# GitHub Actions сначала переводит клон на коммит, потом вызывает скрипт:
+#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … | ssh root@<сервер> \
+#     "cd /opt/paperless-assistant && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha>"
+# Вручную на сервере достаточно deploy/deploy.sh <sha>: checkout ниже повторится.
 # Логин и пароль — в stdin, а не аргументами: аргументы видны в списке
 # процессов (ps), stdin — нет.
 #
