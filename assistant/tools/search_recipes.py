@@ -183,12 +183,13 @@ def parse_arguments(
     )
 
 
-def system_prompt(vocabulary: Mapping[str, int]) -> str:
+def system_prompt(vocabulary: Mapping[str, int], version: str = PROMPT_VERSION) -> str:
     """Промпт со словарём: «имя — число рецептов», по алфавиту, чтобы похожие
-    имена стояли рядом («краб», «крабовое мясо», «крабовые палочки»)."""
+    имена стояли рядом («краб», «крабовое мясо», «крабовые палочки»). Тот же
+    словарь нужен и режиму «модель решает» (промпт `recipes_auto_v1`)."""
     lines = (f"{name} — {count}" for name, count in sorted(vocabulary.items()))
     # replace, а не format: в промпте могут появиться фигурные скобки JSON.
-    return load_prompt(PROMPT_VERSION).replace("{vocabulary}", "\n".join(lines))
+    return load_prompt(version).replace("{vocabulary}", "\n".join(lines))
 
 
 class SearchPlanner:

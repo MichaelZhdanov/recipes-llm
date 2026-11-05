@@ -1,4 +1,6 @@
-"""Ответ на вопрос со ссылками на рецепты. Режим «всегда ищем» (решение 7):
+"""Ответ на вопрос со ссылками на рецепты. Два режима (решение 7).
+
+Режим «всегда ищем» (always, контроль):
 
 1. Разбор вопроса с историей диалога в запрос и условия (`SearchPlanner`,
    этап 2), поиск с фильтром — топ-K рецептов.
@@ -15,6 +17,13 @@
    нашёл», и к нему прикладываются найденные рецепты: вдруг они всё же
    помогут. Если «не нашёл» сказала сама модель, подсказок нет.
 
+Режим «модель решает» (auto, тест): модель получает search_recipes
+(`tool_choice: auto`) и словарь индекса (промпт `recipes_auto_v1`) и сама
+решает, искать ли и сколько раз (до MAX_SEARCHES). Рецепты прошлых ответов
+она видит сразу, найденные приходят результатом функции с теми же
+номерами, на которые потом ссылаются цитаты. Последний ответ — JSON по той
+же схеме, проверка та же. На болтовню модель отвечает без поиска.
+
 Порога по score поиска нет: решение «есть ответ или нет» принимает модель,
 а код проверяет, что ответ подтверждён. Подобрать порог на 32 кейсах значило
 бы подогнать его под набор.
@@ -30,7 +39,7 @@ import httpx2
 from pydantic import BaseModel, ValidationError
 from qdrant_client import QdrantClient
 
-from assistant.config import Settings
+from assistant.config import AnswerMode, Settings
 from assistant.generation.citations import (
     ANSWER_SCHEMA,
     CheckedStatement,
@@ -43,6 +52,8 @@ from assistant.generation.gigachat import (
     ChatModel,
     Completion,
     Message,
+    call_message,
+    function_result,
 )
 from assistant.generation.llm import llm_model, make_chat_model
 from assistant.generation.prompt import load_prompt
@@ -52,9 +63,20 @@ from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
-from assistant.tools.search_recipes import HISTORY_LIMIT, SearchArgs, SearchPlanner
+from assistant.tools.search_recipes import (
+    HISTORY_LIMIT,
+    NAME,
+    SEARCH_RECIPES,
+    SearchArgs,
+    SearchPlanner,
+    parse_arguments,
+    system_prompt,
+)
 
 PROMPT_VERSION = "recipes_v1"
+AUTO_PROMPT_VERSION = "recipes_auto_v1"
+# «Модель решает»: сколько поисков за один вопрос, потом — ответ без функций.
+MAX_SEARCHES = 3
 K = 5
 # Сколько найденных рецептов приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -126,6 +148,8 @@ class Trace:
     generation_seconds: float
     # Во что разобран вопрос; None — без разбора (пересчёт старых прогонов).
     args: SearchArgs | None = None
+    # Все поиски модели в режиме auto (в always — один, тот же, что args).
+    searches: tuple[SearchArgs, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -177,6 +201,46 @@ def user_message(question: str, sources: Sequence[SourceText]) -> str:
         [
             "Рецепты:",
             "\n\n".join(blocks) if blocks else "(ничего не нашлось)",
+            f"Вопрос пользователя: {question}",
+        ]
+    )
+
+
+def add_sources(
+    sources: Sequence[SourceText], chunks: Sequence[Chunk]
+) -> tuple[list[SourceText], list[SourceText]]:
+    """Дописывает рецепты к уже показанным модели, не меняя их номера.
+
+    Возвращает все источники и источники этих chunks (новые и уже бывшие):
+    в режиме auto номера не должны сдвигаться между шагами, иначе цитаты
+    модели указывали бы не на те рецепты.
+    """
+    result = list(sources)
+    by_id = {s.chunk.recipe_id: s for s in result}
+    found = []
+    for chunk in chunks:
+        if chunk.recipe_id not in by_id:
+            source = SourceText(
+                number=len(result) + 1,
+                chunk=chunk,
+                text=escape_source_text(mask_pii(chunk.text).text),
+            )
+            result.append(source)
+            by_id[chunk.recipe_id] = source
+        found.append(by_id[chunk.recipe_id])
+    # Без повторов, по номеру: поиск мог вернуть рецепт дважды.
+    return result, list({s.number: s for s in found}.values())
+
+
+def auto_user_message(question: str, earlier: Sequence[SourceText]) -> str:
+    """Вопрос и рецепты из прошлых ответов (режим auto: остальное найдёт модель)."""
+    if not earlier:
+        return f"Вопрос пользователя: {question}"
+    blocks = [f'<recipe id="{s.number}">\n{s.text}\n</recipe>' for s in earlier]
+    return "\n\n".join(
+        [
+            "Рецепты из прошлых ответов:",
+            "\n\n".join(blocks),
             f"Вопрос пользователя: {question}",
         ]
     )
@@ -262,6 +326,7 @@ def assemble(
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
     args: SearchArgs | None = None,
+    searches: Sequence[SearchArgs] = (),
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
     result = (
@@ -300,6 +365,7 @@ def assemble(
         retrieval_seconds=retrieval_seconds,
         generation_seconds=generation_seconds,
         args=args,
+        searches=tuple(searches) or ((args,) if args is not None else ()),
     )
     return AnswerResult(answer=answer, trace=trace)
 
@@ -312,25 +378,30 @@ class Answerer:
         *,
         model: str,
         ref: str,
-        prompt_version: str = PROMPT_VERSION,
+        mode: AnswerMode = "always",
+        prompt_version: str | None = None,
         k: int = K,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         self.model = model
-        self.prompt_version = prompt_version
+        self.mode = mode
+        self.prompt_version = prompt_version or (
+            AUTO_PROMPT_VERSION if mode == "auto" else PROMPT_VERSION
+        )
         self._retriever = retriever
         self._llm = llm
         self._ref = ref
         self._k = k
         self._clock = clock
-        # Разбор вопроса той же моделью, со словарём ингредиентов индекса.
-        self._planner = SearchPlanner(
-            llm, model=model, vocabulary=retriever.vocabulary()
-        )
+        # Словарь ингредиентов индекса: им разбирают вопрос в обоих режимах.
+        self._vocabulary = retriever.vocabulary()
+        self._planner = SearchPlanner(llm, model=model, vocabulary=self._vocabulary)
 
     def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
         """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога."""
         history = list(history)[-HISTORY_LIMIT:]
+        if self.mode == "auto":
+            return self._answer_auto(question, history)
         started = self._clock()
         args = self._planner.plan(question, history)
         hits = self._retriever.search(args.query, k=self._k, conditions=args.conditions)
@@ -363,6 +434,69 @@ class Answerer:
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
             args=args,
+        )
+
+    def _answer_auto(self, question: str, history: list[Message]) -> AnswerResult:
+        """«Модель решает»: модель ⇄ search_recipes, до MAX_SEARCHES поисков."""
+        started = self._clock()
+        sources, earlier = add_sources(
+            [], self._retriever.recipes(earlier_recipe_ids(history))
+        )
+        searching = self._clock() - started
+        messages: list[Message] = [
+            {
+                "role": "system",
+                "content": system_prompt(self._vocabulary, self.prompt_version),
+            },
+            *history,
+            {"role": "user", "content": auto_user_message(question, earlier)},
+        ]
+        hits: dict[int, Hit] = {}
+        searches: list[SearchArgs] = []
+        completion = None
+        for step in range(MAX_SEARCHES + 1):
+            completion = self._llm.chat(
+                messages,
+                model=self.model,
+                temperature=DETERMINISTIC_TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                response_format={
+                    "type": "json_schema",
+                    "schema": ANSWER_SCHEMA,
+                    "strict": True,
+                },
+                functions=[SEARCH_RECIPES],
+                # После MAX_SEARCHES поисков — только ответ.
+                function_call="none" if step == MAX_SEARCHES else "auto",
+            )
+            call = completion.function_call
+            if call is None or call["name"] != NAME:
+                break
+            args = parse_arguments(
+                call["arguments"], self._vocabulary, question=question
+            )
+            searches.append(args)
+            before = self._clock()
+            found = self._retriever.search(
+                args.query, k=self._k, conditions=args.conditions
+            )
+            searching += self._clock() - before
+            for hit in found:
+                hits.setdefault(hit.chunk.recipe_id, hit)
+            sources, shown = add_sources(sources, [hit.chunk for hit in found])
+            result = {"recipes": [{"id": s.number, "text": s.text} for s in shown]}
+            messages += [call_message(completion), function_result(NAME, result)]
+        total = self._clock() - started
+        return assemble(
+            list(hits.values()),
+            sources,
+            completion,
+            prompt_version=self.prompt_version,
+            ref=self._ref,
+            retrieval_seconds=searching,
+            generation_seconds=total - searching,
+            args=searches[0] if searches else None,
+            searches=searches,
         )
 
 
@@ -422,5 +556,9 @@ def make_answerer(
     llm = make_chat_model(settings, llm_http)
     retriever = Retriever(VectorStore(qdrant), embedder, ref=settings.dataset_revision)
     return Answerer(
-        retriever, llm, model=llm_model(settings), ref=settings.dataset_revision
+        retriever,
+        llm,
+        model=llm_model(settings),
+        ref=settings.dataset_revision,
+        mode=settings.answer_mode,
     )

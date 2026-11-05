@@ -15,6 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 LlmProvider = Literal["gigachat", "anthropic"]
 # Сколько думает Claude; пусто — по умолчанию модели. У GigaChat не используется.
 LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+# Режим ответа (решение 7): always — сначала поиск, потом ответ;
+# auto — модель сама решает, искать ли.
+AnswerMode = Literal["always", "auto"]
 # Области доступа GigaChat: физлица (Freemium), ИП и юрлица по предоплате, по постоплате.
 GigaChatScope = Literal["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]
 EmbeddingProvider = Literal["cloudru", "voyage"]
@@ -51,6 +54,8 @@ class Settings(BaseSettings):
     llm_model: str = ""
     # medium и high дали 0.92 и 0.93 — в пределах разброса; high думает дольше.
     llm_effort: LlmEffort = "medium"
+    # Режим по умолчанию выберет сравнение always и auto в eval этапа 3.
+    answer_mode: AnswerMode = "always"
     gigachat_api_key: SecretStr = SecretStr("")
     gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
     gigachat_api_url: str = GIGACHAT_API_URL

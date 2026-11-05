@@ -7,6 +7,7 @@ from chunk_helpers import CHICKEN, COOKIES, RECIPES, make_chunk
 from eval_helpers import MANIFEST
 
 from assistant.generation.answer import (
+    MAX_SEARCHES,
     PROMPT_VERSION,
     Answerer,
     AnswerResult,
@@ -393,3 +394,136 @@ def test_answer_schema_is_strict_for_claude() -> None:
         return found
 
     assert all(o.get("additionalProperties") is False for o in objects(ANSWER_SCHEMA))
+
+
+# --- Режим «модель решает» ---
+
+
+class ScriptedLlm:
+    """Модель по сценарию: ответы по очереди; запоминает запросы целиком."""
+
+    def __init__(self, *replies: dict[str, Any]) -> None:
+        self.replies = list(replies)
+        self.requests: list[dict[str, Any]] = []
+        self.stats = LlmStats()
+
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Mapping[str, object] | None = None,
+        functions: Sequence[Mapping[str, object]] | None = None,
+        function_call: FunctionCallMode | None = None,
+    ) -> Completion:
+        self.requests.append(
+            {"messages": list(messages), "function_call": function_call}
+        )
+        reply = self.replies.pop(0) if self.replies else self.search("ещё")
+        if "search" in reply:
+            return Completion(
+                "",
+                "function_call",
+                f"{model}:1.0",
+                Usage(10, 5, 0, 15),
+                function_call={"name": "search_recipes", "arguments": reply["search"]},
+            )
+        return Completion(
+            json.dumps(reply), "stop", f"{model}:1.0", Usage(10, 5, 0, 15)
+        )
+
+    @staticmethod
+    def search(query: str, **conditions: object) -> dict[str, Any]:
+        return {"search": {"query": query, "include": [], "exclude": [], **conditions}}
+
+
+def ask_auto(
+    retriever: Retriever,
+    llm: ScriptedLlm,
+    question: str,
+    history: Sequence[Message] = (),
+) -> AnswerResult:
+    answerer = Answerer(
+        retriever, llm, model="claude-haiku-5-5", ref="v3.4.2", mode="auto", k=3
+    )
+    return answerer.answer(question, history)
+
+
+def test_auto_searches_then_answers_with_checked_citation(retriever: Retriever) -> None:
+    """Модель ищет, получает рецепты с номерами и цитирует строку по номеру."""
+    llm = ScriptedLlm(
+        ScriptedLlm.search("курица с рисом", include=[["курица"]], exclude=["молоко"]),
+        {
+            "status": "answer",
+            "message": "",
+            "statements": [
+                {
+                    "text": "Курица с рисом.",
+                    "citations": [{"source": 1, "quote": CHICKEN_QUOTE}],
+                }
+            ],
+        },
+    )
+
+    result = ask_auto(retriever, llm, "курица с рисом, без молока")
+
+    assert result.answer.status == "answer"
+    assert [link.recipe_id for link in result.answer.sources] == [CHICKEN.recipe_id]
+    assert result.answer.prompt_version == "recipes_auto_v1"
+    [args] = result.trace.searches
+    assert args.query == "курица с рисом"
+    assert args.conditions.include == (("курица",),)
+    # Результат поиска ушёл модели сообщением функции, с номерами рецептов.
+    function = llm.requests[1]["messages"][-1]
+    assert function["role"] == "function" and function["name"] == "search_recipes"
+    assert json.loads(function["content"])["recipes"][0]["id"] == 1
+    # Словарь индекса — в системном промпте режима auto.
+    assert "курица — 1" in llm.requests[0]["messages"][0]["content"]
+
+
+def test_auto_chat_does_not_search(retriever: Retriever) -> None:
+    llm = ScriptedLlm({"status": "chat", "message": "Привет!", "statements": []})
+
+    result = ask_auto(retriever, llm, "привет")
+
+    assert result.answer.status == "chat"
+    assert result.trace.searches == ()
+    assert len(llm.requests) == 1
+
+
+def test_auto_stops_searching_after_the_limit(retriever: Retriever) -> None:
+    """Модель ищет снова и снова: после MAX_SEARCHES поисков функции выключаются."""
+    llm = ScriptedLlm(*[ScriptedLlm.search(f"поиск {n}") for n in range(MAX_SEARCHES)])
+    llm.replies.append({"status": "not_found", "message": "", "statements": []})
+
+    result = ask_auto(retriever, llm, "что-то странное")
+
+    assert len(result.trace.searches) == MAX_SEARCHES
+    assert [r["function_call"] for r in llm.requests] == ["auto"] * MAX_SEARCHES + [
+        "none"
+    ]
+    assert result.answer.reason == "model_not_found"
+
+
+def test_auto_keeps_numbers_of_earlier_recipes(retriever: Retriever) -> None:
+    """Рецепт из прошлого ответа — номер 1 с первого шага; найденные — дальше."""
+    history: list[Message] = [
+        {"role": "user", "content": "что к чаю?"},
+        {"role": "assistant", "content": f"«{COOKIES.name}» — {COOKIES.url}"},
+    ]
+    llm = ScriptedLlm(
+        ScriptedLlm.search("курица рис"),
+        {"status": "not_found", "message": "", "statements": []},
+    )
+
+    result = ask_auto(retriever, llm, "а с курицей?", history)
+
+    first_user = llm.requests[0]["messages"][-1]["content"]
+    assert first_user.startswith(
+        'Рецепты из прошлых ответов:\n\n<recipe id="1">\nОвсяное печенье'
+    )
+    numbers = {s.chunk.recipe_id: s.number for s in result.trace.sources}
+    assert numbers[COOKIES.recipe_id] == 1
+    assert numbers[CHICKEN.recipe_id] > 1
