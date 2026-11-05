@@ -361,6 +361,7 @@ def _retrieval_stage(
     seed: int,
     categories: frozenset[str] = RETRIEVAL_CATEGORIES,
     judge: bool = True,
+    quantization: bool = True,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
@@ -372,7 +373,9 @@ def _retrieval_stage(
         return _no_cases(DATASET_DIR, categories)
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
-        store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
+        store = VectorStore(
+            QdrantClient(url=settings.qdrant_url, timeout=30), quantization=quantization
+        )
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
         recipes, vocabulary = indexed_recipes(settings, retriever.manifest, http)
         if unknown := unknown_ingredients(cases, vocabulary):
@@ -398,6 +401,7 @@ def _retrieval_stage(
         today=today,
         sample=sampled,
         relevance=relevance,
+        quantization=quantization,
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results, relevance))
@@ -641,6 +645,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="без модели-судьи (groundedness и релевантность по смыслу не считаются)",
     )
     parser.add_argument(
+        "--no-quantization",
+        action="store_true",
+        help="STAGE=retrieval: искать по точным векторам, не используя сжатые (замер цены int8)",
+    )
+    parser.add_argument(
         "--resume",
         type=Path,
         metavar="JOURNAL",
@@ -666,6 +675,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.seed,
             args.categories or RETRIEVAL_CATEGORIES,
             not args.no_judge,
+            not args.no_quantization,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(

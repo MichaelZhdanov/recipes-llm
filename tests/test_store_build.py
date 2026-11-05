@@ -265,3 +265,12 @@ def test_sample_is_fixed_by_seed_and_sorted() -> None:
     assert first == pick_sample(many, 2, seed=1)
     assert [r.id for r in first] == sorted(r.id for r in first)
     assert pick_sample(many, 10, seed=1) == many
+
+
+def test_search_can_skip_compressed_vectors() -> None:
+    """Замер цены сжатия: тот же индекс, поиск по точным векторам."""
+    exact = VectorStore(QdrantClient(":memory:"), quantization=False)
+    usual = VectorStore(QdrantClient(":memory:"))
+
+    assert exact.search_params().quantization.ignore is True  # type: ignore[union-attr]
+    assert usual.search_params().quantization.ignore is False  # type: ignore[union-attr]

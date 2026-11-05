@@ -99,9 +99,14 @@ def _quantization(manifest: IndexManifest) -> models.ScalarQuantization | None:
 
 
 class VectorStore:
-    def __init__(self, client: QdrantClient, alias: str = ALIAS) -> None:
+    def __init__(
+        self, client: QdrantClient, alias: str = ALIAS, *, quantization: bool = True
+    ) -> None:
         self._client = client
         self._alias = alias
+        # False — искать по точным векторам, не трогая сжатые: замер цены сжатия
+        # на том же индексе, без пересборки.
+        self._quantization = quantization
 
     def active(self) -> str | None:
         """Коллекция, на которую сейчас указывает алиас, или None."""
@@ -212,18 +217,21 @@ class VectorStore:
             if offset is None:
                 return total
 
+    def search_params(self) -> models.SearchParams:
+        # Без сжатия в коллекции Qdrant эти параметры просто не использует.
+        return models.SearchParams(
+            quantization=models.QuantizationSearchParams(
+                ignore=not self._quantization, rescore=True, oversampling=OVERSAMPLING
+            )
+        )
+
     def search(self, vector: list[float], limit: int) -> list[Hit]:
         response = self._client.query_points(
             self._alias,
             query=vector,
             limit=limit,
             with_payload=True,
-            # Без сжатия в коллекции Qdrant эти параметры просто не использует.
-            search_params=models.SearchParams(
-                quantization=models.QuantizationSearchParams(
-                    rescore=True, oversampling=OVERSAMPLING
-                )
-            ),
+            search_params=self.search_params(),
         )
         return [
             Hit(chunk=Chunk.model_validate(point.payload), score=point.score)

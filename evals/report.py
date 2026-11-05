@@ -156,6 +156,7 @@ def render_report(
     today: date,
     sample: str | None = None,
     relevance: Relevance | None = None,
+    quantization: bool = True,
 ) -> str:
     latencies = [lat for r in results for lat in r.latencies]
     cost = estimate_cost(manifest.embedding_model, stats.tokens)
@@ -175,6 +176,13 @@ def render_report(
         f"| Модель эмбеддингов | {provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
         f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
         f"| Индекс | {_index_cell(manifest)} |",
+        *(
+            []
+            if quantization
+            else [
+                "| Поиск | по точным векторам, сжатые не используются (--no-quantization) |"
+            ]
+        ),
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].runs) if results else 0} |",
         "| Промпт | не используется |",
