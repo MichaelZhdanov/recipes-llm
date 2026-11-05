@@ -177,3 +177,16 @@ def test_meta_with_masked_pii_survives_json() -> None:
 
     assert loaded.llm_stats.masked == Counter({"email": 1})
     assert loaded.embedding_stats.masked == Counter({"phone": 2})
+
+
+def test_without_cases_eval_explains_and_exits(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Пустой набор — понятное сообщение и код 2, ещё до Qdrant и API."""
+    import evals.run as run
+
+    monkeypatch.setattr(run, "load_cases", lambda directory=None: [])
+
+    assert run.main(["--stage", "retrieval"]) == 2
+    assert run.main(["--split", "holdout"]) == 2
+    assert "нет кейсов" in capsys.readouterr().err

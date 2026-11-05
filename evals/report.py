@@ -130,8 +130,8 @@ def render_report(
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
         "",
-        "Этап 1: проверяется только поиск (LLM нет). Набор: `evals/dataset/howto_config.yaml`,",
-        "его писал независимый субагент до появления кода поиска (`evals/dataset/README.md`).",
+        "Проверяется только поиск (LLM нет). Наборы — `evals/dataset/`, кто и как их",
+        "составлял — `evals/dataset/README.md`.",
         "",
         "| Параметр | Значение |",
         "|---|---|",

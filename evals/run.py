@@ -69,6 +69,7 @@ from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from evals import progress
 from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import (
+    CANARIES_FILE,
     CLARITY_CANARIES_FILE,
     DATASET_DIR,
     HOLDOUT_DIR,
@@ -266,6 +267,12 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
+def _no_cases(directory: Path, categories: frozenset[str]) -> int:
+    """Прогонять нечего: понятное сообщение и код 2, а не пустой отчёт."""
+    _log(f"нет кейсов в {directory} для категорий {', '.join(sorted(categories))}")
+    return 2
+
+
 def run_answers(
     cases: Sequence[Case],
     answerer: Answerer,
@@ -333,6 +340,8 @@ def _retrieval_stage(
     cases, sampled = _choose(
         [c for c in load_cases() if c.category in categories], sample, seed
     )
+    if not cases:
+        return _no_cases(DATASET_DIR, categories)
     with httpx2.Client(timeout=30) as http:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
@@ -372,8 +381,10 @@ def _judge(
     _log(
         f"судья {judge.model}: {sum(len(r.runs) for r in results)} ответов и канарейки"
     )
+    # Канарейки пишутся вместе с промптом судьи: пока их нет, судья работает без них.
+    canaries = load_canaries() if CANARIES_FILE.exists() else []
     clarity = load_clarity_canaries() if CLARITY_CANARIES_FILE.exists() else []
-    return run_judge(results, judge, load_canaries(), clarity)
+    return run_judge(results, judge, canaries, clarity)
 
 
 def _finish(
@@ -416,6 +427,8 @@ def _answer_stage(
         sample,
         seed,
     )
+    if not cases:
+        return _no_cases(directory, categories)
     journal_file = resume or journal_path(
         REPORTS_DIR / "raw", report_path(REPORTS_DIR, date.today(), label)
     )

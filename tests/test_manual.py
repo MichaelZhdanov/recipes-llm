@@ -25,6 +25,10 @@ def test_kappa_counts_agreement_beyond_chance() -> None:
     assert result.kappa == pytest.approx(0.5)
 
 
+# Вопросы берутся из набора по id кейса; тест не зависит от того, что сейчас в наборе.
+QUESTIONS = {"howto-001": "как настроить почту"}
+
+
 def raw_with_judge() -> dict[str, Any]:
     howto = AnswerCase(case("howto-001", ["docs/usage.md#mail"]), [RUN])
     records = answer_records([howto])
@@ -37,9 +41,10 @@ def raw_with_judge() -> dict[str, Any]:
 def test_sample_is_blind_and_compare_finds_disagreement() -> None:
     raw = raw_with_judge()
 
-    [item] = sample(raw)
+    [item] = sample(raw, questions=QUESTIONS)
 
     assert item["id"] == "howto-001"
+    assert item["question"] == "как настроить почту"
     assert [s["supported"] for s in item["statements"]] == [None, None]
     assert "judge" not in json.dumps(item, ensure_ascii=False)
 
@@ -54,7 +59,7 @@ def test_sample_is_blind_and_compare_finds_disagreement() -> None:
 
 def test_unmarked_statement_is_an_error() -> None:
     raw = raw_with_judge()
-    [item] = sample(raw)
+    [item] = sample(raw, questions=QUESTIONS)
 
     with pytest.raises(ValueError, match="не размечено"):
         compare([item], raw)

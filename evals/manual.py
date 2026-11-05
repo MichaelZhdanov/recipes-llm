@@ -18,7 +18,7 @@ import argparse
 import json
 import random
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,10 +59,19 @@ def dump(items: Sequence[dict[str, Any]]) -> str:
     )
 
 
+def dataset_questions() -> dict[str, str]:
+    """Вопросы кейсов по id: в сырых данных прогона их нет."""
+    return {c.id: c.question for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
+
+
 def sample(
-    raw: dict[str, Any], *, size: int = SAMPLE_SIZE, seed: int = SEED
+    raw: dict[str, Any],
+    *,
+    size: int = SAMPLE_SIZE,
+    seed: int = SEED,
+    questions: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    questions = {c.id: c.question for c in [*load_cases(), *load_cases(HOLDOUT_DIR)]}
+    questions = dataset_questions() if questions is None else questions
     answered = [r for r in raw["records"] if r["answer"]["status"] == "answer"]
     picked = random.Random(seed).sample(answered, min(size, len(answered)))
     items = []
