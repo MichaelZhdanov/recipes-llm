@@ -174,6 +174,8 @@ class Parsing:
     prompt_version: str
     vocabulary: int
     stats: LlmStats
+    # Повторы запроса после зацикливания (finish_reason: length).
+    retries: int = 0
 
 
 def _parsing_cell(parsing: Parsing | None) -> str:
@@ -293,6 +295,11 @@ def render_report(
         *_relevance_rows(relevance, gates),
         f"| имена из разбора не из словаря (отброшены) | {len(dropped)} | — |",
         f"| сбои разбора (выдача пустая) | {errors(results)} | — |",
+        *(
+            [f"| повторы разбора после зацикливания (length) | {parsing.retries} | — |"]
+            if parsing
+            else []
+        ),
         f"| задержка поиска p50 / p95 | {percentile(latencies, 0.5):.2f} / "
         f"{percentile(latencies, 0.95):.2f} с | — |",
         *(

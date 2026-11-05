@@ -422,6 +422,7 @@ def _retrieval_stage(
                 prompt_version=SEARCH_PROMPT,
                 vocabulary=len(index_vocabulary),
                 stats=llm.stats,
+                retries=planner.retries,
             )
     relevance = None
     if judge and any(r.case.category == "semantic" for r in results):

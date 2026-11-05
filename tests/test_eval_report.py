@@ -175,6 +175,7 @@ def test_report_shows_how_questions_were_parsed() -> None:
         prompt_version="search_v1",
         vocabulary=820,
         stats=stats,
+        retries=4,
     )
 
     report = render(results, parsing=parsing)
@@ -183,6 +184,7 @@ def test_report_shows_how_questions_were_parsed() -> None:
     assert "словарь индекса — 820 имён" in report
     assert "| имена из разбора не из словаря (отброшены) | 1 | — |" in report
     assert "| сбои разбора (выдача пустая) | 1 | — |" in report
+    assert "| повторы разбора после зацикливания (length) | 4 | — |" in report
     assert "| токены GigaChat на разбор: всего / из кэша | 9000 / 8000 | — |" in report
     assert (
         "- exclude-001 «плов, молоко нельзя» → запрос «плов без молока» · с: рис"
