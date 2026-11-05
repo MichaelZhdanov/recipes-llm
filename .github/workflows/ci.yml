@@ -68,19 +68,12 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          # Логин — не секрет, но может лежать и среди секретов: берём, где задан.
-          WEB_LOGIN: ${{ vars.WEB_LOGIN || secrets.WEB_LOGIN }}
-          WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
           CLOUD_RU_API_KEY: ${{ secrets.CLOUD_RU_API_KEY }}
           GIGACHAT_API_KEY: ${{ secrets.GIGACHAT_API_KEY }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
             exit 0
-          fi
-          if [ -z "$WEB_PASSWORD" ]; then
-            echo "::error::Нет секрета WEB_PASSWORD: без пароля входа ассистент не стартует."
-            exit 1
           fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
@@ -92,11 +85,10 @@ jobs:
           remote="$remote && git checkout --quiet --detach $GITHUB_SHA"
           remote="$remote && deploy/deploy.sh $GITHUB_SHA"
           # Ключ сервера не проверяется (решение автора): сервер может переезжать.
-          # Логин, пароль и ключи API — в stdin, а не в команде: так их не видно
-          # в ps на сервере. Незаданный в GitHub ключ не передаётся, и в .env
-          # на сервере остаётся прежнее значение.
+          # Ключи API — в stdin, а не в команде: так их не видно в ps на
+          # сервере. Незаданный в GitHub ключ не передаётся, и в .env на
+          # сервере остаётся прежнее значение.
           {
-            printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' "${WEB_LOGIN:-admin}" "$WEB_PASSWORD"
             [ -z "$CLOUD_RU_API_KEY" ] || printf 'CLOUD_RU_API_KEY=%s\n' "$CLOUD_RU_API_KEY"
             [ -z "$GIGACHAT_API_KEY" ] || printf 'GIGACHAT_API_KEY=%s\n' "$GIGACHAT_API_KEY"
           } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \

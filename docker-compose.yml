@@ -60,7 +60,8 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      # Порт на хосте меняется в .env (ASSISTANT_PORT), если 8080 занят.
+      # HTTP API (/health, /ask) только для этой машины; порт меняется в .env
+      # (ASSISTANT_PORT), если 8080 занят.
       - "127.0.0.1:${ASSISTANT_PORT:-8080}:8080"
     # Все поля assistant/config.py. Пустое значение означает значение по умолчанию из config.py.
     # Секрета Paperless и пароля администратора здесь нет: ассистенту они не нужны.
@@ -88,10 +89,6 @@ services:
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
       ENGINEER_TELEGRAM_IDS: ${ENGINEER_TELEGRAM_IDS:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      NO_AUTH: ${NO_AUTH:-}
-      WEB_LOGIN: ${WEB_LOGIN:-}
-      WEB_PASSWORD: ${WEB_PASSWORD:-}
-      WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:-}
 
 volumes:
   broker-data:

@@ -16,15 +16,14 @@ INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)
 	$(INIT_ENV)
 
 # init_env.py ещё раз: в старый .env он допишет секреты, появившиеся в новой
-# версии (WEB_SESSION_SECRET), заданные значения не трогает.
+# версии, заданные значения не трогает.
 # --wait ждёт, пока все healthcheck станут зелёными; первый старт Paperless
 # (миграции базы) занимает до пары минут.
 up: .env ## поднять Paperless, Valkey, Qdrant и ассистента
 	$(INIT_ENV)
 	docker compose up -d --build --wait --wait-timeout 300
 	@echo "Paperless:  http://localhost:8000 (логин и пароль в .env)"
-	@echo "Ассистент:  http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/ (чат), /docs (API)"
-	@echo "            вход: WEB_LOGIN и WEB_PASSWORD в .env; NO_AUTH=1 — без входа"
+	@echo "Ассистент:  http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (HTTP API)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
 
 down: ## остановить стек (данные в томах Docker сохраняются)

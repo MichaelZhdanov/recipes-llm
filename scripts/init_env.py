@@ -5,7 +5,7 @@
 
 Если .env уже есть, в нём меняется одно: дописываются сгенерированные секреты,
 которых там нет или они пустые. Так обновление проекта, добавившее новый
-секрет (WEB_SESSION_SECRET), не ломает запуск со старым .env. Заданные
+секрет, не ломает запуск со старым .env. Заданные
 значения не трогаются никогда.
 """
 
@@ -22,8 +22,6 @@ ROOT = Path(__file__).resolve().parent.parent
 GENERATED_SECRETS = {
     "PAPERLESS_SECRET_KEY": 48,
     "PAPERLESS_ADMIN_PASSWORD": 16,
-    "WEB_PASSWORD": 16,
-    "WEB_SESSION_SECRET": 48,
 }
 
 
@@ -103,8 +101,7 @@ def main() -> int:
         )
         print(
             "Вход в Paperless: http://localhost:8000, "
-            "логин и пароль — PAPERLESS_ADMIN_USER и PAPERLESS_ADMIN_PASSWORD в .env. "
-            "Вход в ассистента — WEB_LOGIN и WEB_PASSWORD."
+            "логин и пароль — PAPERLESS_ADMIN_USER и PAPERLESS_ADMIN_PASSWORD в .env."
         )
         return 0
     added = update_env(target)

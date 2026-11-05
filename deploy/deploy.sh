@@ -2,13 +2,13 @@
 # Деплой на сервере: deploy/deploy.sh <коммит>. Запускается от root.
 #
 # GitHub Actions сначала переводит клон на коммит, потом вызывает скрипт:
-#   printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' … | ssh root@<сервер> \
+#   printf 'GIGACHAT_API_KEY=%s\n' … | ssh root@<сервер> \
 #     "cd /opt/paperless-assistant && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha>"
 # Вручную на сервере достаточно deploy/deploy.sh <sha>: checkout ниже повторится.
-# Логин и пароль — в stdin, а не аргументами: аргументы видны в списке
+# Ключи API — в stdin, а не аргументами: аргументы видны в списке
 # процессов (ps), stdin — нет.
 #
-# Шаги: логин и пароль в .env → код ровно того коммита, что проверил CI →
+# Шаги: ключи API в .env → код ровно того коммита, что проверил CI →
 # стек → исходники Paperless и индекс, если их ещё нет → проверка /health.
 #
 # Весь код — в функции main: bash читает скрипт по ходу выполнения, а git
@@ -18,7 +18,7 @@ set -euo pipefail
 
 main() {
     if [[ $# -ne 1 ]]; then
-        echo "использование: $0 <коммит>  (логин и пароль входа — в stdin)" >&2
+        echo "использование: $0 <коммит>  (ключи API — в stdin)" >&2
         exit 2
     fi
     local sha="$1"
@@ -31,7 +31,7 @@ main() {
     # На сервере не нужны линтеры и тесты: uv ставит только зависимости сервиса.
     export UV_NO_DEV=1
 
-    echo "== логин и пароль входа из секретов GitHub → .env"
+    echo "== ключи API из секретов GitHub → .env"
     uv run --no-project --python 3.14 scripts/set_env.py .env
 
     echo "== код коммита $sha"

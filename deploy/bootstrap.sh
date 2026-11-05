@@ -82,10 +82,8 @@ main() {
 Готово. Осталось:
 1. В GitHub → Settings → Environments → prod:
    секреты DEPLOY_HOST (адрес сервера), DEPLOY_SSH_KEY (приватный ключ деплоя),
-   WEB_PASSWORD (пароль входа), CLOUD_RU_API_KEY, GIGACHAT_API_KEY;
-   переменная WEB_LOGIN (логин входа). Деплой запишет их в $APP_DIR/.env.
-2. NO_AUTH в $APP_DIR/.env должен остаться 0.
-3. Запустить деплой: push в main или Actions → CI → Run workflow.
+   CLOUD_RU_API_KEY, GIGACHAT_API_KEY. Деплой запишет ключи API в $APP_DIR/.env.
+2. Запустить деплой: push в main или Actions → CI → Run workflow.
    Первый деплой строит индекс (≈27 ₽ на cloud.ru, пара минут).
 DONE
 }
