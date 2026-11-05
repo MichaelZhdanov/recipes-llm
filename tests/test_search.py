@@ -1,8 +1,8 @@
 import pytest
+from chunk_helpers import make_chunk, markdown_sections
 
 from assistant.cli import format_hits
 from assistant.indexing.chunks import Chunk
-from assistant.indexing.docs import chunk_markdown
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever, dedupe
 from assistant.retrieval.store import (
@@ -13,13 +13,8 @@ from assistant.retrieval.store import (
 )
 
 REPO = "https://github.com/example/fork"
-LONG = "\n\n".join(f"OCR language paragraph {i} " + "tesseract " * 30 for i in range(6))
-DOCS = f"""\
+DOCS = """\
 # Configuration
-
-## OCR
-
-{LONG}
 
 ## Mail
 
@@ -31,10 +26,24 @@ Set the time zone of the server.
 """
 
 
+def long_section_parts(ref: str) -> list[Chunk]:
+    """Длинный раздел, разрезанный на части: у частей общий source_id."""
+    return [
+        make_chunk(
+            f"OCR language paragraph {i} " + "tesseract " * 30,
+            source_id="docs/configuration.md#ocr",
+            start_line=100 + i,
+            ref=ref,
+        )
+        for i in range(6)
+    ]
+
+
 def build(store: VectorStore, embedder: Embedder, ref: str = "v3.4.2") -> list[Chunk]:
-    chunks = chunk_markdown(
-        DOCS, path="docs/configuration.md", ref=ref, repo_url=REPO, max_chars=300
-    )
+    chunks = [
+        *long_section_parts(ref),
+        *markdown_sections(DOCS, path="docs/configuration.md", ref=ref, repo_url=REPO),
+    ]
     vectors = embedder.embed_documents([c.embedding_text() for c in chunks])
     store.recreate(
         IndexManifest(
@@ -87,10 +96,9 @@ def test_index_for_other_model_is_refused(
 
 def test_dedupe_keeps_best_hit_per_source() -> None:
     def hit(source: str, score: float) -> Hit:
-        chunk = chunk_markdown(
-            f"## {source}\n\ntext\n", path="docs/a.md", ref="v", repo_url=REPO
-        )[0]
-        return Hit(chunk=chunk, score=score)
+        return Hit(
+            chunk=make_chunk("text", source_id=f"docs/a.md#{source}"), score=score
+        )
 
     hits = [hit("a", 0.9), hit("b", 0.8), hit("a", 0.7), hit("c", 0.6)]
 
@@ -112,7 +120,6 @@ def test_format_hits_shows_location_links_and_preview(
     assert "doc: Configuration > Time zone" in text
     assert "docs/configuration.md:" in text
     assert f"{REPO}/blob/v3.4.2/docs/configuration.md?plain=1#L" in text
-    assert "сайт: https://docs.paperless-ngx.com/configuration/#time-zone" in text
     assert "«## Time zone Set the time zone of the server.»" in text
 
 

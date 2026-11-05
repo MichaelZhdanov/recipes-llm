@@ -80,9 +80,7 @@ services:
       VOYAGE_API_URL: ${VOYAGE_API_URL:-}
       # Адреса внутри docker-сети: единственные переменные ассистента не из .env.
       QDRANT_URL: http://qdrant:6333
-      PAPERLESS_SOURCE_PATH: ${PAPERLESS_SOURCE_PATH:-}
       PAPERLESS_REF: ${PAPERLESS_REF:-}
-      PAPERLESS_REPO_URL: ${PAPERLESS_REPO_URL:-}
       PAPERLESS_API_URL: http://paperless:8000
       PAPERLESS_TOKEN: ${PAPERLESS_TOKEN:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}

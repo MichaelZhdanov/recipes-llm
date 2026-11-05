@@ -84,7 +84,6 @@ main() {
    секреты DEPLOY_HOST (адрес сервера), DEPLOY_SSH_KEY (приватный ключ деплоя),
    CLOUD_RU_API_KEY, GIGACHAT_API_KEY. Деплой запишет ключи API в $APP_DIR/.env.
 2. Запустить деплой: push в main или Actions → CI → Run workflow.
-   Первый деплой строит индекс (≈27 ₽ на cloud.ru, пара минут).
 DONE
 }
 

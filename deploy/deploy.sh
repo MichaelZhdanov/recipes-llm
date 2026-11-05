@@ -9,7 +9,7 @@
 # процессов (ps), stdin — нет.
 #
 # Шаги: ключи API в .env → код ровно того коммита, что проверил CI →
-# стек → исходники Paperless и индекс, если их ещё нет → проверка /health.
+# стек → проверка /health. Сборка индекса вернётся на этапе 1.
 #
 # Весь код — в функции main: bash читает скрипт по ходу выполнения, а git
 # checkout ниже может заменить этот самый файл. Функцию bash разбирает целиком
@@ -40,10 +40,6 @@ main() {
 
     echo "== стек"
     make --no-print-directory up
-
-    echo "== исходники Paperless и индекс (если их ещё нет)"
-    make --no-print-directory sources
-    make --no-print-directory index-if-needed
 
     local port
     port="$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | tr -d "'\"" || true)"

@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
+from chunk_helpers import markdown_sections
 from eval_helpers import MANIFEST
 
 from assistant.generation.answer import (
@@ -14,7 +15,6 @@ from assistant.generation.answer import (
     render_markdown,
 )
 from assistant.generation.gigachat import Completion, LlmStats, Message, Usage
-from assistant.indexing.docs import chunk_markdown
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
@@ -71,9 +71,7 @@ class FakeLlm:
 
 @pytest.fixture
 def retriever(store: VectorStore, fake_embedder: Embedder) -> Retriever:
-    chunks = chunk_markdown(
-        DOCS, path="docs/configuration.md", ref="v3.4.2", repo_url="https://x"
-    )
+    chunks = markdown_sections(DOCS, path="docs/configuration.md")
     store.recreate(MANIFEST)
     store.upsert(
         chunks, fake_embedder.embed_documents([c.embedding_text() for c in chunks])
@@ -298,7 +296,6 @@ def test_render_answer_with_sources_and_gigachat_note(retriever: Retriever) -> N
 
     assert text.startswith("Язык задаёт `PAPERLESS_OCR_LANGUAGE`. [1]")
     assert "[1] docs/configuration.md:6 — Configuration > OCR language" in text
-    assert "сайт: https://docs.paperless-ngx.com/configuration/#ocr-language" in text
     assert text.endswith(
         "Ответ сгенерирован GigaChat (GigaChat-2:1.0) по документации и коду Paperless-ngx v3.4.2."
     )

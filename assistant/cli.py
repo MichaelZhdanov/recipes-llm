@@ -1,7 +1,8 @@
-"""Командная строка: `python -m assistant.cli index [--if-needed] | sources | ask "вопрос" | search "вопрос"`.
+"""Командная строка: `python -m assistant.cli ask "вопрос" | search "вопрос"`.
 
 Запускается на хосте через `uv run --env-file .env` (см. Makefile). Ход
-работы пишется в stderr, результат — в stdout.
+работы пишется в stderr, результат — в stdout. Команда `index` вернётся
+на этапе 1 вместе с загрузчиком рецептов.
 """
 
 import argparse
@@ -16,8 +17,6 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 from assistant.config import Settings
 from assistant.generation.answer import make_answerer, render_markdown
 from assistant.generation.gigachat import LlmError, make_http_client
-from assistant.indexing.build import build_index
-from assistant.indexing.sources import SourceDownloadError, ensure_sources
 from assistant.retrieval.embeddings import EmbeddingError, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import (
@@ -25,14 +24,12 @@ from assistant.retrieval.store import (
     IndexMismatchError,
     IndexMissingError,
     VectorStore,
-    mismatch,
 )
 
 # Ошибки, о которых пользователю достаточно одной строки без трассировки.
 _EXPECTED_ERRORS = (
     EmbeddingError,
     LlmError,
-    SourceDownloadError,
     IndexMissingError,
     IndexMismatchError,
 )
@@ -40,60 +37,6 @@ _EXPECTED_ERRORS = (
 
 def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
-
-
-def rebuild_reason(store: VectorStore, *, ref: str, model: str) -> str | None:
-    """Зачем строить индекс заново, или None, если он уже подходит к настройкам."""
-    try:
-        manifest = store.manifest()
-    except IndexMissingError as error:
-        return str(error)
-    return mismatch(manifest, ref=ref, model=model)
-
-
-def _index(settings: Settings, if_needed: bool = False) -> int:
-    with httpx2.Client(timeout=60) as http:
-        # Эмбеддер первым: без ключа ошибка сразу, ещё до сетевых вызовов.
-        embedder = make_embedder(settings, http)
-        store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
-        if if_needed:
-            # Для деплоя: полная пересборка стоит ≈27 ₽, без нужды её не делаем.
-            reason = rebuild_reason(
-                store, ref=settings.paperless_ref, model=embedder.model
-            )
-            if reason is None:
-                print(
-                    f"индекс для {settings.paperless_ref} уже построен, пересборка не нужна"
-                )
-                return 0
-            _log(f"строю индекс: {reason}")
-        report = build_index(
-            settings, http=http, store=store, embedder=embedder, log=_log
-        )
-    manifest = report.manifest
-    cost = report.cost or "цена модели неизвестна"
-    masked = ", ".join(f"{k} {v}" for k, v in sorted(report.masked.items())) or "нет"
-    print(
-        f"Индекс построен: {manifest.ref} ({manifest.commit}), модель {manifest.embedding_model}, "
-        f"размерность {manifest.dim}\n"
-        f"кусков: {sum(manifest.chunks.values())} {manifest.chunks}\n"
-        f"токенов: {report.tokens}, оценка стоимости: {cost}\n"
-        f"маскер сработал: {masked}\n"
-        f"время: {report.seconds:.0f} с"
-    )
-    return 0
-
-
-def _sources(settings: Settings) -> int:
-    with httpx2.Client(timeout=60) as http:
-        tree = ensure_sources(
-            settings.paperless_repo_url,
-            settings.paperless_ref,
-            settings.paperless_source_path,
-            http,
-        )
-    print(f"исходники {tree.ref} ({tree.commit or 'коммит неизвестен'}) в {tree.root}")
-    return 0
 
 
 def format_hits(hits: Sequence[Hit]) -> str:
@@ -152,15 +95,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python -m assistant.cli", description=__doc__
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    index = commands.add_parser("index", help="пересобрать индекс по PAPERLESS_REF")
-    index.add_argument(
-        "--if-needed",
-        action="store_true",
-        help="только если индекса нет или он для другого тега или модели",
-    )
-    commands.add_parser(
-        "sources", help="только скачать исходники PAPERLESS_REF, без индекса"
-    )
     ask = commands.add_parser("ask", help="ответ со ссылками на документацию и код")
     ask.add_argument("question")
     ask.add_argument("--json", action="store_true", help="вывод в JSON")
@@ -174,10 +108,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     settings = Settings()
     try:
-        if args.command == "index":
-            return _index(settings, args.if_needed)
-        if args.command == "sources":
-            return _sources(settings)
         if args.command == "ask":
             return _ask(settings, args.question, args.json)
         if args.command == "search":

@@ -5,7 +5,6 @@
 Список переменных с пояснениями лежит в `.env.example`.
 """
 
-from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import SecretStr, field_validator
@@ -58,9 +57,7 @@ class Settings(BaseSettings):
     voyage_api_url: str = VOYAGE_API_URL
     # Умолчания рассчитаны на запуск с хоста; контейнеру ассистента адреса docker-сети задаёт compose.
     qdrant_url: str = "http://localhost:6333"
-    paperless_source_path: Path = Path("data/paperless-src")
     paperless_ref: str = "v3.4.2"
-    paperless_repo_url: str = "https://github.com/MichaelZhdanov/paperless-ngx-rag"
     # Не PAPERLESS_URL: так называется переменная самого Paperless (его публичный адрес).
     paperless_api_url: str = "http://localhost:8000"
     paperless_token: SecretStr = SecretStr("")

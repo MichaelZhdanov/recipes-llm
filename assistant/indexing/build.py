@@ -1,24 +1,19 @@
-"""Сборка индекса: исходники по тегу → куски → эмбеддинги → Qdrant.
+"""Сборка индекса: куски → эмбеддинги → Qdrant → проверка.
 
-Эмбеддинги считаются до того, как трогается коллекция. Если Voyage упадёт
-на середине, старый индекс останется рабочим, а не окажется удалённым
-наполовину.
+Откуда берутся куски, решает вызывающий код: загрузчик рецептов появится
+на этапе 1. Эмбеддинги считаются до того, как трогается коллекция. Если
+API эмбеддингов упадёт на середине, старый индекс останется рабочим, а не
+окажется удалённым наполовину.
 """
 
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import httpx2
-
 from assistant import __version__
-from assistant.config import Settings
 from assistant.indexing.chunks import Chunk
-from assistant.indexing.code import chunk_code
-from assistant.indexing.docs import chunk_docs
-from assistant.indexing.sources import SourceTree, ensure_sources
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.store import IndexManifest, VectorStore
 
@@ -54,29 +49,19 @@ def estimate_cost(model: str, tokens: int) -> str | None:
     return f"≈{tokens / 1_000_000 * price:.4f} {currency}"
 
 
-def collect_chunks(tree: SourceTree, repo_url: str) -> list[Chunk]:
-    return chunk_docs(tree.root, ref=tree.ref, repo_url=repo_url) + chunk_code(
-        tree.root, ref=tree.ref, repo_url=repo_url
-    )
-
-
 def build_index(
-    settings: Settings,
+    chunks: Sequence[Chunk],
     *,
-    http: httpx2.Client,
+    ref: str,
+    commit: str | None,
     store: VectorStore,
     embedder: Embedder,
     log: Callable[[str], None],
 ) -> BuildReport:
+    """Строит индекс заново. ref и commit — версия данных, они попадут в паспорт."""
+    if not chunks:
+        raise ValueError("нет кусков для индекса")
     started = time.monotonic()
-    tree = ensure_sources(
-        settings.paperless_repo_url,
-        settings.paperless_ref,
-        settings.paperless_source_path,
-        http,
-    )
-    log(f"исходники {tree.ref} ({tree.commit or 'коммит неизвестен'}) в {tree.root}")
-    chunks = collect_chunks(tree, settings.paperless_repo_url)
     counts = Counter(c.kind for c in chunks)
     log(
         f"кусков: {len(chunks)} ({', '.join(f'{k} {v}' for k, v in sorted(counts.items()))})"
@@ -91,8 +76,8 @@ def build_index(
         )
 
     manifest = IndexManifest(
-        ref=tree.ref,
-        commit=tree.commit,
+        ref=ref,
+        commit=commit,
         embedding_model=embedder.model,
         dim=len(vectors[0]),
         built_at=datetime.now(UTC).isoformat(timespec="seconds"),

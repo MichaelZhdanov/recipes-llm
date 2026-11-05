@@ -1,8 +1,8 @@
 from itertools import count
 
+from chunk_helpers import markdown_sections
 from eval_helpers import MANIFEST, case, result
 
-from assistant.indexing.docs import chunk_markdown
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
@@ -63,9 +63,7 @@ Set PAPERLESS_TIME_ZONE.
 def test_run_cases_measures_rank_and_latency(
     store: VectorStore, fake_embedder: Embedder
 ) -> None:
-    chunks = chunk_markdown(
-        DOCS, path="docs/usage.md", ref="v3.4.2", repo_url="https://x"
-    )
+    chunks = markdown_sections(DOCS, path="docs/usage.md")
     store.recreate(MANIFEST)
     store.upsert(
         chunks, fake_embedder.embed_documents([c.embedding_text() for c in chunks])

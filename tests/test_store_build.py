@@ -1,15 +1,10 @@
-import json
 from collections.abc import Sequence
-from pathlib import Path
 
-import httpx2
 import pytest
+from chunk_helpers import make_chunk, markdown_sections
 
-from assistant.config import Settings
 from assistant.indexing.build import build_index, estimate_cost
 from assistant.indexing.chunks import Chunk
-from assistant.indexing.docs import chunk_markdown
-from assistant.indexing.sources import SOURCE_META_FILE
 from assistant.retrieval.embeddings import Embedder, EmbeddingStats
 from assistant.retrieval.store import IndexManifest, IndexMissingError, VectorStore
 
@@ -46,9 +41,7 @@ def manifest(
 
 
 def docs_chunks() -> list[Chunk]:
-    return chunk_markdown(
-        DOCS, path="docs/configuration.md", ref="v3.4.2", repo_url=REPO
-    )
+    return markdown_sections(DOCS, path="docs/configuration.md", repo_url=REPO)
 
 
 def filled(store: VectorStore, embedder: Embedder) -> list[Chunk]:
@@ -109,36 +102,17 @@ def test_recreate_replaces_old_points(
     assert store.manifest().ref == "v3.5.0"
 
 
-def make_tree(base: Path) -> None:
-    root = base / "v3.4.2"
-    (root / "docs").mkdir(parents=True)
-    (root / "src/paperless").mkdir(parents=True)
-    (root / "docs/configuration.md").write_text(DOCS)
-    (root / "src/paperless/settings.py").write_text(
-        'import os\n\nOCR_LANGUAGE = os.getenv("PAPERLESS_OCR_LANGUAGE", "eng")\n'
-    )
-    (root / SOURCE_META_FILE).write_text(
-        json.dumps({"ref": "v3.4.2", "commit": "d939d87"})
-    )
-
-
-def no_network() -> httpx2.Client:
-    def fail(request: httpx2.Request) -> httpx2.Response:
-        raise AssertionError(f"неожиданный запрос {request.url}")
-
-    return httpx2.Client(transport=httpx2.MockTransport(fail))
-
-
-def test_build_index_end_to_end(
-    tmp_path: Path, store: VectorStore, fake_embedder: Embedder
-) -> None:
-    make_tree(tmp_path)
-    settings = Settings(paperless_source_path=tmp_path, paperless_repo_url=REPO)
+def test_build_index_end_to_end(store: VectorStore, fake_embedder: Embedder) -> None:
+    chunks = [
+        *docs_chunks(),
+        make_chunk("def ocr(): ...", source_id="src/a.py::ocr", kind="code"),
+    ]
     messages: list[str] = []
 
     report = build_index(
-        settings,
-        http=no_network(),
+        chunks,
+        ref="v3.4.2",
+        commit="d939d87",
         store=store,
         embedder=fake_embedder,
         log=messages.append,
@@ -150,6 +124,15 @@ def test_build_index_end_to_end(
     assert store.count() == 3
     assert store.manifest() == report.manifest
     assert any("кусков: 3" in m for m in messages)
+
+
+def test_nothing_to_index_is_an_error(
+    store: VectorStore, fake_embedder: Embedder
+) -> None:
+    with pytest.raises(ValueError, match="нет кусков"):
+        build_index(
+            [], ref="v", commit=None, store=store, embedder=fake_embedder, log=print
+        )
 
 
 class BrokenEmbedder:
@@ -166,15 +149,15 @@ class BrokenEmbedder:
 
 
 def test_failed_embedding_keeps_old_index(
-    tmp_path: Path, store: VectorStore, fake_embedder: Embedder
+    store: VectorStore, fake_embedder: Embedder
 ) -> None:
     filled(store, fake_embedder)
-    make_tree(tmp_path)
 
     with pytest.raises(RuntimeError, match="Voyage"):
         build_index(
-            Settings(paperless_source_path=tmp_path, paperless_repo_url=REPO),
-            http=no_network(),
+            docs_chunks(),
+            ref="v3.5.0",
+            commit=None,
             store=store,
             embedder=BrokenEmbedder(),
             log=lambda _: None,
