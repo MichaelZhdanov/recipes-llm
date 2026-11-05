@@ -11,8 +11,10 @@ from typing import Literal
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Пока один провайдер LLM; другие — S2 из плана (смена модели).
-LlmProvider = Literal["gigachat"]
+# LLM ассистента: GigaChat (данные в РФ) или Claude через API Anthropic.
+LlmProvider = Literal["gigachat", "anthropic"]
+# Сколько думает Claude; пусто — по умолчанию модели. У GigaChat не используется.
+LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 # Области доступа GigaChat: физлица (Freemium), ИП и юрлица по предоплате, по постоплате.
 GigaChatScope = Literal["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]
 EmbeddingProvider = Literal["cloudru", "voyage"]
@@ -27,6 +29,7 @@ VOYAGE_ATLAS_API_URL = "https://ai.mongodb.com/v1"
 # аккаунта уровня «Проект» (аккаунт уровня организации получает 401).
 CLOUD_RU_API_URL = "https://foundation-models.api.cloud.ru/v1"
 # GigaChat: токен выдаёт отдельный OAuth-адрес, генерация — на api.giga.chat.
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1"
 GIGACHAT_API_URL = "https://api.giga.chat/v1"
 GIGACHAT_OAUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
@@ -42,12 +45,16 @@ class Settings(BaseSettings):
     )
 
     llm_provider: LlmProvider = "gigachat"
-    # Пустая модель — модель по умолчанию (assistant/generation/gigachat.py).
+    # Пустая модель — модель провайдера по умолчанию (assistant/generation/llm.py).
     llm_model: str = ""
+    llm_effort: LlmEffort = ""
     gigachat_api_key: SecretStr = SecretStr("")
     gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
     gigachat_api_url: str = GIGACHAT_API_URL
     gigachat_oauth_url: str = GIGACHAT_OAUTH_URL
+    # Ключ API Anthropic (platform.claude.com); подписка Claude его не даёт.
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_api_url: str = ANTHROPIC_API_URL
     # Эмбеддинги. Пустая модель — модель провайдера по умолчанию (DEFAULT_MODELS).
     embedding_provider: EmbeddingProvider = "cloudru"
     embedding_model: str = ""

@@ -26,7 +26,8 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 from assistant import __version__
 from assistant.config import Settings
 from assistant.generation.answer import Answer, AnswerResult, make_answerer
-from assistant.generation.gigachat import LlmError, make_http_client
+from assistant.generation.gigachat import LlmError
+from assistant.generation.llm import make_http_client
 from assistant.retrieval.embeddings import EmbeddingError
 from assistant.retrieval.store import IndexMismatchError, IndexMissingError
 
@@ -78,7 +79,7 @@ class LazyAnswerer:
         self._lock = threading.Lock()
         self._answerer: QuestionAnswerer | None = None
         self._embeddings_http = httpx2.Client(timeout=30)
-        self._llm_http = make_http_client()
+        self._llm_http = make_http_client(settings)
         self._qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
 
     def answer(self, question: str) -> AnswerResult:

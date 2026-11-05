@@ -15,12 +15,8 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
 from assistant.generation.answer import make_answerer, render_markdown
-from assistant.generation.gigachat import (
-    LlmError,
-    llm_model,
-    make_http_client,
-    make_llm,
-)
+from assistant.generation.gigachat import LlmError
+from assistant.generation.llm import llm_model, make_chat_model, make_http_client
 from assistant.indexing.build import (
     SAMPLE_SEED,
     IndexSource,
@@ -188,10 +184,10 @@ def format_plan(args: SearchArgs) -> str:
 def _search(
     settings: Settings, question: str, k: int, as_json: bool, filters: bool
 ) -> int:
-    with httpx2.Client(timeout=30) as http, make_http_client() as llm_http:
+    with httpx2.Client(timeout=30) as http, make_http_client(settings) as llm_http:
         # Ключи проверяются до Qdrant: ошибка настройки видна сразу.
         embedder = make_embedder(settings, http)
-        llm = make_llm(settings, llm_http) if filters else None
+        llm = make_chat_model(settings, llm_http) if filters else None
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
         if llm is None:
@@ -219,7 +215,7 @@ def _search(
 def _ask(settings: Settings, question: str, as_json: bool) -> int:
     with (
         httpx2.Client(timeout=30) as embeddings_http,
-        make_http_client() as llm_http,
+        make_http_client(settings) as llm_http,
     ):
         answerer = make_answerer(
             settings,

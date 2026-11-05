@@ -52,6 +52,7 @@ import httpx2
 from qdrant_client import QdrantClient
 
 from assistant.config import Settings
+from assistant.generation import llm as assistant_llm
 from assistant.generation.answer import Answerer, assemble
 from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import (
@@ -59,7 +60,6 @@ from assistant.generation.gigachat import (
     Completion,
     LlmStats,
     Usage,
-    llm_model,
     make_http_client,
     make_llm,
 )
@@ -390,9 +390,12 @@ def _retrieval_stage(
     cases, sampled = _choose(selected, sample, seed)
     if not cases:
         return _no_cases(DATASET_DIR, categories)
-    with httpx2.Client(timeout=30) as http, make_http_client() as llm_http:
+    with (
+        httpx2.Client(timeout=30) as http,
+        assistant_llm.make_http_client(settings) as llm_http,
+    ):
         embedder = make_embedder(settings, http)
-        llm = make_llm(settings, llm_http) if filters else None
+        llm = assistant_llm.make_chat_model(settings, llm_http) if filters else None
         store = VectorStore(
             QdrantClient(url=settings.qdrant_url, timeout=30), quantization=quantization
         )
@@ -411,13 +414,15 @@ def _retrieval_stage(
         else:
             index_vocabulary = store.vocabulary()
             planner = SearchPlanner(
-                llm, model=llm_model(settings), vocabulary=index_vocabulary
+                llm,
+                model=assistant_llm.llm_model(settings),
+                vocabulary=index_vocabulary,
             )
             search = filtered_search(planner, retriever)
         results = mark_available(run_cases(cases, search, runs=runs), recipes)
         if llm is not None:
             parsing = Parsing(
-                model=llm_model(settings),
+                model=assistant_llm.llm_model(settings),
                 served=tuple(sorted(planner.served)),
                 prompt_version=SEARCH_PROMPT,
                 vocabulary=len(index_vocabulary),
@@ -523,10 +528,13 @@ def _answer_stage(
     journal_file = resume or journal_path(
         REPORTS_DIR / "raw", report_path(REPORTS_DIR, date.today(), label)
     )
-    model = llm_model(settings)
-    with httpx2.Client(timeout=30) as embeddings_http, make_http_client() as llm_http:
+    model = assistant_llm.llm_model(settings)
+    with (
+        httpx2.Client(timeout=30) as embeddings_http,
+        assistant_llm.make_http_client(settings) as llm_http,
+    ):
         embedder = make_embedder(settings, embeddings_http)
-        llm = make_llm(settings, llm_http)
+        llm = assistant_llm.make_chat_model(settings, llm_http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
         journal = _open_journal(journal_file, resume is not None, revision, cases, runs)
@@ -548,7 +556,13 @@ def _answer_stage(
 
         try:
             results = run_answers(cases, answerer, runs=runs, done=done, on_case=save)
-            judging = _judge(settings, llm_http, results) if judge else None
+            # Судья — всегда GigaChat со своим клиентом (корень Минцифры),
+            # даже когда ассистент на Claude.
+            if judge:
+                with make_http_client() as judge_http:
+                    judging = _judge(settings, judge_http, results)
+            else:
+                judging = None
         except BaseException:
             # Готовые кейсы уже в журнале: подсказываем, как продолжить, и падаем как раньше.
             args = shlex.join(

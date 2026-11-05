@@ -39,9 +39,8 @@ from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
     Completion,
-    llm_model,
-    make_llm,
 )
+from assistant.generation.llm import llm_model, make_chat_model
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
@@ -364,10 +363,11 @@ def make_answerer(
     llm_http: httpx2.Client,
     qdrant: QdrantClient,
 ) -> Answerer:
-    """Собирает ассистента из настроек. У GigaChat свой HTTP-клиент: свой TLS-корень."""
+    """Собирает ассистента из настроек. HTTP-клиент LLM — `llm.make_http_client`:
+    у GigaChat свой TLS-корень."""
     # Сначала то, что падает без ключей: ошибка понятна ещё до сетевых вызовов.
     embedder = make_embedder(settings, embeddings_http)
-    llm = make_llm(settings, llm_http)
+    llm = make_chat_model(settings, llm_http)
     retriever = Retriever(VectorStore(qdrant), embedder, ref=settings.dataset_revision)
     return Answerer(
         retriever, llm, model=llm_model(settings), ref=settings.dataset_revision
