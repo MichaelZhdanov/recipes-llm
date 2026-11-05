@@ -7,8 +7,8 @@
 
 Режимы (`--stage`):
 - `answer` (по умолчанию) — ассистент целиком: поиск, GigaChat, проверка
-  ссылок. Кейсы howto, config и out_of_scope;
-- `retrieval` — только поиск, как на этапе 1: ключ GigaChat не нужен.
+  ссылок (промпт под рецепты — этап 3);
+- `retrieval` — только поиск: метрики считает код, ключ GigaChat не нужен.
 
 После генерации модель-судья (`evals/judge.py`) оценивает groundedness
 и проверяется на канарейках; `--no-judge` её выключает. `--rescore RAW`
@@ -39,7 +39,6 @@ import json
 import random
 import re
 import shlex
-import statistics
 import sys
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -62,7 +61,14 @@ from assistant.generation.gigachat import (
     make_http_client,
     make_llm,
 )
+from assistant.indexing.build import pick_sample
 from assistant.indexing.chunks import Chunk
+from assistant.indexing.dataset import (
+    Recipe,
+    ensure_dataset,
+    known_sha256,
+    read_dataset,
+)
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, IndexManifest, VectorStore
@@ -81,7 +87,6 @@ from evals.dataset import (
 from evals.judge import Judge, Judging, run_judge
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.report import (
-    THRESHOLDS,
     RunMeta,
     answer_gates,
     git_revision,
@@ -91,17 +96,21 @@ from evals.report import (
 )
 from evals.retrieval_metrics import (
     CaseResult,
-    K,
-    has_expectation,
-    recall_per_run,
+    mark_available,
+    primary,
     run_cases,
+    run_score,
+    unknown_ingredients,
 )
 
 RUNS = 3
 SAMPLE_SEED = 20261104
 # Категории каждого режима.
-RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
-ANSWER_CATEGORIES = frozenset({"howto", "config", "out_of_scope"})
+# У by_name, include и exclude поиск проверяет код, у semantic — судья.
+RETRIEVAL_CATEGORIES = frozenset({"by_name", "include", "exclude", "semantic"})
+ANSWER_CATEGORIES = frozenset(
+    {"include", "exclude", "by_name", "semantic", "how_to_cook", "out_of_scope"}
+)
 REPORTS_DIR = Path(__file__).parent / "reports"
 
 
@@ -111,13 +120,35 @@ def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
         {
             "id": r.case.id,
             "run": number,
-            "rank": run.rank,
-            "top": run.top,
+            "score": run_score(r.case, run),
+            "available": r.available,
+            "top": [dataclasses.asdict(found) for found in run.top],
             "latency": run.latency,
         }
         for r in results
         for number, run in enumerate(r.runs)
     ]
+
+
+def indexed_recipes(
+    settings: Settings, manifest: IndexManifest, http: httpx2.Client
+) -> tuple[list[Recipe], set[str]]:
+    """Рецепты, которые сейчас в индексе, и словарь имён ингредиентов датасета.
+
+    Выборку восстанавливаем по паспорту (размер и сид): так метрика знает,
+    есть ли в индексе вообще подходящий рецепт.
+    """
+    path = ensure_dataset(
+        manifest.ref,
+        settings.data_path,
+        http,
+        sha256=known_sha256(manifest.ref),
+    )
+    recipes = read_dataset(path).recipes
+    vocabulary = {i.name for r in recipes for i in r.ingredients}
+    if manifest.sample is not None and manifest.seed is not None:
+        recipes = pick_sample(recipes, manifest.sample, manifest.seed)
+    return recipes, vocabulary
 
 
 def answer_records(
@@ -334,7 +365,15 @@ def _retrieval_stage(
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
-        results = run_cases(cases, retriever, runs=runs)
+        recipes, vocabulary = indexed_recipes(settings, retriever.manifest, http)
+        if unknown := unknown_ingredients(cases, vocabulary):
+            print(
+                "в кейсах есть ингредиенты не из словаря датасета:",
+                *unknown,
+                sep="\n  ",
+            )
+            return 2
+        results = mark_available(run_cases(cases, retriever, runs=runs), recipes)
 
     today = date.today()
     report = render_report(
@@ -349,14 +388,13 @@ def _retrieval_stage(
     )
     path = report_path(REPORTS_DIR, today, label)
     _write(path, report, raw_records(results))
-    # Как в отчёте: только кейсы, где есть что искать (у out_of_scope нечего).
-    recall = statistics.mean(
-        recall_per_run([r for r in results if has_expectation(r.case)])
-    )
+    value = primary(results)
     print(
-        f"recall@{K} = {recall:.2f} (порог {THRESHOLDS['recall@5']:.2f}), отчёт: {path}"
+        "основная метрика (среднее name_hit@5 и include_precision@5) = "
+        f"{'—' if value is None else f'{value:.2f}'}, отчёт: {path}"
     )
-    return 0 if recall >= THRESHOLDS["recall@5"] else 1
+    # Порогов у метрик поиска пока нет: их выставит этап 2 (CLAUDE.md, «Верификация»).
+    return 0
 
 
 def _judge(
@@ -560,7 +598,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--categories",
         type=_categories,
-        help="только эти категории через запятую, например howto,config",
+        help="только эти категории через запятую, например by_name,include",
     )
     parser.add_argument(
         "--split",

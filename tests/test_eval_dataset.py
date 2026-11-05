@@ -14,13 +14,16 @@ from evals.dataset import (
 )
 
 GOOD = """\
-- id: howto-001
-  category: howto
-  role: user
-  question: "как загрузить документ"
+- id: include-001
+  category: include
+  question: "что приготовить из курицы и риса"
+  style: plain
+  turns: []
   expected_behavior: answer
-  expected_sources:
-    - docs/usage.md#web-ui-upload
+  expected_include: [[курица, филе куриное], [рис]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
   must_include: []
   must_not_include: []
   notes: ""
@@ -34,19 +37,19 @@ def write(tmp_path: Path, name: str, text: str) -> Path:
 
 def test_loads_cases_from_all_yaml_files(tmp_path: Path) -> None:
     write(tmp_path, "a.yaml", GOOD)
-    write(tmp_path, "b.yaml", GOOD.replace("howto-001", "howto-002"))
+    write(tmp_path, "b.yaml", GOOD.replace("include-001", "include-002"))
 
     cases = load_cases(tmp_path)
 
-    assert [case.id for case in cases] == ["howto-001", "howto-002"]
-    assert cases[0].expected_sources == ["docs/usage.md#web-ui-upload"]
+    assert [case.id for case in cases] == ["include-001", "include-002"]
+    assert cases[0].question == "что приготовить из курицы и риса"
 
 
 def test_repeated_ids_are_an_error(tmp_path: Path) -> None:
     write(tmp_path, "a.yaml", GOOD)
     write(tmp_path, "b.yaml", GOOD)
 
-    with pytest.raises(ValueError, match="howto-001"):
+    with pytest.raises(ValueError, match="include-001"):
         load_cases(tmp_path)
 
 
@@ -54,79 +57,123 @@ def test_subdirectories_are_not_loaded(tmp_path: Path) -> None:
     """Отложенная выборка лежит в holdout/ и не должна попадать в обычный прогон."""
     write(tmp_path, "a.yaml", GOOD)
     (tmp_path / "holdout").mkdir()
-    write(tmp_path / "holdout", "h.yaml", GOOD.replace("howto-001", "holdout-001"))
+    write(tmp_path / "holdout", "h.yaml", GOOD.replace("include-001", "holdout-001"))
 
-    assert [case.id for case in load_cases(tmp_path)] == ["howto-001"]
+    assert [case.id for case in load_cases(tmp_path)] == ["include-001"]
     assert [case.id for case in load_cases(tmp_path / "holdout")] == ["holdout-001"]
 
 
 def test_typo_in_field_name_is_an_error(tmp_path: Path) -> None:
-    write(tmp_path, "a.yaml", GOOD.replace("expected_sources:", "expected_source:"))
+    write(tmp_path, "a.yaml", GOOD.replace("expected_include:", "expected_includes:"))
 
     with pytest.raises(ValidationError):
         load_cases(tmp_path)
 
 
-def test_retrieval_case_without_sources_is_an_error() -> None:
-    with pytest.raises(ValidationError, match="expected_sources"):
+def test_groups_of_alternatives_are_read(tmp_path: Path) -> None:
+    [loaded] = load_cases(write(tmp_path, "a.yaml", GOOD))
+
+    assert loaded.expected_include == [["курица", "филе куриное"], ["рис"]]
+
+
+@pytest.mark.parametrize(
+    ("category", "field"),
+    [
+        ("include", "expected_include"),
+        ("exclude", "expected_exclude"),
+        ("by_name", "expected_name"),
+        ("follow_up", "turns"),
+    ],
+)
+def test_category_needs_its_condition(category: str, field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
         Case(
-            id="config-001",
-            category="config",
-            role="user",
+            id=f"{category}-001",
+            category=category,
             question="?",
             expected_behavior="answer",
         )
 
 
-def test_out_of_scope_case_may_have_no_sources() -> None:
-    case = Case(
-        id="out_of_scope-001",
-        category="out_of_scope",
-        role="user",
-        question="?",
-        expected_behavior="abstain",
-    )
-
-    assert case.expected_sources == []
-
-
-@pytest.mark.parametrize(
-    ("behavior", "sources"),
-    [("answer", []), ("abstain", ["docs/usage.md#x"])],
-)
-def test_out_of_scope_case_must_abstain_without_sources(
-    behavior: str, sources: list[str]
-) -> None:
-    with pytest.raises(ValidationError, match="abstain"):
+def test_empty_group_is_an_error() -> None:
+    with pytest.raises(ValidationError, match="пустая группа"):
         Case(
-            id="out_of_scope-001",
-            category="out_of_scope",
-            role="user",
+            id="include-001",
+            category="include",
             question="?",
-            expected_behavior=behavior,
-            expected_sources=sources,
+            expected_behavior="answer",
+            expected_include=[["курица"], []],
         )
 
 
 @pytest.mark.parametrize(
-    "behavior", ["answer", "abstain", "escalate", "tool:get_tasks"]
+    ("category", "behavior"), [("out_of_scope", "answer"), ("chit_chat", "answer")]
 )
-def test_expected_behavior_values(behavior: str) -> None:
+def test_fixed_behavior_categories(category: str, behavior: str) -> None:
+    with pytest.raises(ValidationError, match="expected_behavior"):
+        Case(
+            id=f"{category}-001",
+            category=category,
+            question="?",
+            expected_behavior=behavior,
+        )
+
+
+def test_escalation_reason_goes_with_escalate_only() -> None:
     Case(
-        id="tool-001",
-        category="tool",
-        role="engineer",
-        question="?",
-        expected_behavior=behavior,
+        id="escalation-001",
+        category="escalation",
+        question="позовите человека",
+        expected_behavior="escalate",
+        escalation_reason="request",
     )
+    Case(
+        id="escalation-002",
+        category="escalation",
+        question="спасибо, всё понятно",
+        expected_behavior="answer",
+    )
+    with pytest.raises(ValidationError, match="escalation_reason"):
+        Case(
+            id="escalation-003",
+            category="escalation",
+            question="?",
+            expected_behavior="escalate",
+        )
+    with pytest.raises(ValidationError, match="escalation_reason"):
+        Case(
+            id="escalation-004",
+            category="escalation",
+            question="?",
+            expected_behavior="answer",
+            escalation_reason="health",
+        )
+
+
+def test_follow_up_keeps_dialog_turns() -> None:
+    case = Case.model_validate(
+        {
+            "id": "follow_up-001",
+            "category": "follow_up",
+            "question": "а без лука?",
+            "turns": [
+                {"role": "user", "text": "что приготовить из курицы?"},
+                {"role": "assistant", "text": "Курица с луком в духовке"},
+            ],
+            "expected_behavior": "answer",
+            "expected_include": [["курица"]],
+            "expected_exclude": ["лук репчатый"],
+        }
+    )
+
+    assert [turn.role for turn in case.turns] == ["user", "assistant"]
 
 
 def test_unknown_expected_behavior_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Case(
-            id="tool-001",
-            category="tool",
-            role="user",
+            id="semantic-001",
+            category="semantic",
             question="?",
             expected_behavior="maybe",
         )

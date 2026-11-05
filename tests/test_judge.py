@@ -116,12 +116,12 @@ def test_canary_scores_count_missing_verdict_as_miss() -> None:
 
 def test_rescore_rebuilds_answers_from_raw_data() -> None:
     """Пересчёт собирает ответ тем же кодом, что и живой путь: результат совпадает."""
-    original = AnswerCase(case("howto-001", ["recipe/10"]), [RUN])
+    original = AnswerCase(case("by_name-001"), [RUN])
     raw: list[dict[str, Any]] = json.loads(
         json.dumps(answer_records([original]), ensure_ascii=False)
     )
 
-    [rebuilt] = load_answer_cases(raw, {"howto-001": original.case})
+    [rebuilt] = load_answer_cases(raw, {"by_name-001": original.case})
 
     assert rebuilt.runs[0].answer == RUN.answer
     assert rebuilt.runs[0].checked == RUN.checked
@@ -176,14 +176,13 @@ def test_refusal_means_facts_absent_without_calling_judge() -> None:
             ref="v3.4.2",
         )
     )
-    howto = case("howto-001", ["recipe/10"]).model_copy(
-        update={"must_include": ["почтовый аккаунт"]}
-    )
+    # Факты «своими словами» судья проверяет у semantic.
+    semantic = case("semantic-001", "semantic", must_include=["почтовый аккаунт"])
 
-    verdicts = judge_results([AnswerCase(howto, [RUN, refused])], Judge(llm))
+    verdicts = judge_results([AnswerCase(semantic, [RUN, refused])], Judge(llm))
 
-    assert verdicts[("howto-001", 0)].present == [True]
-    assert verdicts[("howto-001", 1)] == Verdict([], [False], [], [])
+    assert verdicts[("semantic-001", 0)].present == [True]
+    assert verdicts[("semantic-001", 1)] == Verdict([], [False], [], [])
     assert len(llm.calls) == 2  # смысл и грамотность только для ответа по существу
     assert groundedness(verdicts) == Rate(2, 2)
     assert clarity(verdicts) == Rate(2, 2)

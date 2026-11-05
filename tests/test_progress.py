@@ -21,8 +21,8 @@ from evals.run import (
 
 # Вопрос — id кейса: так заглушка знает, на каком кейсе «упасть».
 CASES = [
-    case(case_id, ["recipe/10"], question=case_id)
-    for case_id in ("howto-001", "howto-002", "howto-003")
+    case(case_id, question=case_id)
+    for case_id in ("by_name-001", "by_name-002", "by_name-003")
 ]
 
 
@@ -71,21 +71,25 @@ def test_interrupted_run_resumes_without_repeating_cases(tmp_path: Path) -> None
     progress.start(path, "abc1234", [c.id for c in CASES], runs=2)
 
     with pytest.raises(LlmError):
-        run(FlakyAnswerer(fail_on="howto-002"), path)
+        run(FlakyAnswerer(fail_on="by_name-002"), path)
 
     journal = progress.load(path)
     assert journal.revision == "abc1234"
-    assert list(journal.done) == ["howto-001"]
-    assert len(journal.done["howto-001"]) == 2
+    assert list(journal.done) == ["by_name-001"]
+    assert len(journal.done["by_name-001"]) == 2
 
     again = FlakyAnswerer()
     results = run(again, path, done=_resumed_cases(journal, CASES))
 
     # Готовый кейс не спрашивается снова, в итоге каждый кейс ровно один раз.
-    assert again.asked == ["howto-002"] * 2 + ["howto-003"] * 2
-    assert [r.case.id for r in results] == ["howto-001", "howto-002", "howto-003"]
+    assert again.asked == ["by_name-002"] * 2 + ["by_name-003"] * 2
+    assert [r.case.id for r in results] == ["by_name-001", "by_name-002", "by_name-003"]
     assert all(len(r.runs) == 2 for r in results)
-    assert list(progress.load(path).done) == ["howto-001", "howto-002", "howto-003"]
+    assert list(progress.load(path).done) == [
+        "by_name-001",
+        "by_name-002",
+        "by_name-003",
+    ]
 
 
 def test_stats_are_the_last_cumulative_snapshot(tmp_path: Path) -> None:

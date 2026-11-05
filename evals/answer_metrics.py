@@ -11,7 +11,7 @@
 - abstention — доля честных отказов на out_of_scope: модель сама не нашла
   ответ или код отбросил все утверждения. Поломки (format_error, blacklist,
   length) честным отказом не считаются;
-- false refusal — доля отказов на howto и config (любая причина).
+- false refusal — доля отказов на вопросах из области (любая причина).
 
 Остальное показывается без порога: покрытие утверждений, негативный
 контроль, цитирование ожидаемого источника, must_include для config,
@@ -36,7 +36,8 @@ from assistant.generation.citations import (
 from assistant.generation.gigachat import Usage
 from evals.dataset import Case
 
-IN_SCOPE = frozenset({"howto", "config"})
+# Вопросы из области: на них ассистент должен отвечать, а не отказывать.
+IN_SCOPE = frozenset({"include", "exclude", "by_name", "semantic", "follow_up"})
 HONEST_REFUSALS = frozenset({"model_not_found", "filtered_out"})
 # Цена платных тарифов GigaChat, ₽ за 1M токенов (ноябрь 2026). На Freemium
 # бесплатно, цена нужна, чтобы оценить ответ в продакшене.
@@ -210,37 +211,14 @@ def false_refusal(results: Sequence[AnswerCase]) -> Rate:
     return Rate(sum(r.answer.status == "not_found" for r in runs), len(runs))
 
 
-def expected_source_cited(
-    results: Sequence[AnswerCase], *, only_retrieved: bool = False
-) -> Rate:
-    """Доля прогонов howto/config, где ответ ссылается на ожидаемый источник.
-
-    only_retrieved — только прогоны, где ожидаемый источник был в топе
-    поиска: так видно, что теряет генерация, а что — поиск.
-    """
-    k = n = 0
-    for r in results:
-        if r.case.category not in IN_SCOPE:
-            continue
-        expected = set(r.case.expected_sources)
-        for run in r.runs:
-            if only_retrieved and not expected & {s for s, _ in run.top}:
-                continue
-            n += 1
-            k += bool(expected & run.cited_source_ids())
-    return Rate(k, n)
-
-
-def must_include_found(results: Sequence[AnswerCase], category: str = "config") -> Rate:
+def must_include_found(results: Sequence[AnswerCase]) -> Rate:
     """Факты из must_include в тексте ответа, подстрокой с учётом регистра.
 
-    Для config это точные имена параметров, их можно проверить кодом.
-    У howto факты сформулированы по-русски, их проверяет судья.
+    Это точные слова (название, ингредиент), их можно проверить кодом.
+    Факты «своими словами» у semantic проверяет судья.
     """
     k = n = 0
     for r in results:
-        if r.case.category != category:
-            continue
         for run in r.runs:
             for fact in r.case.must_include:
                 n += 1

@@ -295,7 +295,7 @@ def facts_to_judge(result: AnswerCase) -> list[str]:
 
     У config это точные имена параметров, их проверяет код подстрокой.
     """
-    return result.case.must_include if result.case.category == "howto" else []
+    return result.case.must_include if result.case.category == "semantic" else []
 
 
 Verdicts = dict[tuple[str, int], Verdict]

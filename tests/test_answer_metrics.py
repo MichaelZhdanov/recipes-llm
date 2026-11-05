@@ -1,10 +1,10 @@
 import dataclasses
 from datetime import date
-from typing import Literal
 
 import pytest
 from chunk_helpers import text_chunk
 from eval_helpers import MANIFEST
+from eval_helpers import case as make_case
 
 from assistant.generation.answer import Answer, AnswerStatement, Reason
 from assistant.generation.citations import CheckedCitation, CheckedStatement, SourceText
@@ -19,7 +19,6 @@ from evals.answer_metrics import (
     citation_accuracy,
     cost_rub,
     cyrillic_share,
-    expected_source_cited,
     false_refusal,
     must_include_found,
     must_not_include_violations,
@@ -29,8 +28,6 @@ from evals.answer_metrics import (
 )
 from evals.dataset import Case
 from evals.report import RunMeta, answer_gates, render_answer_report
-
-Category = Literal["howto", "config", "out_of_scope"]
 
 
 def meta(llm_stats: LlmStats) -> RunMeta:
@@ -129,20 +126,13 @@ def run(
 
 def case(
     case_id: str,
-    category: Category = "howto",
-    sources: list[str] | None = None,
+    category: str = "by_name",
     must_include: list[str] | None = None,
     must_not_include: list[str] | None = None,
 ) -> Case:
-    return Case(
-        id=case_id,
-        category=category,
-        role="user",
-        question="?",
-        expected_behavior="abstain" if category == "out_of_scope" else "answer",
-        expected_sources=[]
-        if category == "out_of_scope"
-        else (sources or ["recipe/1"]),
+    return make_case(
+        case_id,
+        category,
         must_include=must_include or [],
         must_not_include=must_not_include or [],
     )
@@ -161,7 +151,7 @@ def test_rate_with_wilson_interval() -> None:
 def test_citation_accuracy_counts_all_citations_before_filter() -> None:
     results = [
         AnswerCase(
-            case("howto-001"),
+            case("by_name-001"),
             [run(checked=[statement("a", True, False), statement("b", False)])],
         )
     ]
@@ -171,7 +161,7 @@ def test_citation_accuracy_counts_all_citations_before_filter() -> None:
 
 
 def test_negative_control_moves_quote_to_another_source() -> None:
-    results = [AnswerCase(case("howto-001"), [run()])]
+    results = [AnswerCase(case("by_name-001"), [run()])]
 
     # Цитата из источника 1, приписанная источнику 2, не подтверждается.
     assert negative_control(results) == Rate(0, 1)
@@ -195,8 +185,8 @@ def test_abstention_counts_only_honest_refusals() -> None:
 
 def test_false_refusal_counts_any_not_found_in_scope() -> None:
     results = [
-        AnswerCase(case("howto-001"), [run(None), run("model_not_found")]),
-        AnswerCase(case("config-001", "config"), [run(None), run("length")]),
+        AnswerCase(case("by_name-001"), [run(None), run("model_not_found")]),
+        AnswerCase(case("include-001", "include"), [run(None), run("length")]),
         AnswerCase(
             case("out_of_scope-001", "out_of_scope"),
             [run("model_not_found"), run("model_not_found")],
@@ -207,32 +197,15 @@ def test_false_refusal_counts_any_not_found_in_scope() -> None:
     assert per_run(results, false_refusal) == [0.0, 1.0]
 
 
-def test_expected_source_cited_overall_and_when_retrieved() -> None:
-    results = [
-        AnswerCase(
-            case("howto-001", sources=["recipe/1"]),
-            [run(None), run("model_not_found"), run(None, top="recipe/99")],
-        )
-    ]
-
-    assert expected_source_cited(results) == Rate(2, 3)
-    # В третьем прогоне источника не было в топе: генерация тут ни при чём.
-    assert expected_source_cited(results, only_retrieved=True) == Rate(1, 2)
-
-
 def test_must_include_is_exact_and_must_not_include_ignores_case() -> None:
     results = [
         AnswerCase(
-            case(
-                "config-001", "config", must_include=["PAPERLESS_OCR_LANGUAGE", "rus"]
-            ),
-            [run(text="Задайте `PAPERLESS_OCR_LANGUAGE`.")],
+            case("include-001", "include", must_include=["Курица", "Рис"]),
+            [run(text="Подойдёт «Курица с рисом в духовке».")],
         ),
         AnswerCase(
-            case(
-                "out_of_scope-001", "out_of_scope", must_not_include=["PAPERLESS_S3_"]
-            ),
-            [run(text="Задайте paperless_s3_bucket."), run("model_not_found")],
+            case("out_of_scope-001", "out_of_scope", must_not_include=["кенгуру"]),
+            [run(text="Возьмите КЕНГУРУ."), run("model_not_found")],
         ),
     ]
 
@@ -253,7 +226,7 @@ def test_cost_uses_model_without_version() -> None:
 
 def test_answer_report_and_gates() -> None:
     results = [
-        AnswerCase(case("howto-001"), [run(None), run(None)]),
+        AnswerCase(case("by_name-001"), [run(None), run(None)]),
         AnswerCase(
             case("out_of_scope-001", "out_of_scope"),
             [run("model_not_found"), run(None)],
@@ -272,7 +245,6 @@ def test_answer_report_and_gates() -> None:
     assert "## Ответы вне области (1)" in report
     assert "| out_of_scope-001 | out_of_scope | model_not_found, ответ |" in report
     assert answer_gates(results) == {
-        "recall@5": True,
         "citation_accuracy": True,
         "abstention": False,
         "false_refusal": True,
@@ -281,14 +253,14 @@ def test_answer_report_and_gates() -> None:
 
 def test_report_shows_broken_answers_with_model_output() -> None:
     broken = run("format_error")
-    results = [AnswerCase(case("howto-001"), [broken])]
+    results = [AnswerCase(case("by_name-001"), [broken])]
 
     report = render_answer_report(
         results, meta=meta(LlmStats()), judging=None, today=date(2026, 11, 4)
     )
 
     assert "## Поломки: format_error, blacklist, length (1)" in report
-    assert "- howto-001: format_error, finish_reason=stop, 2 символов: «{}»" in report
+    assert "- by_name-001: format_error, finish_reason=stop, 2 символов: «{}»" in report
 
 
 def test_holdout_report_says_so() -> None:

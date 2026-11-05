@@ -3,7 +3,7 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from eval_helpers import MANIFEST, case, result
+from eval_helpers import MANIFEST, case, found, result
 
 from assistant.config import Settings
 from assistant.generation.answer import Answer
@@ -25,14 +25,25 @@ from evals.run import (
 
 
 def test_raw_data_has_one_record_per_case_and_run() -> None:
-    records = raw_records([result("howto-001", [1, None]), result("howto-002", [3])])
+    plov = found("Плов", ("рис",), recipe_id=7)
+    records = raw_records(
+        [
+            result(case("by_name-001", expected_name=["плов"]), [[plov], []]),
+            result(
+                case("by_name-002", expected_name=["борщ"]), [[plov]], available=False
+            ),
+        ]
+    )
 
-    assert [(r["id"], r["run"], r["rank"]) for r in records] == [
-        ("howto-001", 0, 1),
-        ("howto-001", 1, None),
-        ("howto-002", 0, 3),
+    assert [(r["id"], r["run"], r["score"], r["available"]) for r in records] == [
+        ("by_name-001", 0, 1.0, True),
+        ("by_name-001", 1, 0.0, True),
+        ("by_name-002", 0, 0.0, False),
     ]
-    assert records[0]["top"] == [("docs/b.md#y", 0.5)]
+    assert records[0]["top"] == [
+        {"recipe_id": 7, "name": "Плов", "ingredients": ("рис",), "score": 0.5}
+    ]
+    json.dumps(records)  # сырые данные пишутся в JSON
 
 
 def test_answer_records_are_json_with_model_output_and_checks() -> None:
@@ -64,13 +75,11 @@ def test_answer_records_are_json_with_model_output_and_checks() -> None:
         '{"status": "answer"}',
     )
 
-    records = answer_records(
-        [AnswerCase(case("howto-001", ["docs/a.md#x"]), [run, run])]
-    )
+    records = answer_records([AnswerCase(case("by_name-001"), [run, run])])
 
     assert [(r["id"], r["run"]) for r in records] == [
-        ("howto-001", 0),
-        ("howto-001", 1),
+        ("by_name-001", 0),
+        ("by_name-001", 1),
     ]
     data = json.loads(json.dumps(records, ensure_ascii=False))
     assert data[0]["checked"][0]["citations"][0]["error"] == "фрагмента нет в источнике"
@@ -110,24 +119,10 @@ def test_revision_is_taken_before_the_run(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def dev_cases() -> list[Case]:
-    howto = [case(f"howto-{n:03}", ["docs/a.md#x"]) for n in range(1, 13)]
-    config = [
-        case(f"config-{n:03}", ["docs/a.md#x"]).model_copy(
-            update={"category": "config"}
-        )
-        for n in range(1, 9)
-    ]
-    oos = [
-        Case(
-            id=f"out_of_scope-{n:03}",
-            category="out_of_scope",
-            role="user",
-            question="?",
-            expected_behavior="abstain",
-        )
-        for n in range(1, 13)
-    ]
-    return [*howto, *config, *oos]
+    by_name = [case(f"by_name-{n:03}") for n in range(1, 13)]
+    include = [case(f"include-{n:03}", "include") for n in range(1, 9)]
+    oos = [case(f"out_of_scope-{n:03}", "out_of_scope") for n in range(1, 13)]
+    return [*by_name, *include, *oos]
 
 
 def test_sample_takes_every_category_and_is_repeatable() -> None:
@@ -136,13 +131,13 @@ def test_sample_takes_every_category_and_is_repeatable() -> None:
     picked = pick_cases(cases, 6)
 
     assert Counter(c.category for c in picked) == {
-        "howto": 2,
-        "config": 2,
+        "by_name": 2,
+        "include": 2,
         "out_of_scope": 2,
     }
     assert [c.id for c in picked] == [c.id for c in pick_cases(cases, 6)]
     assert [c.id for c in picked] != [c.id for c in pick_cases(cases, 6, seed=1)]
-    # Порядок как в наборе: сначала howto, потом config, потом out_of_scope.
+    # Порядок как в наборе: сначала by_name, потом include, потом out_of_scope.
     assert [c.id for c in picked] == sorted(
         (c.id for c in picked), key=[c.id for c in cases].index
     )
@@ -155,7 +150,7 @@ def test_sample_larger_than_set_takes_all() -> None:
 
 
 def test_categories_flag_is_a_comma_list() -> None:
-    assert _categories("error, howto,") == frozenset({"error", "howto"})
+    assert _categories("include, by_name,") == frozenset({"include", "by_name"})
 
 
 def test_meta_with_masked_pii_survives_json() -> None:

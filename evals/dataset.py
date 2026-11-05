@@ -1,8 +1,8 @@
 """Эталонный набор: схема кейса и загрузка `evals/dataset/*.yaml`.
 
 Схема та же, что в CLAUDE.md (раздел «Верификация»). Лишние поля и опечатки
-в ключах — ошибка: молча проигнорированное `expected_source` без «s» дало бы
-кейс, который никогда не засчитывается.
+в ключах — ошибка: молча проигнорированное `expected_includes` с лишней «s»
+дало бы кейс, который никогда не засчитывается.
 
 Рядом с основным набором лежат ещё два, у каждого свой загрузчик:
 - `holdout/` — отложенная выборка. Обычный `load_cases` её не видит:
@@ -25,15 +25,37 @@ CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
 CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 
 Category = Literal[
-    "howto",
-    "config",
+    "include",
+    "exclude",
+    "by_name",
+    "semantic",
+    "how_to_cook",
     "out_of_scope",
-    "security",
-    "tool",
+    "chit_chat",
     "escalation",
+    "security",
+    "follow_up",
 ]
-# Категории, где кейс проверяет поиск раздела: у них обязан быть хотя бы один источник.
-RETRIEVAL_CATEGORIES = frozenset({"howto", "config"})
+Behavior = Literal["answer", "abstain", "escalate", "no_search"]
+# Поводы передать разговор человеку — правила эскалации из PLAN.md (F5).
+EscalationReason = Literal[
+    "request",
+    "not_found_twice",
+    "failure",
+    "cooking_failed",
+    "unclear_recipe",
+    "health",
+    "data_issue",
+]
+
+
+class Turn(BaseModel):
+    """Реплика из начала диалога (кейсы follow_up)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1)
 
 
 class Case(BaseModel):
@@ -41,32 +63,52 @@ class Case(BaseModel):
 
     id: str = Field(pattern=r"^[a-z_]+-\d{3}$")
     category: Category
-    role: Literal["user", "engineer"]
     question: str = Field(min_length=1)
-    expected_behavior: str = Field(pattern=r"^(answer|abstain|escalate|tool:[a-z_]+)$")
-    expected_sources: list[str] = []
+    # Как написан вопрос: обычно, разговорно или с опечатками.
+    style: Literal["plain", "colloquial", "typo"] = "plain"
+    # Реплики до вопроса: у follow_up вопрос понятен только из них.
+    turns: list[Turn] = []
+    expected_behavior: Behavior
+    # Группы альтернатив из словаря датасета: [[курица, филе куриное], [рис]].
+    # В подходящем рецепте есть хотя бы одно имя из каждой группы.
+    expected_include: list[list[str]] = []
+    # Этих ингредиентов в подходящем рецепте нет.
+    expected_exclude: list[str] = []
+    # by_name: хотя бы одно слово должно быть в названии рецепта.
+    expected_name: list[str] = []
+    escalation_reason: EscalationReason | None = None
     must_include: list[str] = []
     must_not_include: list[str] = []
     notes: str = ""
 
     @model_validator(mode="after")
-    def _retrieval_cases_have_sources(self) -> Self:
-        if self.category in RETRIEVAL_CATEGORIES and not self.expected_sources:
-            raise ValueError(
-                f"{self.id}: у кейса категории {self.category} нет expected_sources"
-            )
+    def _conditions_match_category(self) -> Self:
+        required = {
+            "include": ("expected_include", self.expected_include),
+            "exclude": ("expected_exclude", self.expected_exclude),
+            "by_name": ("expected_name", self.expected_name),
+            "follow_up": ("turns", self.turns),
+        }
+        if self.category in required:
+            field, value = required[self.category]
+            if not value:
+                raise ValueError(f"{self.id}: у кейса {self.category} пустое {field}")
+        if any(not group for group in self.expected_include):
+            raise ValueError(f"{self.id}: пустая группа в expected_include")
         return self
 
     @model_validator(mode="after")
-    def _out_of_scope_means_abstain(self) -> Self:
-        # Ответа нет ни в доке, ни в коде: правильное поведение одно — отказ,
-        # а источник, на который он «должен» сослаться, противоречил бы кейсу.
-        if self.category == "out_of_scope" and (
-            self.expected_behavior != "abstain" or self.expected_sources
-        ):
+    def _behavior_matches_category(self) -> Self:
+        fixed = {"out_of_scope": "abstain", "chit_chat": "no_search"}
+        if self.category in fixed and self.expected_behavior != fixed[self.category]:
             raise ValueError(
-                f"{self.id}: у out_of_scope expected_behavior — abstain, "
-                "а expected_sources пустой"
+                f"{self.id}: у {self.category} expected_behavior — {fixed[self.category]}"
+            )
+        escalates = self.expected_behavior == "escalate"
+        if escalates != (self.escalation_reason is not None):
+            raise ValueError(
+                f"{self.id}: escalation_reason задаётся тогда и только тогда, "
+                "когда expected_behavior — escalate"
             )
         return self
 

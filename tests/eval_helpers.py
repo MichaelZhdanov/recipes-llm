@@ -1,7 +1,7 @@
 """Общие заготовки для тестов evals: кейс, результат поиска, паспорт индекса, ответ."""
 
 import json
-from typing import Literal
+from typing import Any
 
 from chunk_helpers import text_chunk
 
@@ -11,7 +11,7 @@ from assistant.generation.gigachat import Completion, Usage
 from assistant.retrieval.store import Hit, IndexManifest
 from evals.answer_metrics import AnswerRun
 from evals.dataset import Case
-from evals.retrieval_metrics import CaseResult, RetrievalRun
+from evals.retrieval_metrics import CaseResult, Found, RetrievalRun
 
 MANIFEST = IndexManifest(
     dataset="rogozinushka/povarenok-recipes",
@@ -29,31 +29,43 @@ MANIFEST = IndexManifest(
 )
 
 
+# Условия по умолчанию: без них кейс категории не пройдёт схему.
+_DEFAULTS: dict[str, dict[str, Any]] = {
+    "by_name": {"expected_name": ["курица"]},
+    "include": {"expected_include": [["курица"], ["рис"]]},
+    "exclude": {"expected_exclude": ["лук репчатый"]},
+    "follow_up": {"turns": [{"role": "user", "text": "что приготовить из курицы?"}]},
+}
+_BEHAVIOR = {"out_of_scope": "abstain", "chit_chat": "no_search"}
+
+
 def case(
-    case_id: str,
-    sources: list[str],
-    question: str = "?",
-    role: Literal["user", "engineer"] = "user",
+    case_id: str, category: str = "by_name", question: str = "?", **fields: Any
 ) -> Case:
-    return Case(
-        id=case_id,
-        category="howto",
-        role=role,
-        question=question,
-        expected_behavior="answer",
-        expected_sources=sources,
+    return Case.model_validate(
+        {
+            "id": case_id,
+            "category": category,
+            "question": question,
+            "expected_behavior": _BEHAVIOR.get(category, "answer"),
+            **_DEFAULTS.get(category, {}),
+            **fields,
+        }
     )
 
 
+def found(name: str, ingredients: tuple[str, ...] = (), *, recipe_id: int = 1) -> Found:
+    return Found(recipe_id=recipe_id, name=name, ingredients=ingredients, score=0.5)
+
+
 def result(
-    case_id: str, ranks: list[int | None], role: Literal["user", "engineer"] = "user"
+    test_case: Case, tops: list[list[Found]], available: bool | None = True
 ) -> CaseResult:
+    """Результат поиска: по топу на каждый прогон."""
     return CaseResult(
-        case=case(case_id, ["docs/a.md#x"], role=role),
-        runs=[
-            RetrievalRun(top=[("docs/b.md#y", 0.5)], rank=rank, latency=0.1)
-            for rank in ranks
-        ],
+        case=test_case,
+        runs=[RetrievalRun(top=top, latency=0.1) for top in tops],
+        available=available,
     )
 
 

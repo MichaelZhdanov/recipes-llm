@@ -1,8 +1,8 @@
 """Отчёт eval в markdown: параметры прогона, метрики с порогами, разбор кейсов.
 
 Здесь только оформление: метрики считают `retrieval_metrics` и
-`answer_metrics`, а запись файлов и код выхода — `run`. Отчёт этапа 1
-(`render_report`, только поиск) остаётся для `--stage retrieval`.
+`answer_metrics`, а запись файлов и код выхода — `run`. Отчёт поиска
+(`render_report`) — для `--stage retrieval`.
 """
 
 import math
@@ -25,7 +25,6 @@ from evals.answer_metrics import (
     abstention,
     citation_accuracy,
     cost_rub,
-    expected_source_cited,
     false_refusal,
     filtered_out_share,
     language,
@@ -47,18 +46,17 @@ from evals.judge import (
     unjudged,
 )
 from evals.retrieval_metrics import (
+    CODE_CHECKED,
     CaseResult,
     K,
-    RetrievalRun,
-    has_expectation,
-    hit_rank,
-    mrr_per_run,
+    category_mean,
+    exclude_violations,
+    include_precision,
+    name_hit,
     percentile,
-    recall_per_run,
+    primary,
+    run_score,
 )
-
-# Пороги из CLAUDE.md («Метрики и пороги»). Менять только с записью в отчёте.
-THRESHOLDS = {"recall@5": 0.80}
 
 
 def _sample_row(sample: str | None) -> list[str]:
@@ -118,6 +116,18 @@ def _instruction_cell(template: str | None) -> str:
     return "`" + shown.replace("\n", "\\n") + "`"
 
 
+def _value(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}"
+
+
+def _found_lines(r: CaseResult) -> list[str]:
+    top = r.runs[-1].top if r.runs else []
+    return [
+        f"{n}. {f.name} ({f.score:.3f}) — {', '.join(f.ingredients)}"
+        for n, f in enumerate(top, start=1)
+    ]
+
+
 def render_report(
     results: Sequence[CaseResult],
     *,
@@ -129,15 +139,10 @@ def render_report(
     today: date,
     sample: str | None = None,
 ) -> str:
-    # recall и MRR — только по кейсам, где есть что искать (у out_of_scope нечего).
-    all_results = results
-    results = [r for r in results if has_expectation(r.case)]
-    recall = recall_per_run(results)
-    mrr = mrr_per_run(results)
     latencies = [lat for r in results for lat in r.latencies]
-    passed = statistics.mean(recall) >= THRESHOLDS["recall@5"]
     cost = estimate_cost(manifest.embedding_model, stats.tokens)
     categories = Counter(r.case.category for r in results)
+    unavailable = [r for r in results if r.available is False]
 
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
@@ -153,66 +158,94 @@ def render_report(
         f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
         f"| Индекс | {_index_cell(manifest)} |",
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
-        f"прогонов {len(results[0].ranks)} |",
+        f"прогонов {len(results[0].runs) if results else 0} |",
         "| Промпт | не используется |",
         *_sample_row(sample),
         "",
         "## Метрики",
         "",
-        "| Метрика | Значение | Порог | Статус |",
-        "|---|---|---|---|",
-        f"| recall@{K} | {_mean_std(recall)} | ≥ {THRESHOLDS['recall@5']:.2f} | "
-        f"{'✅' if passed else '❌'} |",
-        f"| MRR | {_mean_std(mrr)} | — | |",
+        "Считает код по топ-5 поиска. Кейсы без подходящего рецепта в индексе в метрику",
+        f"не идут (их {len(unavailable)}, список ниже). Порогов пока нет: их выставит этап 2.",
+        "",
+        "| Метрика | Значение |",
+        "|---|---|",
+        f"| name_hit@{K}: в топе есть рецепт с нужным словом в названии (by_name) | {_value(name_hit(results))} |",
+        f"| include_precision@{K}: доля топа, где есть все нужные ингредиенты (include) | {_value(include_precision(results))} |",
+        f"| exclude_violations@{K}: доля топа с исключённым ингредиентом (exclude, меньше — лучше) | {_value(exclude_violations(results))} |",
+        f"| **основная: среднее name_hit@{K} и include_precision@{K}** | **{_value(primary(results))}** |",
         f"| задержка поиска p50 / p95 | {percentile(latencies, 0.5):.2f} / "
-        f"{percentile(latencies, 0.95):.2f} с | показать | |",
-        f"| токены запросов к API эмбеддингов | {stats.tokens}"
-        f"{f' ({cost})' if cost else ''} | показать | |",
-        f"| срабатывания маскера ПДн | {sum(stats.masked.values())} | — | |",
+        f"{percentile(latencies, 0.95):.2f} с |",
+        f"| токены запросов к API эмбеддингов | {stats.tokens}{f' ({cost})' if cost else ''} |",
+        f"| срабатывания маскера ПДн | {sum(stats.masked.values())} |",
         "",
-        "## По категориям и ролям",
+        "## По категориям",
         "",
-        "| Группа | Кейсов | recall@5 |",
+        "| Категория | Кейсов | Метрика |",
         "|---|---|---|",
     ]
-    for label, key in (("категория", "category"), ("роль", "role")):
-        for value in sorted({getattr(r.case, key) for r in all_results}):
-            group = [r for r in all_results if getattr(r.case, key) == value]
-            scored = [r for r in group if has_expectation(r.case)]
-            recall_cell = (
-                f"{statistics.mean(recall_per_run(scored)):.2f}" if scored else "—"
-            )
-            lines.append(f"| {label} {value} | {len(group)} | {recall_cell} |")
+    for category in sorted(categories):
+        value = category_mean(results, category) if category in CODE_CHECKED else None
+        lines.append(f"| {category} | {categories[category]} | {_value(value)} |")
+
+    if unavailable:
+        lines += ["", "## Кейсы без подходящего рецепта в индексе", ""]
+        lines += [f"- {r.case.id} — «{r.case.question}»" for r in unavailable]
 
     lines += [
         "",
         "## По кейсам",
         "",
-        "| id | роль | ранг по прогонам | топ-1 |",
-        "|---|---|---|---|",
+        "| id | категория | стиль | метрика по прогонам | топ-1 |",
+        "|---|---|---|---|---|",
     ]
     for r in results:
-        ranks = ", ".join(str(rank) if rank else "—" for rank in r.ranks)
-        top1 = r.top[0][0] if r.top else "—"
-        lines.append(f"| {r.case.id} | {r.case.role} | {ranks} | `{top1}` |")
+        scores = ", ".join(_value(run_score(r.case, run)) for run in r.runs)
+        top1 = r.runs[-1].top[0].name if r.runs and r.runs[-1].top else "—"
+        lines.append(
+            f"| {r.case.id} | {r.case.category} | {r.case.style} | {scores} | {top1} |"
+        )
 
-    misses = [r for r in results if any(rank is None for rank in r.ranks)]
+    # Промах: в by_name нет нужного названия, в include ни один рецепт не подошёл,
+    # в exclude больше половины топа с исключённым ингредиентом.
+    def missed(r: CaseResult) -> bool:
+        if r.available is False or not r.runs:
+            return False
+        score = run_score(r.case, r.runs[-1])
+        if score is None:
+            return False
+        return score > 0.5 if r.case.category == "exclude" else score == 0.0
+
+    misses = [r for r in results if missed(r)]
     lines += ["", f"## Промахи ({len(misses)})", ""]
     if not misses:
         lines.append("Нет.")
     for r in misses:
+        expected = []
+        if r.case.expected_name:
+            expected.append(f"название: {', '.join(r.case.expected_name)}")
+        expected += [f"с: {' или '.join(group)}" for group in r.case.expected_include]
+        if r.case.expected_exclude:
+            expected.append(f"без: {', '.join(r.case.expected_exclude)}")
         lines += [
             f"### {r.case.id} — «{r.case.question}»",
             "",
-            "Ожидалось: " + ", ".join(f"`{s}`" for s in r.case.expected_sources),
+            "Ожидалось: " + "; ".join(expected),
             "",
             "Найдено:",
-            *[
-                f"{n}. `{source}` ({score:.3f})"
-                for n, (source, score) in enumerate(r.top, start=1)
-            ],
+            *_found_lines(r),
             "",
         ]
+
+    semantic = [r for r in results if r.case.category == "semantic"]
+    if semantic:
+        lines += ["", "## Вопросы по смыслу: что нашлось", ""]
+        for r in semantic:
+            lines += [
+                f"### {r.case.id} — «{r.case.question}»",
+                "",
+                *_found_lines(r),
+                "",
+            ]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -231,34 +264,11 @@ ANSWER_THRESHOLDS = {
 }
 
 
-def retrieval_results(results: Sequence[AnswerCase]) -> list[CaseResult]:
-    """Поиск из прогонов ассистента: тот же топ-5, что видела модель."""
-    return [
-        CaseResult(
-            case=r.case,
-            runs=[
-                RetrievalRun(
-                    top=run.top,
-                    rank=hit_rank(r.case, [s.chunk for s in run.sources]),
-                    latency=run.retrieval_seconds,
-                )
-                for run in r.runs
-            ],
-        )
-        for r in results
-        if has_expectation(r.case)
-    ]
-
-
 def answer_gates(
     results: Sequence[AnswerCase], judging: Judging | None = None
 ) -> dict[str, bool]:
     """Метрики с порогом и прошли ли они его: по ним считается код выхода."""
-    retrieval = retrieval_results(results)
     gates: dict[str, bool] = {}
-    if retrieval:
-        recall = statistics.mean(recall_per_run(retrieval))
-        gates["recall@5"] = recall >= THRESHOLDS["recall@5"]
     gates["citation_accuracy"] = (
         citation_accuracy(results).value >= ANSWER_THRESHOLDS["citation_accuracy"]
     )
@@ -341,7 +351,7 @@ def _prompts_cell(runs: Sequence[AnswerRun], default: str) -> str:
 
 # Группы для таблиц исходов и score: только те, где есть кейсы.
 _GROUPS = (
-    ("howto, config", IN_SCOPE),
+    ("вопросы из области", IN_SCOPE),
     ("out_of_scope", frozenset({"out_of_scope"})),
 )
 
@@ -354,8 +364,6 @@ def render_answer_report(
     today: date,
 ) -> str:
     manifest, llm_stats, llm_model = meta.manifest, meta.llm_stats, meta.llm_model
-    retrieval = retrieval_results(results)
-    recall = recall_per_run(retrieval) if retrieval else []
     gates = answer_gates(results, judging)
     runs = [run for r in results for run in r.runs]
     api_models = sorted({run.answer.model for run in runs if run.answer.model})
@@ -399,14 +407,6 @@ def render_answer_report(
         "",
         "| Метрика | Значение | Порог | Статус |",
         "|---|---|---|---|",
-        *(
-            [
-                f"| recall@{K} (все кейсы с ожидаемым источником) | {_mean_std(recall)} | "
-                f"≥ {THRESHOLDS['recall@5']:.2f} | {_status(gates['recall@5'])} |"
-            ]
-            if recall
-            else []
-        ),
         f"| citation accuracy | {accuracy} {_spread(per_run(results, citation_accuracy))} | "
         f"≥ {ANSWER_THRESHOLDS['citation_accuracy']:.2f} | {_status(gates['citation_accuracy'])} |",
         *(
@@ -419,7 +419,7 @@ def render_answer_report(
         ),
         *(
             [
-                f"| false refusal (howto, config) | {refusal} {_spread(per_run(results, false_refusal))} | "
+                f"| false refusal (вопросы из области) | {refusal} {_spread(per_run(results, false_refusal))} | "
                 f"≤ {ANSWER_THRESHOLDS['false_refusal']:.2f} | {_status(gates['false_refusal'])} |"
             ]
             if "false_refusal" in gates
@@ -427,11 +427,8 @@ def render_answer_report(
         ),
         f"| покрытие утверждений цитатами | {statement_coverage(results)} | показать | |",
         f"| негативный контроль (цитата у соседнего источника) | {negative_control(results)} | ≈ 0 | |",
-        f"| ответ ссылается на ожидаемый источник | {expected_source_cited(results)} | показать | |",
-        f"| … если он был в топ-{K} поиска | {expected_source_cited(results, only_retrieved=True)} "
-        "| показать | |",
         f"| out_of_scope: отказ дал фильтр, а не модель | {filtered_out_share(results)} | показать | |",
-        f"| must_include в config (подстрокой) | {must_include_found(results)} | показать | |",
+        f"| must_include (подстрокой) | {must_include_found(results)} | показать | |",
         f"| must_not_include нарушен | {must_not_include_violations(results)} | 0 | |",
         f"| доля кириллицы в ответе вне `кода` | {'—' if lang is None else f'{lang:.2f}'} "
         "| показать | |",
@@ -492,22 +489,14 @@ def render_answer_report(
         "",
         "## По кейсам",
         "",
-        "| id | категория | итог по прогонам | цитаты: подтверждено / всего | ожидаемый источник в ответе |",
-        "|---|---|---|---|---|",
+        "| id | категория | итог по прогонам | цитаты: подтверждено / всего |",
+        "|---|---|---|---|",
     ]
     for r in results:
         cited = [c for run in r.runs for s in run.checked for c in s.citations]
-        expected = set(r.case.expected_sources)
-        hits = (
-            "—"
-            if not expected
-            else ", ".join(
-                "да" if expected & run.cited_source_ids() else "нет" for run in r.runs
-            )
-        )
         lines.append(
             f"| {r.case.id} | {r.case.category} | {', '.join(_outcome_cell(run) for run in r.runs)} | "
-            f"{sum(c.valid for c in cited)} / {len(cited)} | {hits} |"
+            f"{sum(c.valid for c in cited)} / {len(cited)} |"
         )
 
     lines += _problem_sections(results)
@@ -597,7 +586,7 @@ def _judge_rows(judging: Judging | None) -> list[str]:
         f"| groundedness (судья) | {grounded} | ≥ {ANSWER_THRESHOLDS['groundedness']:.2f} "
         f"| {_status(passed)} |",
         f"| утверждения грамотны и понятны (судья) | {clarity(judging.verdicts)} | показать | |",
-        f"| must_include в howto (судья) | {must_include_judged(judging.verdicts)} | показать | |",
+        f"| must_include в semantic (судья) | {must_include_judged(judging.verdicts)} | показать | |",
         f"| канарейки: судья поймал неверные | {caught} | все | |",
         f"| канарейки: судья принял верные | {accepted} | все | |",
         *_clarity_canary_rows(judging),

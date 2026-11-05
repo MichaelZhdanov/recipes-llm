@@ -13,10 +13,10 @@ from evals.run import answer_records
 def test_kappa_counts_agreement_beyond_chance() -> None:
     result = Agreement(
         [
-            ("howto-001", 0, 1, True, True),
-            ("howto-001", 0, 2, True, False),
-            ("howto-002", 0, 1, False, False),
-            ("howto-002", 0, 2, False, False),
+            ("by_name-001", 0, 1, True, True),
+            ("by_name-001", 0, 2, True, False),
+            ("by_name-002", 0, 1, False, False),
+            ("by_name-002", 0, 2, False, False),
         ]
     )
 
@@ -26,11 +26,11 @@ def test_kappa_counts_agreement_beyond_chance() -> None:
 
 
 # Вопросы берутся из набора по id кейса; тест не зависит от того, что сейчас в наборе.
-QUESTIONS = {"howto-001": "как настроить почту"}
+QUESTIONS = {"by_name-001": "как настроить почту"}
 
 
 def raw_with_judge() -> dict[str, Any]:
-    howto = AnswerCase(case("howto-001", ["recipe/10"]), [RUN])
+    howto = AnswerCase(case("by_name-001"), [RUN])
     records = answer_records([howto])
     records[0]["judge"] = json.loads(
         json.dumps(Verdict([True, False], [], ["", ""], [True, True]).__dict__)
@@ -43,7 +43,7 @@ def test_sample_is_blind_and_compare_finds_disagreement() -> None:
 
     [item] = sample(raw, questions=QUESTIONS)
 
-    assert item["id"] == "howto-001"
+    assert item["id"] == "by_name-001"
     assert item["question"] == "как настроить почту"
     assert [s["supported"] for s in item["statements"]] == [None, None]
     assert "judge" not in json.dumps(item, ensure_ascii=False)
@@ -52,7 +52,7 @@ def test_sample_is_blind_and_compare_finds_disagreement() -> None:
         statement["supported"] = True
     result = compare([item], raw)
     assert result.agreement == 0.5
-    assert "howto-001, прогон 1, утверждение 2: автор True, судья False" in render(
+    assert "by_name-001, прогон 1, утверждение 2: автор True, судья False" in render(
         result, marks_file="m.yaml", raw_file="r.json"
     )
 
