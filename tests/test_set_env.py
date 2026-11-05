@@ -77,3 +77,10 @@ def test_api_keys_from_github_replace_the_ones_on_the_server() -> None:
         "# комментарий\nGIGACHAT_API_KEY='bmV3LWdpZ2E='\nLOG_LEVEL=INFO\n"
         "CLOUD_RU_API_KEY='new-cloud'\n"
     )
+
+
+def test_anthropic_key_is_accepted_on_deploy() -> None:
+    """LLM ассистента по умолчанию — Claude: ключ приходит из секретов GitHub."""
+    values = parse_values("ANTHROPIC_API_KEY=sk-ant-test\n")
+
+    assert set_values("A=1\n", values) == "A=1\nANTHROPIC_API_KEY='sk-ant-test'\n"
