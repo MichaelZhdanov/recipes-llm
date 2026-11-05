@@ -166,7 +166,7 @@ def needs_earlier_recipes(case: Case) -> bool:
 
 def only_run(results: Sequence[AnswerCase], run: int) -> list[AnswerCase]:
     """Те же кейсы, но только с одним прогоном: для разброса по прогонам."""
-    return [AnswerCase(r.case, [r.runs[run]]) for r in results]
+    return [AnswerCase(r.case, [r.runs[run]], r.available) for r in results]
 
 
 def per_run(

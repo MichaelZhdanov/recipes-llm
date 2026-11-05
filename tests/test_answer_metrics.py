@@ -335,3 +335,16 @@ def test_follow_up_about_a_recipe_not_in_the_index_is_not_counted() -> None:
 
     assert false_refusal(results) == Rate(0, 1)
     assert must_include_found(results) == Rate(0, 0)
+
+
+def test_spread_by_run_keeps_cases_that_cannot_be_checked_out() -> None:
+    """Разброс по прогонам считается по тем же кейсам, что и общая метрика."""
+    follow_up = case("follow_up-003", "follow_up", must_include=["50 г"])
+    results = [
+        AnswerCase(
+            follow_up, [run("model_not_found"), run("model_not_found")], available=False
+        ),
+        AnswerCase(case("include-001", "include"), [run(None), run(None)]),
+    ]
+
+    assert per_run(results, false_refusal) == [0.0, 0.0]
