@@ -18,7 +18,11 @@ Anthropic и обратно. Почему свой адаптер, а не SDK �
 - вызов функции в истории → блок `tool_use`, результат → `tool_result`;
 - `temperature` не отправляется: API-версия 2026-10-21 её не принимает
   (400). Правило eval «температура 0» здесь не выполнимо, это пишется в отчёт;
-- `effort` — сколько модель думает (`LLM_EFFORT`); пусто — по умолчанию модели.
+- `effort` — сколько модель думает (`LLM_EFFORT`); пусто — по умолчанию модели;
+- `response_format` (JSON по схеме, формат GigaChat) → `output_config.format`.
+  Документация разрешает его вместе с инструментами: модель вызывает
+  функции, а последний ответ пишет JSON по схеме. У Claude каждый объект
+  схемы обязан иметь `additionalProperties: false` — это забота схемы.
 
 У моделей 5.5 размышления включены, и `max_tokens` считает их вместе с
 ответом. Лимит, который просит вызывающий код, — на сам ответ, поэтому
@@ -92,6 +96,15 @@ def _tool_choice(mode: FunctionCallMode | None) -> dict[str, object] | None:
     if mode == "none":
         return {"type": "none"}
     return {"type": "auto", "disable_parallel_tool_use": True}
+
+
+def _output_format(response_format: Mapping[str, object]) -> dict[str, object]:
+    """`response_format` GigaChat → `output_config.format` Anthropic."""
+    if response_format.get("type") != "json_schema" or "schema" not in response_format:
+        raise LlmError(
+            f"Claude понимает только response_format json_schema: {response_format}"
+        )
+    return {"type": "json_schema", "schema": response_format["schema"]}
 
 
 def _messages(messages: Sequence[Message]) -> tuple[str, list[dict[str, object]]]:
@@ -193,11 +206,6 @@ class Claude:
         function_call: FunctionCallMode | None = None,
     ) -> Completion:
         # temperature не отправляется: API-версия 2026-10-21 отвечает на неё 400.
-        if response_format is not None:
-            raise LlmError(
-                "структурированный ответ (response_format) для Claude не поддержан: "
-                "ответ ассистента под Claude — этап 3"
-            )
         masked = [mask_message(m, self.stats.masked) for m in messages]
         system, converted = _messages(masked)
         body: dict[str, object] = {
@@ -213,8 +221,13 @@ class Claude:
             body["tools"] = [_tool(f) for f in functions]
         if (choice := _tool_choice(function_call)) is not None:
             body["tool_choice"] = choice
+        output_config: dict[str, object] = {}
         if self.effort:
-            body["output_config"] = {"effort": self.effort}
+            output_config["effort"] = self.effort
+        if response_format is not None:
+            output_config["format"] = _output_format(response_format)
+        if output_config:
+            body["output_config"] = output_config
 
         response = request_with_retries(
             lambda: self._client.post(self._url, json=body, headers=self._headers()),

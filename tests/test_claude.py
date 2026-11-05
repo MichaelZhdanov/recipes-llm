@@ -217,14 +217,51 @@ def test_personal_data_is_masked_in_the_request() -> None:
     assert model.stats.masked["EMAIL"] == 1
 
 
-def test_response_format_is_not_supported_yet() -> None:
-    with pytest.raises(LlmError, match="этап 3"):
+SCHEMA = {
+    "type": "object",
+    "properties": {"status": {"type": "string"}},
+    "required": ["status"],
+    "additionalProperties": False,
+}
+
+
+def test_response_format_becomes_output_config_format() -> None:
+    """JSON по схеме: формат GigaChat → output_config.format, рядом с effort."""
+    fake = FakeAnthropic(
+        reply={
+            "model": "claude-haiku-5-5",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"status": "answer"}'}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    completion = make(fake).chat(
+        [USER],
+        model="claude-haiku-5-5",
+        temperature=1e-4,
+        max_tokens=100,
+        response_format={"type": "json_schema", "schema": SCHEMA, "strict": True},
+        functions=[SEARCH],
+        function_call="auto",
+    )
+
+    assert fake.body()["output_config"] == {
+        "effort": "medium",
+        "format": {"type": "json_schema", "schema": SCHEMA},
+    }
+    assert "tools" in fake.body()
+    assert completion.content == '{"status": "answer"}'
+
+
+def test_only_json_schema_response_format_is_understood() -> None:
+    with pytest.raises(LlmError, match="json_schema"):
         make(FakeAnthropic()).chat(
             [USER],
             model="claude-haiku-5-5",
             temperature=1e-4,
             max_tokens=100,
-            response_format={"type": "json_schema", "schema": {}},
+            response_format={"type": "json_object"},
         )
 
 
