@@ -51,7 +51,7 @@ def test_search_without_embeddings_key_explains_what_to_do(
     assert "уровня «Проект»" in error
 
 
-def test_ask_without_gigachat_key_explains_what_to_do(
+def test_ask_without_llm_key_explains_what_to_do(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CLOUD_RU_API_KEY", "test-key")
@@ -59,17 +59,25 @@ def test_ask_without_gigachat_key_explains_what_to_do(
     code = main(["ask", "как включить OCR"])
 
     assert code == 1
-    assert "GIGACHAT_API_KEY" in capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
 
 
-def test_search_without_gigachat_key_explains_what_to_do(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("provider", "key"),
+    [("anthropic", "ANTHROPIC_API_KEY"), ("gigachat", "GIGACHAT_API_KEY")],
+)
+def test_search_without_llm_key_explains_what_to_do(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    key: str,
 ) -> None:
-    """Разбор вопроса идёт через GigaChat: без ключа — понятная ошибка до Qdrant."""
+    """Разбор вопроса идёт через LLM: без ключа — понятная ошибка до Qdrant."""
     monkeypatch.setenv("CLOUD_RU_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_PROVIDER", provider)
 
     assert main(["search", "курица без лука"]) == 1
-    assert "GIGACHAT_API_KEY" in capsys.readouterr().err
+    assert key in capsys.readouterr().err
 
 
 def test_format_plan_shows_query_conditions_and_dropped_names() -> None:

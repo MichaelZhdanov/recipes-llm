@@ -44,10 +44,13 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    llm_provider: LlmProvider = "gigachat"
+    # По умолчанию Claude Haiku 5.5: на разборе вопроса в фильтры она прошла
+    # пороги этапа 2, GigaChat-2-Pro — нет (evals/reports/2026-11-05-stage2.md).
+    llm_provider: LlmProvider = "anthropic"
     # Пустая модель — модель провайдера по умолчанию (assistant/generation/llm.py).
     llm_model: str = ""
-    llm_effort: LlmEffort = ""
+    # medium и high дали 0.92 и 0.93 — в пределах разброса; high думает дольше.
+    llm_effort: LlmEffort = "medium"
     gigachat_api_key: SecretStr = SecretStr("")
     gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
     gigachat_api_url: str = GIGACHAT_API_URL

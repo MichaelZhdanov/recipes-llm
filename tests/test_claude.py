@@ -236,19 +236,15 @@ def test_missing_key_and_empty_balance_explain_what_to_do() -> None:
 
 
 def test_settings_choose_the_provider() -> None:
-    gigachat = Settings(gigachat_api_key=SecretStr("key"))
-    claude = Settings(
-        llm_provider="anthropic",
-        anthropic_api_key=SecretStr("sk-test"),
-        llm_effort="high",
-    )
+    gigachat = Settings(llm_provider="gigachat", gigachat_api_key=SecretStr("key"))
+    claude = Settings(anthropic_api_key=SecretStr("sk-test"), llm_effort="high")
 
     with httpx2.Client() as client:
         assert isinstance(llm.make_chat_model(gigachat, client), GigaChat)
         model = llm.make_chat_model(claude, client)
     assert isinstance(model, Claude) and model.effort == "high"
     assert llm.llm_model(gigachat) == "GigaChat-2-Pro"
-    assert llm.llm_model(claude) == "claude-opus-5-5"
-    assert llm.llm_model(
-        Settings(llm_provider="anthropic", llm_model="claude-haiku-5-5")
-    ) == ("claude-haiku-5-5")
+    # По умолчанию — Claude Haiku 5.5, выбранная по eval этапа 2.
+    assert llm.llm_model(claude) == "claude-haiku-5-5"
+    assert Settings().llm_provider == "anthropic"
+    assert llm.llm_model(Settings(llm_model="claude-sonnet-5-5")) == "claude-sonnet-5-5"

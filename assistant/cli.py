@@ -169,7 +169,7 @@ def format_hits(hits: Sequence[Hit]) -> str:
 
 
 def format_plan(args: SearchArgs) -> str:
-    """Во что GigaChat разобрал вопрос: запрос для векторов и условия фильтра."""
+    """Во что LLM разобрала вопрос: запрос для векторов и условия фильтра."""
     lines = [f"запрос: {args.query}"]
     if args.conditions.include:
         groups = (" или ".join(group) for group in args.conditions.include)
@@ -260,7 +260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ask.add_argument("--json", action="store_true", help="вывод в JSON")
     search = commands.add_parser(
         "search",
-        help="найти рецепты: разбор вопроса GigaChat, фильтр и векторы, без ответа",
+        help="найти рецепты: разбор вопроса LLM, фильтр и векторы, без ответа",
     )
     search.add_argument("question")
     search.add_argument("-k", type=int, default=5, help="сколько рецептов показать")

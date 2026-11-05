@@ -7,8 +7,9 @@ from assistant.config import Settings
 def test_defaults_without_environment() -> None:
     settings = Settings()
 
-    assert settings.llm_provider == "gigachat"
+    assert settings.llm_provider == "anthropic"
     assert settings.llm_model == ""
+    assert settings.llm_effort == "medium"
     assert settings.gigachat_scope == "GIGACHAT_API_PERS"
     assert settings.dataset_revision == "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
     assert settings.qdrant_url == "http://localhost:6333"

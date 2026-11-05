@@ -49,7 +49,8 @@ from assistant.generation.gigachat import (
 from assistant.http import request_with_retries
 
 API_VERSION = "2026-10-21"
-DEFAULT_MODEL = "claude-opus-5-5"
+# Выбрана по eval этапа 2: conditions@5 0.92 при пороге 0.90, ≈ $0.0003 за вопрос.
+DEFAULT_MODEL = "claude-haiku-5-5"
 TIMEOUT = 120.0
 # Запас на размышления поверх лимита ответа: без него размышления съедают
 # max_tokens, и ответ обрывается (stop_reason: max_tokens).

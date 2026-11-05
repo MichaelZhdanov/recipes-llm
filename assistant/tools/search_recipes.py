@@ -1,10 +1,12 @@
-"""Инструмент search_recipes: описание для GigaChat, разбор вопроса, проверка аргументов.
+"""Инструмент search_recipes: описание для LLM, разбор вопроса, проверка аргументов.
 
 Путь вопроса:
-1. GigaChat получает вопрос, до HISTORY_LIMIT прошлых реплик и словарь
+1. LLM ассистента (по умолчанию Claude Haiku 5.5, `assistant/generation/llm.py`)
+   получает вопрос, до HISTORY_LIMIT прошлых реплик и словарь
    ингредиентов индекса с числом рецептов у каждого имени (промпт
-   `search_v2`) и вызывает search_recipes — принудительно, это режим
-   «всегда ищем».
+   `search_v2`) и вызывает search_recipes — это режим «всегда ищем».
+   GigaChat вызов задаётся принудительно; Claude принудительный вызов не
+   принимает (или теряет размышления), там об этом говорит промпт.
 2. Код проверяет аргументы: имена ингредиентов — только из словаря, чужие
    отбрасываются и запоминаются в `dropped` (их считает eval). Пустой
    `query` заменяется вопросом.
@@ -226,6 +228,6 @@ class SearchPlanner:
         call = completion.function_call
         if call is None or call["name"] != NAME:
             raise LlmError(
-                f"GigaChat не вызвал {NAME} (finish_reason: {completion.finish_reason})"
+                f"модель не вызвала {NAME} (finish_reason: {completion.finish_reason})"
             )
         return parse_arguments(call["arguments"], self._vocabulary, question=question)
