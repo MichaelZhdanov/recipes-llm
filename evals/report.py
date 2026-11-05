@@ -176,15 +176,26 @@ class Parsing:
     stats: LlmStats
     # Повторы запроса после зацикливания (finish_reason: length).
     retries: int = 0
+    provider: str = "gigachat"
+    # Сколько думает Claude (LLM_EFFORT); пусто — по умолчанию модели.
+    effort: str = ""
 
 
 def _parsing_cell(parsing: Parsing | None) -> str:
     if parsing is None:
         return "нет (--no-filters): только векторы по вопросу, как на этапе 1"
     served = ", ".join(parsing.served) or "—"
+    if parsing.provider == "anthropic":
+        effort = parsing.effort or "по умолчанию модели"
+        call = (
+            f"вызов search_recipes с tool_choice auto, effort {effort}, "
+            "temperature не задаётся (API её не принимает)"
+        )
+    else:
+        call = "принудительный вызов search_recipes, temperature 1e-4"
     return (
         f"{parsing.model} (из ответа API: {served}), промпт `{parsing.prompt_version}`, "
-        f"принудительный вызов search_recipes; словарь индекса — {parsing.vocabulary} имён"
+        f"{call}; словарь индекса — {parsing.vocabulary} имён"
     )
 
 
@@ -304,8 +315,9 @@ def render_report(
         f"{percentile(latencies, 0.95):.2f} с | — |",
         *(
             [
-                f"| токены GigaChat на разбор: всего / из кэша | {parsing.stats.total_tokens} / "
-                f"{parsing.stats.precached_prompt_tokens} | — |"
+                f"| токены LLM на разбор: вход и выход без кэша / вход из кэша / выход "
+                f"| {parsing.stats.total_tokens} / {parsing.stats.precached_prompt_tokens} / "
+                f"{parsing.stats.completion_tokens} | — |"
             ]
             if parsing
             else []

@@ -185,7 +185,11 @@ def test_report_shows_how_questions_were_parsed() -> None:
     assert "| имена из разбора не из словаря (отброшены) | 1 | — |" in report
     assert "| сбои разбора (выдача пустая) | 1 | — |" in report
     assert "| повторы разбора после зацикливания (length) | 4 | — |" in report
-    assert "| токены GigaChat на разбор: всего / из кэша | 9000 / 8000 | — |" in report
+    assert "принудительный вызов search_recipes, temperature 1e-4" in report
+    assert (
+        "токены LLM на разбор: вход и выход без кэша / вход из кэша / выход"
+        " | 9000 / 8000 / 0 | — |" in report
+    )
     assert (
         "- exclude-001 «плов, молоко нельзя» → запрос «плов без молока» · с: рис"
         " · без: молоко · нет в словаре: рис басмати"
@@ -194,3 +198,19 @@ def test_report_shows_how_questions_were_parsed() -> None:
         "- by_name-001 «борщ» → сбой разбора: GigaChat не вызвал search_recipes"
         in report
     )
+
+
+def test_report_shows_claude_call_mode_and_effort() -> None:
+    parsing = Parsing(
+        model="claude-haiku-5-5",
+        served=("claude-haiku-5-5",),
+        prompt_version="search_v2",
+        vocabulary=820,
+        stats=LlmStats(),
+        provider="anthropic",
+        effort="high",
+    )
+
+    report = render([], parsing=parsing)
+
+    assert "tool_choice auto, effort high, temperature не задаётся" in report

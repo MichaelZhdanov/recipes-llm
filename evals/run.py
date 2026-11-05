@@ -428,6 +428,8 @@ def _retrieval_stage(
                 vocabulary=len(index_vocabulary),
                 stats=llm.stats,
                 retries=planner.retries,
+                provider=settings.llm_provider,
+                effort=settings.llm_effort,
             )
     relevance = None
     if judge and any(r.case.category == "semantic" for r in results):
