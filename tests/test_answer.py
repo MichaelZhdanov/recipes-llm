@@ -297,7 +297,7 @@ def test_render_answer_with_sources_and_gigachat_note(retriever: Retriever) -> N
     assert text.startswith("Язык задаёт `PAPERLESS_OCR_LANGUAGE`. [1]")
     assert "[1] docs/configuration.md:6 — Configuration > OCR language" in text
     assert text.endswith(
-        "Ответ сгенерирован GigaChat (GigaChat-2:1.0) по документации и коду Paperless-ngx v3.4.2."
+        "Ответ сгенерирован GigaChat (GigaChat-2:1.0) по найденным источникам."
     )
 
 
@@ -306,7 +306,5 @@ def test_render_not_found_offers_what_was_found(retriever: Retriever) -> None:
 
     text = render_markdown(result.answer)
 
-    assert text.startswith(
-        "Не нашёл ответа в документации и коде Paperless-ngx v3.4.2."
-    )
+    assert text.startswith("Не нашёл ответа в найденных источниках.")
     assert "Вот что может пригодиться:" in text

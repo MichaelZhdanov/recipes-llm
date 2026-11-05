@@ -11,7 +11,7 @@ langchain-text-splitters).
 
 **Каждый текст перед отправкой проходит mask_pii.** Маскирование стоит здесь,
 в адаптере, а не у вызывающего кода: так его нельзя случайно обойти.
-Документация и код Paperless публичны, но вопросы пользователей — нет.
+Рецепты публичны, но вопросы пользователей — нет.
 """
 
 import time
@@ -123,9 +123,10 @@ DEFAULT_MODELS: dict[EmbeddingProvider, str] = {
 # на cloud.ru с инструкцией из своей карточки ищет хуже, чем без неё
 # (recall@5 0.35 против 0.75), поэтому его вопрос уходит как есть.
 # Voyage вместо инструкции получает input_type.
+# Нужна ли инструкция для рецептов и какая, решит сравнение моделей на этапе 1.
 RETRIEVAL_TASK = (
-    "Given a user question about Paperless-ngx, "
-    "retrieve documentation sections or source code that answer it"
+    "Given a user question about cooking, retrieve recipes whose name and "
+    "ingredients match it"
 )
 _QUERY_TEMPLATES = {
     "ai-sage/Giga-Embeddings-instruct": "Instruct: {task}\nQuery: {query}",

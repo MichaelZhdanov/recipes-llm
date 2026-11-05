@@ -1,4 +1,4 @@
-# Тот же базовый образ, что у Paperless 3.4.2: Python 3.14 и uv 0.13.5.
+# Python 3.14 и uv 0.13.5; тот же образ, что в Makefile и deploy/bootstrap.sh.
 FROM ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
 
 # Байткод компилируется при установке: быстрее старт.

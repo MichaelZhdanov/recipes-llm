@@ -243,7 +243,7 @@ class GigaChat:
         headers = {
             "Authorization": f"Bearer {self._access_token().get_secret_value()}",
             "Accept": "application/json",
-            "User-Agent": f"paperless-assistant/{__version__}",
+            "User-Agent": f"recipes-llm/{__version__}",
         }
         return request_with_retries(
             lambda: self._client.post(self._chat_url, json=body, headers=headers),

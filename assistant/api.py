@@ -118,23 +118,23 @@ def create_app(
         if lazy is not None:
             lazy.close()
 
-    app = FastAPI(title="Paperless Assistant", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Recipes LLM", version=__version__, lifespan=lifespan)
 
     @app.get("/health")
     def health() -> HealthResponse:
-        """Liveness: процесс жив и отвечает. Qdrant и Paperless здесь не проверяются."""
+        """Liveness: процесс жив и отвечает. Qdrant и ключи API здесь не проверяются."""
         return HealthResponse(
             status="ok", version=__version__, dataset_revision=config.dataset_revision
         )
 
     @app.post("/ask", responses={503: {"description": "поиск или LLM недоступны"}})
     def ask(request: AskRequest) -> Answer:
-        """Ответ со ссылками на документацию и код или «не нашёл» с подсказками."""
+        """Ответ со ссылками на источники или «не нашёл» с подсказками."""
         try:
             return service.answer(request.question).answer
         except _SEARCH_ERRORS as error:
             logger.error("поиск недоступен: %s", error)
-            raise HTTPException(503, "поиск по документации недоступен") from error
+            raise HTTPException(503, "поиск недоступен") from error
         except LlmError as error:
             logger.error("GigaChat недоступен: %s", error)
             raise HTTPException(503, "модель GigaChat недоступна") from error

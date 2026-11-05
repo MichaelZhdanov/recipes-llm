@@ -166,11 +166,7 @@ def prepare_sources(hits: Sequence[Hit]) -> list[SourceText]:
     ]
 
 
-def user_message(
-    question: str,
-    sources: Sequence[SourceText],
-    ref: str,
-) -> str:
+def user_message(question: str, sources: Sequence[SourceText]) -> str:
     """Источники и вопрос."""
     blocks = [
         f'<source id="{s.number}" path="{s.chunk.path}" '
@@ -180,7 +176,7 @@ def user_message(
     ]
     return "\n\n".join(
         [
-            f"Источники (Paperless-ngx {ref}):",
+            "Источники:",
             "\n\n".join(blocks),
             f"Вопрос пользователя: {question}",
         ]
@@ -332,7 +328,7 @@ class Answerer:
                     {"role": "system", "content": load_prompt(self.prompt_version)},
                     {
                         "role": "user",
-                        "content": user_message(question, sources, self._ref),
+                        "content": user_message(question, sources),
                     },
                 ],
                 model=self.model,
@@ -356,9 +352,9 @@ class Answerer:
 
 
 _REASON_TEXT: dict[Reason, str] = {
-    "model_not_found": "Не нашёл ответа в документации и коде",
-    "filtered_out": "Не нашёл ответа, который подтверждают документация и код",
-    "no_sources": "Не нашёл ничего по вопросу в документации и коде",
+    "model_not_found": "Не нашёл ответа в найденных источниках",
+    "filtered_out": "Не нашёл ответа, который подтверждают источники",
+    "no_sources": "Не нашёл ничего по вопросу",
     "blacklist": "GigaChat не стал отвечать на этот вопрос (тематические ограничения)",
     "length": "Не получилось собрать ответ: он не уместился в лимит модели",
     "format_error": "Не получилось собрать ответ: модель ответила не по формату",
@@ -383,9 +379,7 @@ def _source_lines(link: SourceLink) -> list[str]:
 def render_markdown(answer: Answer) -> str:
     """Ответ текстом для консоли и чата: утверждения с [n], источники, пометка GigaChat."""
     if answer.reason is not None:
-        lines = [
-            f"{_REASON_TEXT[answer.reason]} Paperless-ngx {answer.dataset_revision}."
-        ]
+        lines = [f"{_REASON_TEXT[answer.reason]}."]
         if answer.sources:
             lines += ["", "Вот что может пригодиться:"]
     else:
@@ -399,8 +393,7 @@ def render_markdown(answer: Answer) -> str:
     if answer.model:
         lines += [
             "",
-            f"Ответ сгенерирован GigaChat ({answer.model}) по документации и коду "
-            f"Paperless-ngx {answer.dataset_revision}.",
+            f"Ответ сгенерирован GigaChat ({answer.model}) по найденным источникам.",
         ]
     return "\n".join(lines)
 

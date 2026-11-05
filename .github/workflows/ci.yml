@@ -20,7 +20,7 @@ jobs:
       # uv run падает, если uv.lock разошёлся с pyproject.toml.
       UV_LOCKED: "1"
     steps:
-      # Actions закреплены по SHA, как в CI Paperless: тег можно переписать, коммит — нет.
+      # Actions закреплены по SHA: тег можно переписать, коммит — нет.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

@@ -88,10 +88,10 @@ def test_empty_or_huge_question_is_rejected(question: str) -> None:
 @pytest.mark.parametrize(
     ("error", "detail"),
     [
-        (IndexMissingError("индекс не построен"), "поиск по документации недоступен"),
+        (IndexMissingError("индекс не построен"), "поиск недоступен"),
         (
             EmbeddingError("cloud.ru ответил HTTP 402"),
-            "поиск по документации недоступен",
+            "поиск недоступен",
         ),
         (LlmError("GigaChat ответил HTTP 402"), "модель GigaChat недоступна"),
         (httpx2.ConnectError("нет сети"), "внешний сервис не отвечает"),
