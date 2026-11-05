@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from eval_helpers import CHUNK, RUN, SOURCES, case
+from eval_helpers import CHUNK, RUN, SOURCES, TEXT, case
 
 from assistant.generation.answer import assemble
 from assistant.generation.gigachat import (
@@ -88,17 +88,16 @@ def clarity_reply(*problems: list[str]) -> str:
     )
 
 
-def test_claims_are_kept_statements_with_quoted_lines() -> None:
+def test_claims_are_kept_statements_with_whole_cited_recipes() -> None:
+    """Судья видит процитированный рецепт целиком: так проверяемо «без лука»."""
     claims = claims_of(RUN)
 
     assert [c.text for c in claims] == [
         "Почта забирается из IMAP.",
         "Проверка раз в десять минут.",
     ]
-    assert claims[0].fragments == [
-        "«Mail», строки 3-3\nPaperless can fetch attachments from IMAP mail accounts."
-    ]
-    assert claims[1].fragments[0].startswith("«Mail», строки 4-4\nIt checks the mail")
+    assert claims[0].fragments == [f"Рецепт целиком:\n{TEXT}"]
+    assert claims[1].fragments == [f"Рецепт целиком:\n{TEXT}"]
 
 
 def test_judge_message_numbers_statements_and_facts() -> None:

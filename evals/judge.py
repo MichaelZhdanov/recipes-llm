@@ -1,18 +1,19 @@
 """Модель-судья ответов: groundedness, грамотность и факты must_include у semantic.
 
-Код проверяет, что цитата есть в источнике (`citations.py`). Но он не может
-проверить смысл: подтверждает ли английский фрагмент русское утверждение.
-Это делает судья — другая, более сильная модель (GigaChat-3-Ultra), двумя
-отдельными вызовами на каждый ответ:
-1. Смысл, рубрика `evals/prompts/judge_v1.md`:
-   - подтверждают ли процитированные строки каждое утверждение (groundedness,
-     порог 0.85);
+Код проверяет, что цитата — строка рецепта и что числа утверждения есть
+в процитированных строках (`citations.py`). Но смысл он проверить не может:
+не выдуман ли шаг или время, честно ли «постное» и «без лука». Это делает
+судья — модель другого семейства, чем та, что отвечает (GigaChat-3-Ultra),
+двумя отдельными вызовами на каждый ответ:
+1. Смысл, рубрика `evals/prompts/judge_v2.md`:
+   - подтверждают ли рецепты каждое утверждение (groundedness, порог 0.85).
+     Судья видит процитированный рецепт целиком: по полному списку
+     ингредиентов видно, честно ли «без лука»;
    - есть ли в ответе факты must_include у semantic. Там факты записаны своими
      словами, подстрокой их не проверить.
-2. Грамотность, рубрика `evals/prompts/clarity_v1.md`. Модель выписывает
-   конкретные проблемы текста: термин не по глоссарию, ошибка, английский
-   кусок, обрывок разметки. Утверждение грамотно, если проблем нет: вердикт
-   выводит код, а не модель.
+2. Грамотность, рубрика `evals/prompts/clarity_v2.md`. Модель выписывает
+   конкретные проблемы текста: ошибка, английское слово, обрывок разметки,
+   обрыв. Утверждение грамотно, если проблем нет: вердикт выводит код.
 
 Почему двумя вызовами. Рубрики v2 и v3 спрашивали о грамотности в том же
 вызове, что и о смысле. Канарейки показали, что так судья её не оценивает:
@@ -30,16 +31,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel, LlmStats
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
 
 JUDGE_MODEL = "GigaChat-3-Ultra"
-# Смысл — judge_v1. В v2 и v3 в тот же вызов добавляли грамотность, но судья
-# её не оценивал (канарейки 1 из 8), поэтому грамотность — отдельный вызов.
-JUDGE_PROMPT = "judge_v1"
-CLARITY_PROMPT = "clarity_v1"
+# На Paperless в тот же вызов, что и смысл, пробовали добавить грамотность —
+# судья её не оценивал (канарейки 1 из 8), поэтому грамотность — отдельный вызов.
+# v1 — под Paperless (документация, английские фрагменты), v2 — под рецепты.
+JUDGE_PROMPT = "judge_v2"
+CLARITY_PROMPT = "clarity_v2"
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_TOKENS = 2000
 
@@ -124,7 +125,7 @@ class _ClarityAnswer(BaseModel):
 
 @dataclass(frozen=True)
 class Claim:
-    """Утверждение и строки источников, на которые оно ссылается."""
+    """Утверждение и рецепты (или строки рецептов), на которые оно ссылается."""
 
     text: str
     fragments: list[str]
@@ -142,26 +143,17 @@ class Verdict:
     problems: list[list[str]] = field(default_factory=list)
 
 
-def quoted_lines(source: SourceText, start: int, end: int) -> str:
-    """Строки источника, где найдена цитата: их судья и сравнивает с утверждением."""
-    lines = source.text.split("\n")
-    first = start - 1
-    return "\n".join(lines[first : first + end - start + 1])
-
-
 def claims_of(run: AnswerRun) -> list[Claim]:
-    """Утверждения, которые увидел пользователь, с процитированными строками."""
+    """Утверждения, которые увидел пользователь, с процитированными рецептами
+    целиком: рецепт короткий, а по полному списку ингредиентов судья видит,
+    честно ли «без лука»."""
     by_number = {s.number: s for s in run.sources}
     claims = []
     for statement in run.checked:
         if not statement.kept:
             continue
-        fragments = [
-            f"«{by_number[c.source].chunk.name}», строки {c.start_line}-{c.end_line}\n"
-            + quoted_lines(by_number[c.source], c.start_line, c.end_line)
-            for c in statement.citations
-            if c.valid and c.start_line is not None and c.end_line is not None
-        ]
+        cited = dict.fromkeys(c.source for c in statement.citations if c.valid)
+        fragments = [f"Рецепт целиком:\n{by_number[n].text}" for n in cited]
         claims.append(Claim(statement.text, fragments))
     return claims
 
@@ -291,9 +283,9 @@ class Judge:
 
 
 def facts_to_judge(result: AnswerCase) -> list[str]:
-    """У howto факты сформулированы своими словами — их проверяет судья.
+    """У semantic факты сформулированы своими словами — их проверяет судья.
 
-    У config это точные имена параметров, их проверяет код подстрокой.
+    У follow_up это точные количества («50 г»), их проверяет код подстрокой.
     """
     return result.case.must_include if result.case.category == "semantic" else []
 
