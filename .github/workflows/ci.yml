@@ -68,7 +68,6 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           WEB_LOGIN: ${{ vars.WEB_LOGIN }}
           WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
         run: |
@@ -83,10 +82,10 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Ключ сервера известен заранее: подменённый сервер ssh отвергнет.
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # Ключ сервера не проверяется (решение автора): сервер может переезжать.
           # Логин и пароль — в stdin, а не в команде: так их не видно в ps на сервере.
           printf 'WEB_LOGIN=%s\nWEB_PASSWORD=%s\n' "${WEB_LOGIN:-admin}" "$WEB_PASSWORD" \
-            | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o ServerAliveInterval=30 "root@$DEPLOY_HOST" \
                 /opt/paperless-assistant/deploy/deploy.sh "$GITHUB_SHA"
