@@ -42,7 +42,7 @@ def test_ask_without_gigachat_key_explains_what_to_do(
 
 
 def test_index_is_rebuilt_only_when_needed(store: VectorStore) -> None:
-    """index --if-needed: для деплоя и таймера, пересборка стоит денег."""
+    """index --if-needed: для деплоя, пересборка стоит денег."""
     assert "не построен" in (
         rebuild_reason(store, ref="v3.4.2", model="fake-model") or ""
     )

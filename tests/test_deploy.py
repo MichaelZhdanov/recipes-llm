@@ -51,16 +51,6 @@ def test_nginx_template_substitutes_only_its_two_names() -> None:
     assert re.search(r"location = /login \{[^}]*limit_req zone=pa_login", template)
 
 
-def test_paths_agree_between_bootstrap_and_systemd() -> None:
-    app_dir = re.search(r"^APP_DIR=(\S+)", (DEPLOY / "bootstrap.sh").read_text(), re.M)
-    service = (DEPLOY / "paperless-refresh.service").read_text()
-
-    assert app_dir
-    assert f"ExecStart={app_dir[1]}/deploy/refresh.sh" in service
-    assert f"WorkingDirectory={app_dir[1]}" in service
-    assert "User=root" in service
-
-
 DEPLOY_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeployKeyDeployKeyDeployKeyDeployKey00 ops@bypass"
 ADMIN_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAdminKeyAdminKeyAdminKeyAdminKeyAdmin0 me@laptop"
 

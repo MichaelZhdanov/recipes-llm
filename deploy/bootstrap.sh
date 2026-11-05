@@ -17,8 +17,7 @@
 # 3. клонирует репозиторий в /opt/paperless-assistant;
 # 4. добавляет ключ деплоя в authorized_keys root, если его там ещё нет;
 # 5. создаёт .env со случайными секретами;
-# 6. настраивает nginx и получает сертификат Let's Encrypt;
-# 7. включает суточный таймер paperless-refresh.
+# 6. настраивает nginx и получает сертификат Let's Encrypt.
 # Ключи API (GigaChat, cloud.ru) скрипт не спрашивает: их вписывают в .env руками.
 # Повторный запуск безопасен: готовые шаги пропускаются, клон обновляется до main.
 set -euo pipefail
@@ -93,12 +92,6 @@ main() {
         certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email \
             --redirect --non-interactive
     fi
-
-    echo "== 7. суточный таймер"
-    install -m 644 "$APP_DIR/deploy/paperless-refresh.service" "$APP_DIR/deploy/paperless-refresh.timer" \
-        /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable --now paperless-refresh.timer
 
     cat <<DONE
 

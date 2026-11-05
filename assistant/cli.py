@@ -57,7 +57,7 @@ def _index(settings: Settings, if_needed: bool = False) -> int:
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
         if if_needed:
-            # Для деплоя и таймера: полная пересборка стоит ≈27 ₽, без нужды её не делаем.
+            # Для деплоя: полная пересборка стоит ≈27 ₽, без нужды её не делаем.
             reason = rebuild_reason(
                 store, ref=settings.paperless_ref, model=embedder.model
             )
