@@ -50,7 +50,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
     environment: prod
-    timeout-minutes: 30
+    # Первая сборка полного индекса на сервере — до 40 минут (≈1 100 запросов к API).
+    timeout-minutes: 90
     # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
     concurrency:
       group: deploy
