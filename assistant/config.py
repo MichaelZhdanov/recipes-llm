@@ -5,6 +5,7 @@
 Список переменных с пояснениями лежит в `.env.example`.
 """
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import SecretStr
@@ -60,6 +61,8 @@ class Settings(BaseSettings):
     # Ревизия (коммит) датасета rogozinushka/povarenok-recipes на HuggingFace:
     # по ней строится индекс, и её же паспорт индекса сверяет с настройками.
     dataset_revision: str = "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
+    # Куда скачивается датасет: файл ревизии лежит в <путь>/<DATASET_REVISION>/.
+    data_path: Path = Path("data/recipes")
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.
     escalation_chat_id: int | None = None

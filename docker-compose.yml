@@ -47,6 +47,7 @@ services:
       # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
       QDRANT_URL: http://qdrant:6333
       DATASET_REVISION: ${DATASET_REVISION:-}
+      DATA_PATH: ${DATA_PATH:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
