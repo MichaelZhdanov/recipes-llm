@@ -1,7 +1,7 @@
 [project]
-name = "paperless-assistant"
+name = "recipes-llm"
 version = "0.1.0"
-description = "ИИ-ассистент поддержки для Paperless-ngx: ответы по документации и коду, диагностика, эскалация"
+description = "ИИ-ассистент по рецептам в Telegram: подбор по ингредиентам с tool calling, ответы со ссылками, проверенными кодом"
 license = "MIT"
 authors = [{ name = "Mikhail Zhdanov" }]
 requires-python = ">=3.14,<3.15"

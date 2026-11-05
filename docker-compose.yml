@@ -1,8 +1,8 @@
-# Demo-стек Paperless Assistant. Запуск: make up (при первом запуске создаёт .env).
+# Стек Recipes LLM. Запуск: make up (при первом запуске создаёт .env).
 # Значения ${...} compose берёт из .env в этой папке.
 # Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
 # Каждый сервис получает только свои переменные через environment, без env_file.
-name: paperless-assistant
+name: recipes-llm
 
 services:
   # Очередь задач Paperless (Celery). Valkey — открытый форк Redis,

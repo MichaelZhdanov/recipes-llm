@@ -1,5 +1,5 @@
-"""Paperless Assistant: ИИ-ассистент поддержки для Paperless-ngx."""
+"""Recipes LLM: ИИ-ассистент по рецептам в Telegram."""
 
 from importlib.metadata import version
 
-__version__ = version("paperless-assistant")
+__version__ = version("recipes-llm")
