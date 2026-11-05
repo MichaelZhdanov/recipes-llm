@@ -26,6 +26,7 @@ from evals.judge import (
     claims_of,
     clarity,
     clarity_canary_scores,
+    clarity_message,
     groundedness,
     judge_canaries,
     judge_clarity_canaries,
@@ -239,3 +240,13 @@ def test_judge_schemas_are_strict_for_claude() -> None:
 
     for schema in (JUDGE_SCHEMA, CLARITY_SCHEMA, RELEVANCE_SCHEMA):
         assert all(o.get("additionalProperties") is False for o in objects(schema))
+
+
+def test_clarity_judge_sees_statements_without_recipes() -> None:
+    """С рецептами рядом судья оценивал строки рецепта, а не ответ."""
+    message = clarity_message(
+        [Claim("Нужно 250 мл молока.", ["Рецепт целиком:\nМолоко — 250 мл"])]
+    )
+
+    assert "<text>Нужно 250 мл молока.</text>" in message
+    assert "Молоко — 250 мл" not in message
