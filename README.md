@@ -239,7 +239,7 @@ systemd-таймер раз в сутки ─► deploy/refresh.sh: исходн
 
    В конце печатает строку для `DEPLOY_KNOWN_HOSTS`.
 3. Вписать ключи API в `/opt/paperless-assistant/.env`: `CLOUD_RU_API_KEY` и `GIGACHAT_API_KEY`. В GitHub они не хранятся.
-4. В GitHub → Settings → Environments → `production` завести:
+4. В GitHub → Settings → Environments → `prod` завести:
 
    | Что | Имя | Значение |
    |---|---|---|

@@ -57,7 +57,7 @@ jobs:
     needs: check
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
-    environment: production
+    environment: prod
     timeout-minutes: 30
     # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
     concurrency:
@@ -73,7 +73,7 @@ jobs:
           WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
-            echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment production (README, «Деплой»)."
+            echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
             exit 0
           fi
           if [ -z "$WEB_PASSWORD" ]; then

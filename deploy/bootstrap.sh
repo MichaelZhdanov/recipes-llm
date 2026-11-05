@@ -105,7 +105,7 @@ main() {
 Готово. Осталось:
 1. Вписать ключи API в $APP_DIR/.env (nano $APP_DIR/.env):
    CLOUD_RU_API_KEY, GIGACHAT_API_KEY. NO_AUTH должен остаться 0.
-2. В GitHub → Settings → Environments → production:
+2. В GitHub → Settings → Environments → prod:
    секреты DEPLOY_HOST=$domain, DEPLOY_SSH_KEY (приватный ключ деплоя),
    WEB_PASSWORD (пароль входа), DEPLOY_KNOWN_HOSTS — строка ниже;
    переменная WEB_LOGIN (логин входа).
