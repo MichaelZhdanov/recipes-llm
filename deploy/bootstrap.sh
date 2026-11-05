@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Первичная настройка сервера: один раз, от root, на Ubuntu или Debian.
 #
-#   sudo bash bootstrap.sh <домен> <e-mail для Let's Encrypt> <файл публичного ключа деплоя>
+#   sudo bash bootstrap.sh <файл публичного ключа деплоя>
 #
-# До запуска: A-запись домена указывает на сервер, порты 80 и 443 открыты.
+# Публичных портов и домена не нужно: Telegram-бот сам забирает сообщения
+# (long polling), а порты стека открыты только на 127.0.0.1.
 # Ключ деплоя: ssh-keygen -f deploy/deploy.key -N '' (любого типа, без пароля):
 # deploy.key.pub — сюда, deploy.key — в секрет GitHub DEPLOY_SSH_KEY.
 #
@@ -12,12 +13,11 @@
 # root не трогаются.
 #
 # Что делает:
-# 1. ставит Docker (из официального apt-репозитория Docker), nginx, certbot;
+# 1. ставит Docker (из официального apt-репозитория Docker), git и make;
 # 2. берёт uv той же версии, что в Dockerfile, из того же образа;
 # 3. клонирует репозиторий в /opt/paperless-assistant;
 # 4. добавляет ключ деплоя в authorized_keys root, если его там ещё нет;
-# 5. создаёт .env со случайными секретами;
-# 6. настраивает nginx и получает сертификат Let's Encrypt.
+# 5. создаёт .env со случайными секретами.
 # Ключи API (GigaChat, cloud.ru) скрипт не спрашивает: их вписывают в .env руками.
 # Повторный запуск безопасен: готовые шаги пропускаются, клон обновляется до main.
 set -euo pipefail
@@ -26,16 +26,15 @@ APP_DIR=/opt/paperless-assistant
 REPO_URL=https://github.com/MichaelZhdanov/paperless-assistant.git
 # Тот же образ, что в Dockerfile и Makefile (tests/test_deploy.py это проверяет).
 UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
-SITE=/etc/nginx/sites-available/paperless-assistant
 # Переменная, а не константа в функции: тест подставляет временный файл.
 AUTHORIZED_KEYS=/root/.ssh/authorized_keys
 
 main() {
-    if [[ $# -ne 3 ]]; then
-        echo "использование: sudo bash $0 <домен> <e-mail> <файл публичного ключа деплоя>" >&2
+    if [[ $# -ne 1 ]]; then
+        echo "использование: sudo bash $0 <файл публичного ключа деплоя>" >&2
         exit 2
     fi
-    local domain="$1" email="$2" key_file="$3"
+    local key_file="$1"
     [[ $EUID -eq 0 ]] || { echo "нужен root: sudo bash $0 …" >&2; exit 2; }
     [[ -r "$key_file" ]] || { echo "не читается файл ключа $key_file" >&2; exit 2; }
     local key
@@ -50,7 +49,7 @@ main() {
 
     echo "== 1. пакеты"
     apt-get update -q
-    apt-get install -y -q ca-certificates curl git make nginx certbot python3-certbot-nginx gettext-base
+    apt-get install -y -q ca-certificates curl git make
     if ! command -v docker >/dev/null; then
         install -m 0755 -d /etc/apt/keyrings
         curl -fsSL "https://download.docker.com/linux/$ID/gpg" -o /etc/apt/keyrings/docker.asc
@@ -77,21 +76,6 @@ main() {
 
     echo "== 5. .env со случайными секретами"
     make -C "$APP_DIR" --no-print-directory .env
-    local port
-    port="$(grep -s '^ASSISTANT_PORT=' "$APP_DIR/.env" | cut -d= -f2 | tr -d "'\"" || true)"
-
-    echo "== 6. nginx и сертификат для $domain"
-    # Одинарные кавычки нарочно: это список имён для envsubst, а не подстановка shell.
-    # shellcheck disable=SC2016
-    DOMAIN="$domain" ASSISTANT_PORT="${port:-8080}" \
-        envsubst '${DOMAIN} ${ASSISTANT_PORT}' <"$APP_DIR/deploy/nginx.conf.template" >"$SITE"
-    ln -sf "$SITE" /etc/nginx/sites-enabled/paperless-assistant
-    nginx -t
-    systemctl reload nginx
-    if [[ ! -d "/etc/letsencrypt/live/$domain" ]]; then
-        certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email \
-            --redirect --non-interactive
-    fi
 
     cat <<DONE
 
@@ -117,7 +101,7 @@ update_repo() {
     else
         git clone --quiet "$REPO_URL" "$APP_DIR"
     fi
-    if [[ ! -f "$APP_DIR/deploy/nginx.conf.template" ]]; then
+    if [[ ! -f "$APP_DIR/deploy/deploy.sh" ]]; then
         echo "в $APP_DIR нет deploy/: на GitHub ещё версия без скриптов деплоя." >&2
         echo "Сначала git push, потом запустите bootstrap.sh снова." >&2
         exit 2

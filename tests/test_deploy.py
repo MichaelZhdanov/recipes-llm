@@ -39,18 +39,6 @@ def test_uv_image_is_the_same_everywhere() -> None:
     assert image[1].startswith("ghcr.io/astral-sh/uv:0.13.5-")
 
 
-def test_nginx_template_substitutes_only_its_two_names() -> None:
-    """envsubst получает список имён: $binary_remote_addr и прочее nginx остаются."""
-    template = (DEPLOY / "nginx.conf.template").read_text()
-
-    assert set(re.findall(r"\$\{(\w+)\}", template)) == {"DOMAIN", "ASSISTANT_PORT"}
-    assert (
-        "envsubst '${DOMAIN} ${ASSISTANT_PORT}'"
-        in (DEPLOY / "bootstrap.sh").read_text()
-    )
-    assert re.search(r"location = /login \{[^}]*limit_req zone=pa_login", template)
-
-
 DEPLOY_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDeployKeyDeployKeyDeployKeyDeployKey00 ops@bypass"
 ADMIN_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAdminKeyAdminKeyAdminKeyAdminKeyAdmin0 me@laptop"
 
@@ -151,9 +139,9 @@ def test_rerun_updates_the_clone_even_after_a_deploy(tmp_path: Path) -> None:
     assert first.returncode == 2
     assert "Сначала git push" in first.stderr
 
-    commit(origin, "deploy/nginx.conf.template")
+    commit(origin, "deploy/deploy.sh")
     # Деплой оставляет клон не на ветке, а на коммите.
     git("checkout", "-q", "--detach", "HEAD", cwd=app_dir)
 
     assert update_repo(origin, app_dir).returncode == 0
-    assert (app_dir / "deploy" / "nginx.conf.template").exists()
+    assert (app_dir / "deploy" / "deploy.sh").exists()
