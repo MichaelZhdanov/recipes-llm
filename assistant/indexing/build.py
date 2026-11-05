@@ -10,15 +10,17 @@
 недостроенная коллекция удаляется, а старый индекс остаётся рабочим.
 """
 
+import math
+import random
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from assistant import __version__
 from assistant.indexing.chunks import recipe_chunk
-from assistant.indexing.dataset import Recipe
+from assistant.indexing.dataset import DATASET_REPO, Recipe
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.store import IndexManifest, VectorStore
 
@@ -36,6 +38,44 @@ PRICE_PER_MTOK: dict[str, tuple[float, str]] = {
 }
 # Рецептов в пачке: эмбеддер сам делит её на запросы к API.
 BATCH = 512
+# Грубая оценка до сборки: символов на токен у русского текста. Взята
+# с запасом (меньше — значит дороже), точное число даёт usage из ответа API.
+CHARS_PER_TOKEN = 3.0
+# Сборка дороже этого просит подтверждения (решение автора 2026-11-05).
+CONFIRM_ABOVE = {"₽": 50.0, "$": 0.5}
+SAMPLE_SEED = 20261105
+
+
+@dataclass(frozen=True)
+class IndexSource:
+    """Откуда рецепты: это попадает в паспорт индекса."""
+
+    ref: str
+    dataset: str = DATASET_REPO
+    file_sha256: str = ""
+    skipped: Mapping[str, int] = field(default_factory=dict)
+    sample: int | None = None
+    seed: int | None = None
+
+
+@dataclass(frozen=True)
+class Estimate:
+    tokens: int
+    requests: int
+    # (сумма, валюта) или None, если цены модели нет в таблице.
+    cost: tuple[float, str] | None
+
+    @property
+    def needs_confirmation(self) -> bool:
+        return self.cost is not None and self.cost[0] > CONFIRM_ABOVE[self.cost[1]]
+
+    def __str__(self) -> str:
+        cost = (
+            f"≈{self.cost[0]:.2f} {self.cost[1]}"
+            if self.cost
+            else "цена модели неизвестна"
+        )
+        return f"≈{self.tokens} токенов, {cost}, около {self.requests} запросов к API"
 
 
 @dataclass(frozen=True)
@@ -47,25 +87,48 @@ class BuildReport:
     seconds: float
 
 
-def estimate_cost(model: str, tokens: int) -> str | None:
-    """Оценка стоимости вида «≈3.2100 ₽»; None, если цены модели нет в таблице."""
+def price(model: str, tokens: int) -> tuple[float, str] | None:
     if model not in PRICE_PER_MTOK:
         return None
-    price, currency = PRICE_PER_MTOK[model]
-    return f"≈{tokens / 1_000_000 * price:.4f} {currency}"
+    per_million, currency = PRICE_PER_MTOK[model]
+    return tokens / 1_000_000 * per_million, currency
+
+
+def estimate_cost(model: str, tokens: int) -> str | None:
+    """Оценка стоимости вида «≈3.2100 ₽»; None, если цены модели нет в таблице."""
+    cost = price(model, tokens)
+    return f"≈{cost[0]:.4f} {cost[1]}" if cost else None
+
+
+def estimate(recipes: Sequence[Recipe], model: str, batch_texts: int) -> Estimate:
+    """Сколько примерно стоит индекс, ещё до первого запроса к API."""
+    chars = sum(len(recipe_chunk(r, "-").embedding_text()) for r in recipes)
+    tokens = math.ceil(chars / CHARS_PER_TOKEN)
+    return Estimate(
+        tokens=tokens,
+        requests=math.ceil(len(recipes) / batch_texts),
+        cost=price(model, tokens),
+    )
+
+
+def pick_sample(recipes: Sequence[Recipe], size: int, seed: int) -> list[Recipe]:
+    """Выборка с фиксированным сидом: у всех моделей одни и те же рецепты."""
+    if size >= len(recipes):
+        return list(recipes)
+    picked = random.Random(seed).sample(list(recipes), size)
+    return sorted(picked, key=lambda r: r.id)
 
 
 def build_index(
     recipes: Sequence[Recipe],
     *,
-    ref: str,
-    commit: str | None,
+    source: IndexSource,
     store: VectorStore,
     embedder: Embedder,
     log: Callable[[str], None],
     quantization: bool = True,
 ) -> BuildReport:
-    """Строит индекс заново. ref и commit — версия данных, они попадут в паспорт."""
+    """Строит индекс заново; source попадает в паспорт."""
     if not recipes:
         raise ValueError("нет рецептов для индекса")
     started = time.monotonic()
@@ -74,19 +137,25 @@ def build_index(
     manifest: IndexManifest | None = None
     try:
         for start in range(0, len(recipes), BATCH):
-            chunks = [recipe_chunk(r, ref) for r in recipes[start : start + BATCH]]
+            chunks = [
+                recipe_chunk(r, source.ref) for r in recipes[start : start + BATCH]
+            ]
             vectors = embedder.embed_documents([c.embedding_text() for c in chunks])
             if manifest is None:
                 # Размерность известна только после первого ответа API.
                 manifest = IndexManifest(
-                    ref=ref,
-                    commit=commit,
+                    dataset=source.dataset,
+                    ref=source.ref,
+                    file_sha256=source.file_sha256,
+                    recipes=len(recipes),
+                    skipped=dict(source.skipped),
+                    sample=source.sample,
+                    seed=source.seed,
                     embedding_model=embedder.model,
                     dim=len(vectors[0]),
-                    built_at=datetime.now(UTC).isoformat(timespec="seconds"),
-                    chunks={"recipe": len(recipes)},
-                    assistant_version=__version__,
                     quantization="int8" if quantization else None,
+                    built_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                    assistant_version=__version__,
                 )
                 collection = store.create(manifest)
             store.upsert(chunks, vectors, collection=collection)

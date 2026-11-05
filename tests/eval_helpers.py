@@ -14,12 +14,17 @@ from evals.dataset import Case
 from evals.retrieval_metrics import CaseResult, RetrievalRun
 
 MANIFEST = IndexManifest(
+    dataset="rogozinushka/povarenok-recipes",
     ref="v3.4.2",
-    commit="d939d87",
+    file_sha256="0" * 64,
+    recipes=3,
+    skipped={},
+    sample=None,
+    seed=None,
     embedding_model="fake-model",
     dim=64,
+    quantization=None,
     built_at="2026-11-04T00:00:00+00:00",
-    chunks={"recipe": 3},
     assistant_version="0.1.0",
 )
 

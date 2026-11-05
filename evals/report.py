@@ -97,6 +97,19 @@ def git_revision(cwd: Path | None = None) -> str:
     return f"{sha} (есть незакоммиченные изменения)" if dirty else sha
 
 
+def _index_cell(manifest: IndexManifest) -> str:
+    size = (
+        f"выборка {manifest.sample} из всего датасета, сид {manifest.seed}"
+        if manifest.sample
+        else "весь датасет"
+    )
+    quantization = manifest.quantization or "без сжатия"
+    return (
+        f"{manifest.recipes} рецептов ({size}), векторы {quantization}; "
+        f"построен {manifest.built_at}"
+    )
+
+
 def _instruction_cell(template: str | None) -> str:
     if not template:
         return "нет, вопрос уходит как есть"
@@ -125,7 +138,6 @@ def render_report(
     passed = statistics.mean(recall) >= THRESHOLDS["recall@5"]
     cost = estimate_cost(manifest.embedding_model, stats.tokens)
     categories = Counter(r.case.category for r in results)
-    chunks = ", ".join(f"{k} {v}" for k, v in sorted(manifest.chunks.items()))
 
     lines = [
         f"# Отчёт eval — {today.isoformat()}",
@@ -136,10 +148,10 @@ def render_report(
         "| Параметр | Значение |",
         "|---|---|",
         f"| Коммит ассистента | {revision} |",
-        f"| Данные | ревизия {manifest.ref} |",
+        f"| Данные | {manifest.dataset}, ревизия {manifest.ref[:8]} |",
         f"| Модель эмбеддингов | {provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
         f"| Инструкция к вопросу | {_instruction_cell(query_template)} |",
-        f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
+        f"| Индекс | {_index_cell(manifest)} |",
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].ranks)} |",
         "| Промпт | не используется |",
@@ -348,7 +360,6 @@ def render_answer_report(
     runs = [run for r in results for run in r.runs]
     api_models = sorted({run.answer.model for run in runs if run.answer.model})
     categories = Counter(r.case.category for r in results)
-    chunks = ", ".join(f"{k} {v}" for k, v in sorted(manifest.chunks.items()))
     cost = cost_rub(api_models[0] if api_models else llm_model, llm_stats.total_tokens)
     accuracy = citation_accuracy(results)
     abstain = abstention(results)
@@ -370,10 +381,10 @@ def render_answer_report(
             if meta.rescored_from
             else []
         ),
-        f"| Данные | ревизия {manifest.ref} |",
+        f"| Данные | {manifest.dataset}, ревизия {manifest.ref[:8]} |",
         f"| Модель эмбеддингов | {meta.provider}: {manifest.embedding_model}, размерность {manifest.dim} |",
         f"| Инструкция к вопросу | {_instruction_cell(meta.query_template)} |",
-        f"| Индекс | {sum(manifest.chunks.values())} кусков: {chunks}; построен {manifest.built_at} |",
+        f"| Индекс | {_index_cell(manifest)} |",
         f"| LLM | {llm_model}; по ответам API: {', '.join(api_models) or '—'} |",
         f"| Температура | {meta.temperature} (GigaChat не принимает 0) |",
         f"| Промпт | {_prompts_cell(runs, meta.prompt_version)} |",

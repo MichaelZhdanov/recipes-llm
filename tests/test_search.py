@@ -1,25 +1,25 @@
 import pytest
 from chunk_helpers import CHICKEN, COCKTAIL, RECIPES
+from eval_helpers import MANIFEST
 
 from assistant.cli import format_hits
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
-from assistant.retrieval.store import IndexManifest, IndexMismatchError, VectorStore
+from assistant.retrieval.store import IndexMismatchError, VectorStore
 
 
 def build(store: VectorStore, embedder: Embedder, ref: str = "v3.4.2") -> list[Chunk]:
     chunks = [c.model_copy(update={"ref": ref}) for c in RECIPES]
     vectors = embedder.embed_documents([c.embedding_text() for c in chunks])
     store.recreate(
-        IndexManifest(
-            ref=ref,
-            commit=None,
-            embedding_model=embedder.model,
-            dim=len(vectors[0]),
-            built_at="2026-11-04T00:00:00+00:00",
-            chunks={"recipe": len(chunks)},
-            assistant_version="0.1.0",
+        MANIFEST.model_copy(
+            update={
+                "ref": ref,
+                "embedding_model": embedder.model,
+                "dim": len(vectors[0]),
+                "recipes": len(chunks),
+            }
         )
     )
     store.upsert(chunks, vectors)

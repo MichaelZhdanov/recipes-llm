@@ -2,9 +2,16 @@ from collections.abc import Sequence
 
 import pytest
 from chunk_helpers import CHICKEN, RECIPES, ROWS
+from eval_helpers import MANIFEST
 from qdrant_client import QdrantClient
 
-from assistant.indexing.build import build_index, estimate_cost
+from assistant.indexing.build import (
+    IndexSource,
+    build_index,
+    estimate,
+    estimate_cost,
+    pick_sample,
+)
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import Embedder, EmbeddingStats
 from assistant.retrieval.store import IndexManifest, IndexMissingError, VectorStore
@@ -13,14 +20,8 @@ from assistant.retrieval.store import IndexManifest, IndexMissingError, VectorSt
 def manifest(
     dim: int = 64, ref: str = "v3.4.2", model: str = "fake-model"
 ) -> IndexManifest:
-    return IndexManifest(
-        ref=ref,
-        commit="abc",
-        embedding_model=model,
-        dim=dim,
-        built_at="2026-11-04T00:00:00+00:00",
-        chunks={"recipe": 3},
-        assistant_version="0.1.0",
+    return MANIFEST.model_copy(
+        update={"ref": ref, "embedding_model": model, "dim": dim}
     )
 
 
@@ -78,15 +79,14 @@ def test_build_index_end_to_end(store: VectorStore, fake_embedder: Embedder) -> 
 
     report = build_index(
         ROWS,
-        ref="v3.4.2",
-        commit=None,
+        source=IndexSource(ref="v3.4.2"),
         store=store,
         embedder=fake_embedder,
         log=messages.append,
     )
 
     assert report.manifest.ref == "v3.4.2"
-    assert report.manifest.chunks == {"recipe": 3}
+    assert report.manifest.recipes == 3
     assert report.manifest.quantization == "int8"
     assert store.count() == 3
     assert store.manifest() == report.manifest
@@ -99,7 +99,11 @@ def test_nothing_to_index_is_an_error(
 ) -> None:
     with pytest.raises(ValueError, match="нет рецептов"):
         build_index(
-            [], ref="v", commit=None, store=store, embedder=fake_embedder, log=print
+            [],
+            source=IndexSource(ref="v"),
+            store=store,
+            embedder=fake_embedder,
+            log=print,
         )
 
 
@@ -124,8 +128,7 @@ def test_failed_embedding_keeps_old_index(
     with pytest.raises(RuntimeError, match="эмбеддингов"):
         build_index(
             ROWS,
-            ref="v3.5.0",
-            commit=None,
+            source=IndexSource(ref="v3.5.0"),
             store=store,
             embedder=BrokenEmbedder(),
             log=lambda _: None,
@@ -155,7 +158,11 @@ def test_rebuild_switches_alias_and_removes_old_collection(
 
     def build(ref: str) -> None:
         build_index(
-            ROWS, ref=ref, commit=None, store=store, embedder=fake_embedder, log=print
+            ROWS,
+            source=IndexSource(ref=ref),
+            store=store,
+            embedder=fake_embedder,
+            log=print,
         )
 
     build("v1")
@@ -194,15 +201,18 @@ def test_failure_in_the_middle_drops_the_unfinished_collection(
     client = QdrantClient(":memory:")
     store = VectorStore(client)
     build_index(
-        ROWS, ref="v1", commit=None, store=store, embedder=fake_embedder, log=print
+        ROWS,
+        source=IndexSource(ref="v1"),
+        store=store,
+        embedder=fake_embedder,
+        log=print,
     )
     old = store.active()
 
     with pytest.raises(RuntimeError, match="посередине"):
         build_index(
             ROWS,
-            ref="v2",
-            commit=None,
+            source=IndexSource(ref="v2"),
             store=store,
             embedder=FailsOnSecondBatch(fake_embedder),
             log=print,
@@ -221,8 +231,7 @@ def test_vectors_are_on_disk_and_int8_can_be_turned_off(
 
     report = build_index(
         ROWS,
-        ref="v1",
-        commit=None,
+        source=IndexSource(ref="v1"),
         store=store,
         embedder=fake_embedder,
         log=print,
@@ -232,3 +241,27 @@ def test_vectors_are_on_disk_and_int8_can_be_turned_off(
     params = client.get_collection(store.active() or "").config.params
     assert params.vectors.on_disk is True  # type: ignore[union-attr]
     assert report.manifest.quantization is None
+
+
+def test_estimate_before_build_and_confirmation_threshold() -> None:
+    cheap = estimate(ROWS, "BAAI/bge-m3", batch_texts=2)
+    unknown = estimate(ROWS, "unknown-model", batch_texts=128)
+
+    assert cheap.tokens > 0
+    assert cheap.requests == 2
+    assert cheap.cost is not None and cheap.cost[1] == "₽"
+    assert not cheap.needs_confirmation
+    assert unknown.cost is None and not unknown.needs_confirmation
+    # Полный датасет на 3B: 146 тыс. рецептов × ≈130 символов — дороже 50 ₽.
+    full = estimate(ROWS * 50_000, "ai-sage/Giga-Embeddings-instruct-3B", 128)
+    assert full.needs_confirmation
+    assert "₽" in str(full)
+
+
+def test_sample_is_fixed_by_seed_and_sorted() -> None:
+    many = list(ROWS)
+    first = pick_sample(many, 2, seed=1)
+
+    assert first == pick_sample(many, 2, seed=1)
+    assert [r.id for r in first] == sorted(r.id for r in first)
+    assert pick_sample(many, 10, seed=1) == many

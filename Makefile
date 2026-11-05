@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down ask search eval test lint format
+.PHONY: help up down data index index-if-needed ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -30,6 +30,20 @@ down: ## остановить стек (данные в томах Docker сох
 # Утилиты ассистента работают на хосте через uv: им нужен только Qdrant из стека.
 # --env-file .env отдаёт им ключи; переменная из shell перекрывает значение из файла.
 RUN = uv run --env-file .env python -m assistant.cli
+
+data: .env ## скачать датасет на ревизии DATASET_REVISION (проверка sha256)
+	$(RUN) data
+
+# YES=1 — подтвердить сборку дороже 50 ₽; ARGS — прочие флаги, например
+# ARGS="--sample 10000" для сравнения моделей или ARGS=--no-quantization.
+index: .env ## построить индекс заново: make index [YES=1] [ARGS="--sample 10000"]
+	docker compose up -d --wait qdrant
+	$(RUN) index $(if $(YES),--yes) $(ARGS)
+
+# Для деплоя: ничего не делает, если индекс уже для этой ревизии и модели.
+index-if-needed: .env ## построить индекс, только если его нет или он не тот
+	docker compose up -d --wait qdrant
+	$(RUN) index --if-needed $(if $(YES),--yes)
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.

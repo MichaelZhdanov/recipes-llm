@@ -45,15 +45,24 @@ class IndexMismatchError(RuntimeError):
 
 
 class IndexManifest(BaseModel):
+    """Паспорт индекса: из каких данных и какой моделью он построен."""
+
+    dataset: str
+    # Ревизия датасета: по ней поиск сверяет индекс с настройками.
     ref: str
-    commit: str | None
+    file_sha256: str
+    recipes: int
+    # Сколько строк датасета пропущено и почему.
+    skipped: dict[str, int]
+    # Размер выборки и её сид; None — весь датасет.
+    sample: int | None
+    seed: int | None
     embedding_model: str
     dim: int
-    built_at: str
-    chunks: dict[str, int]
-    assistant_version: str
     # Сжатие векторов в памяти: int8 или None — без сжатия.
-    quantization: Literal["int8"] | None = None
+    quantization: Literal["int8"] | None
+    built_at: str
+    assistant_version: str
 
 
 def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:

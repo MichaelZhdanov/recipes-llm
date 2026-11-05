@@ -27,7 +27,7 @@ def test_report_shows_metrics_threshold_and_misses() -> None:
 
     assert report.startswith("# Отчёт eval — 2026-11-04")
     assert "| recall@5 | 0.50 ± 0.00 | ≥ 0.80 | ❌ |" in report
-    assert "| Данные | ревизия v3.4.2 |" in report
+    assert "| Данные | rogozinushka/povarenok-recipes, ревизия v3.4.2 |" in report
     assert "| Модель эмбеддингов | cloud.ru: fake-model, размерность 64 |" in report
     # Перевод строки в инструкции не должен ломать таблицу markdown.
     assert "\\nQuery: <вопрос>` |" in report
