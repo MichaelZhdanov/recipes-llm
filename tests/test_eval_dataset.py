@@ -221,24 +221,3 @@ def test_error_case_needs_a_line_not_sources() -> None:
         error_case()
     with pytest.raises(ValidationError):
         error_case(expected_line="consumer.py line 478")
-
-
-def test_changelog_case_needs_stale_and_current_lines() -> None:
-    fields = {
-        "id": "changelog-001",
-        "category": "changelog",
-        "role": "user",
-        "question": "есть ли helm-чарт?",
-        "expected_behavior": "abstain",
-    }
-    case = Case.model_validate(
-        {
-            **fields,
-            "stale_line": "docs/changelog.md:7245",
-            "current_line": "docs/changelog.md:7096",
-        }
-    )
-
-    assert case.stale_line == "docs/changelog.md:7245"
-    with pytest.raises(ValidationError, match="stale_line"):
-        Case.model_validate({**fields, "stale_line": "docs/changelog.md:7245"})

@@ -114,7 +114,6 @@ def make_tree(base: Path) -> None:
     (root / "docs").mkdir(parents=True)
     (root / "src/paperless").mkdir(parents=True)
     (root / "docs/configuration.md").write_text(DOCS)
-    (root / "docs/changelog.md").write_text("# Changelog\n\n## 3.4.1\n\n- fix OCR\n")
     (root / "src/paperless/settings.py").write_text(
         'import os\n\nOCR_LANGUAGE = os.getenv("PAPERLESS_OCR_LANGUAGE", "eng")\n'
     )
@@ -147,10 +146,10 @@ def test_build_index_end_to_end(
 
     assert report.manifest.ref == "v3.4.2"
     assert report.manifest.commit == "d939d87"
-    assert report.manifest.chunks == {"doc": 2, "changelog": 1, "code": 1}
-    assert store.count() == 4
+    assert report.manifest.chunks == {"doc": 2, "code": 1}
+    assert store.count() == 3
     assert store.manifest() == report.manifest
-    assert any("кусков: 4" in m for m in messages)
+    assert any("кусков: 3" in m for m in messages)
 
 
 class BrokenEmbedder:

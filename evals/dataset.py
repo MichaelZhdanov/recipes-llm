@@ -28,7 +28,6 @@ Category = Literal[
     "howto",
     "config",
     "error",
-    "changelog",
     "out_of_scope",
     "security",
     "tool",
@@ -60,25 +59,12 @@ class Case(BaseModel):
     # error: строка кода, где задаётся текст ошибки. Кусок с ней находится по
     # строке, поэтому expected_sources у таких кейсов не нужен.
     expected_line: str | None = Field(default=None, pattern=LINE_PATTERN)
-    # changelog: устаревшая запись и та, что её отменяет (поздняя запись или документация).
-    stale_line: str | None = Field(default=None, pattern=LINE_PATTERN)
-    current_line: str | None = Field(default=None, pattern=LINE_PATTERN)
     notes: str = ""
 
     @model_validator(mode="after")
     def _error_cases_have_a_line(self) -> Self:
         if self.category == "error" and self.expected_line is None:
             raise ValueError(f"{self.id}: у кейса error нет expected_line")
-        return self
-
-    @model_validator(mode="after")
-    def _changelog_cases_have_both_lines(self) -> Self:
-        if self.category == "changelog" and (
-            self.stale_line is None or self.current_line is None
-        ):
-            raise ValueError(
-                f"{self.id}: у кейса changelog нужны stale_line и current_line"
-            )
         return self
 
     @model_validator(mode="after")

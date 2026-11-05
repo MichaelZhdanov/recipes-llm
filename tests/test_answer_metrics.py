@@ -17,7 +17,6 @@ from evals.answer_metrics import (
     abstention,
     citation_accuracy,
     cost_rub,
-    current_cited,
     cyrillic_share,
     error_localization,
     expected_source_cited,
@@ -27,7 +26,6 @@ from evals.answer_metrics import (
     negative_control,
     per_run,
     routed_as_error,
-    stale_answers,
     statement_coverage,
     term_fixes,
 )
@@ -426,57 +424,3 @@ def test_report_with_only_error_cases_renders() -> None:
         "error_localization",
     }
     assert answer_gates(results)["error_localization"] is True
-
-
-def changelog_run(links: list[int], status: str = "answer") -> AnswerRun:
-    base = run(None if status == "answer" else "model_not_found")
-    answer = base.answer.model_copy(
-        update={
-            "sources": [
-                SourceLink(
-                    number=n,
-                    kind="doc",
-                    path="docs/changelog.md",
-                    start_line=line,
-                    end_line=line,
-                    title="Changelog",
-                    url="https://x",
-                    site_url=None,
-                )
-                for n, line in enumerate(links, start=1)
-            ]
-        }
-    )
-    return dataclasses.replace(base, answer=answer)
-
-
-def test_stale_changelog_entry_presented_as_current() -> None:
-    """Helm-чарт: принят в 1.10.2 (строка 7245), удалён в 1.12.0 (строка 7096)."""
-    helm = Case(
-        id="changelog-001",
-        category="changelog",
-        role="user",
-        question="?",
-        expected_behavior="answer",
-        stale_line="docs/changelog.md:7245",
-        current_line="docs/changelog.md:7096",
-    )
-    results = [
-        AnswerCase(
-            helm,
-            [
-                changelog_run([7245]),  # только старая запись — подано как текущее
-                changelog_run([7245, 7096]),  # обе: видно, что потом удалили
-                changelog_run([7096]),  # только актуальная
-                changelog_run([], status="not_found"),  # отказ — не устаревший ответ
-            ],
-        )
-    ]
-
-    assert stale_answers(results) == Rate(1, 4)
-    assert current_cited(results) == Rate(2, 4)
-
-    report = render_answer_report(
-        results, meta=meta(LlmStats()), judging=None, today=date(2026, 11, 4)
-    )
-    assert "| changelog: старая запись подана как текущая | 0.25 (1/4," in report

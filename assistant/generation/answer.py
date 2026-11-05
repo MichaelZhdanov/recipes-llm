@@ -49,7 +49,6 @@ from assistant.generation.glossary import (
     render_terms,
     terms_in,
 )
-from assistant.generation.history import mark
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
@@ -247,9 +246,6 @@ def build_statements(
     ссылок, и только для терминов из процитированных кусков: «объём»
     в ответе про Docker volume — ошибка, в ответе про размер диска — нет.
     Цитаты и имена в обратных кавычках не меняются.
-
-    Утверждение, у которого все цитаты из changelog, помечается версией
-    записи (`history.py`): это история, а не текущее состояние.
     """
     kept = [s for s in checked if s.kept]
     spans: dict[int, tuple[int, int]] = {}
@@ -274,7 +270,6 @@ def build_statements(
         terms = terms_in((texts[number] for number in cited), glossary)
         text, fixed = fix_terms(statement.text, terms)
         fixes += fixed
-        text = mark(text, [chunks[number] for number in cited])
         statements.append(
             AnswerStatement(text=text, sources=[order[number] for number in cited])
         )

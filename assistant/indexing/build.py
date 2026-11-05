@@ -15,7 +15,7 @@ import httpx2
 
 from assistant import __version__
 from assistant.config import Settings
-from assistant.indexing.chunks import CHANGELOG_PATH, Chunk
+from assistant.indexing.chunks import Chunk
 from assistant.indexing.code import chunk_code, message_coverage
 from assistant.indexing.docs import chunk_docs
 from assistant.indexing.sources import SourceTree, ensure_sources
@@ -54,13 +54,6 @@ def estimate_cost(model: str, tokens: int) -> str | None:
     return f"≈{tokens / 1_000_000 * price:.4f} {currency}"
 
 
-def chunk_kind(chunk: Chunk) -> str:
-    """Для статистики changelog считается отдельно: это больше половины кусков документации."""
-    if chunk.path == CHANGELOG_PATH:
-        return "changelog"
-    return chunk.kind
-
-
 def collect_chunks(tree: SourceTree, repo_url: str) -> list[Chunk]:
     return chunk_docs(tree.root, ref=tree.ref, repo_url=repo_url) + chunk_code(
         tree.root, ref=tree.ref, repo_url=repo_url
@@ -84,7 +77,7 @@ def build_index(
     )
     log(f"исходники {tree.ref} ({tree.commit or 'коммит неизвестен'}) в {tree.root}")
     chunks = collect_chunks(tree, settings.paperless_repo_url)
-    counts = Counter(chunk_kind(c) for c in chunks)
+    counts = Counter(c.kind for c in chunks)
     log(
         f"кусков: {len(chunks)} ({', '.join(f'{k} {v}' for k, v in sorted(counts.items()))})"
     )

@@ -22,7 +22,7 @@ import math
 import re
 import statistics
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from assistant.generation.answer import Answer, AnswerResult
@@ -367,34 +367,3 @@ def routed_as_error(results: Sequence[AnswerCase]) -> Rate:
     """Доля прогонов error, которые роутер распознал как ошибку (сработал точный поиск)."""
     runs = _runs(results, {"error"})
     return Rate(sum(run.answer.question_type == "error" for run in runs), len(runs))
-
-
-def _changelog_runs(
-    results: Sequence[AnswerCase],
-) -> Iterator[tuple[AnswerRun, tuple[str, int], tuple[str, int]]]:
-    for r in results:
-        if r.case.stale_line is None or r.case.current_line is None:
-            continue
-        stale, current = parse_line(r.case.stale_line), parse_line(r.case.current_line)
-        for run in r.runs:
-            yield run, stale, current
-
-
-def stale_answers(results: Sequence[AnswerCase]) -> Rate:
-    """Доля прогонов changelog, где старое подано как текущее.
-
-    Ответ ссылается на устаревшую запись (stale_line) и не ссылается на ту,
-    что её отменила (current_line). Цитата настоящая, поэтому проверка
-    ссылок и судья такую ошибку не ловят: её видно только по разметке кейса.
-    """
-    flags = [
-        _touches(run, *stale) and not _touches(run, *current)
-        for run, stale, current in _changelog_runs(results)
-    ]
-    return Rate(sum(flags), len(flags))
-
-
-def current_cited(results: Sequence[AnswerCase]) -> Rate:
-    """Доля прогонов changelog, где ответ ссылается на актуальное состояние."""
-    flags = [_touches(run, *current) for run, _, current in _changelog_runs(results)]
-    return Rate(sum(flags), len(flags))
