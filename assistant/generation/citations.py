@@ -27,16 +27,15 @@
     сворачивает вызов из нескольких строк в одну. Префикс строки
     (`f"…"`, `r"…"`) не учитывается.
   Слова, числа, имена и их порядок должны совпасть;
-- у документации совпадение не может целиком лежать в строке заголовка:
-  заголовок только называет тему, а не подтверждает утверждение.
 
 Правило для утверждения: имена с `_` в обратных кавычках (`max_tokens`)
 должны встречаться в тексте процитированных источников. Так ловится
 правдоподобное, но несуществующее имя. Для рецептов его дополнит проверка
 количеств: «250 мл» из утверждения должно быть в рецепте (этап 3).
 
-По месту совпадения считаются точные строки, и ссылка в ответе ведёт
-ровно на них, а не на весь кусок.
+По месту совпадения считаются номера строк в тексте рецепта (первая —
+название, дальше по строке на ингредиент): по ним видно, на что опирается
+утверждение.
 """
 
 import re
@@ -120,7 +119,7 @@ class SourceText:
 
     Текст уже прошёл маскирование ПДн и экранирование, поэтому цитата
     сверяется именно с ним. Ни то ни другое не меняет переводы строк,
-    так что номера строк совпадают с исходным файлом.
+    так что номера строк совпадают с текстом рецепта.
     """
 
     number: int
@@ -137,7 +136,7 @@ class CheckedCitation:
     quote: str
     # None — цитата подтверждена, иначе причина отказа.
     error: str | None = None
-    # Строки файла, где найден фрагмент.
+    # Строки текста рецепта (с 1), где найден фрагмент.
     start_line: int | None = None
     end_line: int | None = None
 
@@ -238,22 +237,6 @@ def _quote_pattern(quote: str) -> re.Pattern[str] | None:
     return re.compile(start + body + end, re.IGNORECASE)
 
 
-_DOC_HEADING = re.compile(r"^\s{0,3}(#{1,6}\s|<h[1-6][\s>])")
-_FENCE = re.compile(r"^\s*(```|~~~)")
-
-
-def heading_lines(text: str) -> set[int]:
-    """Номера строк (с 0) с заголовками Markdown вне блоков кода."""
-    headings = set()
-    in_code = False
-    for number, line in enumerate(text.split("\n")):
-        if _FENCE.match(line):
-            in_code = not in_code
-        elif not in_code and _DOC_HEADING.match(line):
-            headings.add(number)
-    return headings
-
-
 def check_citation(
     citation: Citation, sources: Sequence[SourceText]
 ) -> CheckedCitation:
@@ -274,25 +257,14 @@ def check_citation(
         return fail("пустая цитата")
 
     text = normalize(source.text)
-    # Заголовки ищутся в исходном тексте: нормализация убирает обратные
-    # кавычки, и ограды блоков кода ``` перестали бы распознаваться.
-    headings = heading_lines(source.text) if source.chunk.kind == "doc" else set()
-    found_only_in_heading = False
-    for match in pattern.finditer(text):
-        first = text.count("\n", 0, match.start())
-        last = first + match.group().count("\n")
-        if set(range(first, last + 1)) <= headings:
-            found_only_in_heading = True
-            continue
-        return CheckedCitation(
-            citation.source,
-            citation.quote,
-            start_line=source.chunk.start_line + first,
-            end_line=source.chunk.start_line + last,
-        )
-    if found_only_in_heading:
-        return fail("цитата совпадает только с заголовком")
-    return fail("фрагмента нет в источнике")
+    match = pattern.search(text)
+    if match is None:
+        return fail("фрагмента нет в источнике")
+    first = text.count("\n", 0, match.start())
+    last = first + match.group().count("\n")
+    return CheckedCitation(
+        citation.source, citation.quote, start_line=first + 1, end_line=last + 1
+    )
 
 
 # Имена, которые модель может выдумать: в обратных кавычках и с подчёркиванием.

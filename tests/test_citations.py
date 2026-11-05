@@ -1,6 +1,7 @@
 from typing import Any
 
 import pytest
+from chunk_helpers import text_chunk
 from pydantic import BaseModel, ValidationError
 
 from assistant.generation.citations import (
@@ -12,10 +13,8 @@ from assistant.generation.citations import (
     check_answer,
     check_citation,
     check_statement,
-    heading_lines,
     names_in,
 )
-from assistant.indexing.chunks import Chunk
 
 DOC = """\
 #### Choosing the OCR language for documents {#PAPERLESS_OCR_LANGUAGE}
@@ -42,28 +41,11 @@ def check_default_language_available(app_configs, **kwargs):
 """
 
 
-def chunk(text: str, kind: str = "doc", start: int = 891) -> Chunk:
-    path = "docs/configuration.md" if kind == "doc" else "src/paperless/checks.py"
-    return Chunk.model_validate(
-        {
-            "kind": kind,
-            "path": path,
-            "start_line": start,
-            "end_line": start + text.count("\n"),
-            "title": "t",
-            "breadcrumb": "Configuration > OCR settings",
-            "source_id": f"{path}#x",
-            "url": f"https://github.com/x/blob/v3.4.2/{path}#L{start}-L{start + 9}",
-            "site_url": None,
-            "ref": "v3.4.2",
-            "text": text,
-        }
-    )
-
-
+# Проверке цитат всё равно, откуда текст: здесь проверяется выравнивание
+# оформления (Markdown, код), поэтому тексты — документация и код.
 SOURCES = [
-    SourceText(number=1, chunk=chunk(DOC), text=DOC),
-    SourceText(number=2, chunk=chunk(CODE, kind="code", start=351), text=CODE),
+    SourceText(number=1, chunk=text_chunk(DOC), text=DOC),
+    SourceText(number=2, chunk=text_chunk(CODE, recipe_id=2), text=CODE),
 ]
 
 
@@ -80,8 +62,8 @@ def test_quote_found_and_narrowed_to_its_lines() -> None:
     )
 
     assert checked.valid
-    # Цитата идёт через перевод строки: строки 2–3 куска → 893–894 файла.
-    assert (checked.start_line, checked.end_line) == (893, 894)
+    # Цитата идёт через перевод строки: строки 3–4 текста (считаются с 1).
+    assert (checked.start_line, checked.end_line) == (3, 4)
 
 
 def test_whitespace_and_case_do_not_matter() -> None:
@@ -136,26 +118,23 @@ def test_invalid_citations(citation: Citation, error: str) -> None:
     assert check_citation(citation, SOURCES).error == error
 
 
-def test_quote_of_heading_only_is_rejected() -> None:
+def test_first_line_counts_like_any_other() -> None:
+    """У рецепта первая строка — название: цитата из неё подтверждает утверждение."""
     checked = check_citation(
         cite(1, "Choosing the OCR language for documents"), SOURCES
     )
 
-    assert checked.error == "цитата совпадает только с заголовком"
+    assert checked.valid
+    assert checked.start_line == checked.end_line == 1
 
 
-def test_hash_line_inside_code_block_is_not_a_heading() -> None:
-    assert heading_lines(DOC) == {0}
-    assert check_citation(cite(1, "# Set the OCR language before start"), SOURCES).valid
-
-
-def test_code_comments_are_not_headings() -> None:
+def test_quote_from_second_source_has_its_own_lines() -> None:
     checked = check_citation(
         cite(2, "# The default language is always installed"), SOURCES
     )
 
     assert checked.valid
-    assert checked.start_line == checked.end_line == 352
+    assert checked.start_line == checked.end_line == 2
 
 
 def test_names_that_must_be_in_the_source() -> None:
@@ -198,7 +177,7 @@ def test_made_up_parameter_drops_statement() -> None:
 def test_name_must_match_whole_not_as_prefix() -> None:
     source = [
         SourceText(
-            number=1, chunk=chunk(DOC), text=DOC.replace("LANGUAGE", "LANGUAGES")
+            number=1, chunk=text_chunk(DOC), text=DOC.replace("LANGUAGE", "LANGUAGES")
         )
     ]
 
@@ -288,17 +267,17 @@ exporter](#exporter) for backups. The setting value is falsehood-proof.
     ],
 )
 def test_formatting_differences_do_not_matter(quote: str) -> None:
-    sources = [SourceText(number=1, chunk=chunk(FORMATTED), text=FORMATTED)]
+    sources = [SourceText(number=1, chunk=text_chunk(FORMATTED), text=FORMATTED)]
 
     assert check_citation(cite(1, quote), sources).valid
 
 
 def test_link_across_lines_keeps_line_numbers() -> None:
-    sources = [SourceText(number=1, chunk=chunk(FORMATTED, start=10), text=FORMATTED)]
+    sources = [SourceText(number=1, chunk=text_chunk(FORMATTED), text=FORMATTED)]
 
     checked = check_citation(cite(1, "see the document exporter for backups"), sources)
 
-    assert (checked.start_line, checked.end_line) == (14, 15)
+    assert (checked.start_line, checked.end_line) == (5, 6)
 
 
 @pytest.mark.parametrize(
@@ -313,7 +292,7 @@ def test_link_across_lines_keeps_line_numbers() -> None:
     ],
 )
 def test_words_must_still_match(quote: str) -> None:
-    sources = [SourceText(number=1, chunk=chunk(FORMATTED), text=FORMATTED)]
+    sources = [SourceText(number=1, chunk=text_chunk(FORMATTED), text=FORMATTED)]
 
     assert check_citation(cite(1, quote), sources).error == "фрагмента нет в источнике"
 
@@ -340,26 +319,26 @@ def run(self, language):
 """
 
 
-def code_sources(start: int = 100) -> list[SourceText]:
-    return [SourceText(number=1, chunk=chunk(CALLS, "code", start), text=CALLS)]
+def code_sources() -> list[SourceText]:
+    return [SourceText(number=1, chunk=text_chunk(CALLS), text=CALLS)]
 
 
 @pytest.mark.parametrize(
     ("quote", "lines"),
     [
         # Модель свернула вызов из нескольких строк в одну и убрала висячие запятые.
-        ("try: run_subprocess([settings.PRE_CONSUME_SCRIPT], script_env)", (101, 107)),
+        ("try: run_subprocess([settings.PRE_CONSUME_SCRIPT], script_env)", (2, 8)),
         (
             "self._fail(ConsumerStatusShortMessage.PRE_CONSUME_SCRIPT_ERROR, "
             'f"Error while executing pre-consume script: {e}")',
-            (109, 112),
+            (10, 13),
         ),
         # Текст сообщения без префикса f: так его видит пользователь.
-        ('"Error while executing pre-consume script: {e}"', (111, 111)),
+        ('"Error while executing pre-consume script: {e}"', (12, 12)),
         # Склейка двух строк: пробел в начале второй модель перенесла не так.
         (
             "dateparser might fail to parse\"\nf'some dates with this locale",
-            (114, 115),
+            (15, 16),
         ),
     ],
 )

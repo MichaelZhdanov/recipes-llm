@@ -21,7 +21,7 @@ from evals.run import (
 
 # Вопрос — id кейса: так заглушка знает, на каком кейсе «упасть».
 CASES = [
-    case(case_id, ["docs/usage.md#mail"], question=case_id)
+    case(case_id, ["recipe/10"], question=case_id)
     for case_id in ("howto-001", "howto-002", "howto-003")
 ]
 

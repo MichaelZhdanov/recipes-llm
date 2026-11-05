@@ -1,6 +1,6 @@
 from itertools import count
 
-from chunk_helpers import markdown_sections
+from chunk_helpers import COOKIES, RECIPES
 from eval_helpers import MANIFEST, case, result
 
 from assistant.retrieval.embeddings import Embedder
@@ -10,7 +10,6 @@ from evals.dataset import Case
 from evals.retrieval_metrics import (
     first_hit_rank,
     has_expectation,
-    missing_sources,
     mrr_per_run,
     recall_per_run,
     run_cases,
@@ -35,38 +34,12 @@ def test_recall_and_mrr_per_run() -> None:
     assert mrr_per_run(results) == [(1 + 0.5) / 3, 1 / 3]
 
 
-def test_missing_sources_are_reported_per_case() -> None:
-    cases = [case("howto-001", ["docs/a.md#ok", "docs/a.md#gone"])]
-
-    assert missing_sources(cases, lambda s: s.endswith("#ok")) == [
-        "howto-001: docs/a.md#gone"
-    ]
-
-
-DOCS = """\
-# Usage
-
-## Incoming mail
-
-Paperless can fetch attachments from IMAP mail accounts.
-
-## Trash
-
-Deleted documents go to the trash and can be restored.
-
-## Time zone
-
-Set PAPERLESS_TIME_ZONE.
-"""
-
-
 def test_run_cases_measures_rank_and_latency(
     store: VectorStore, fake_embedder: Embedder
 ) -> None:
-    chunks = markdown_sections(DOCS, path="docs/usage.md")
     store.recreate(MANIFEST)
     store.upsert(
-        chunks, fake_embedder.embed_documents([c.embedding_text() for c in chunks])
+        RECIPES, fake_embedder.embed_documents([c.embedding_text() for c in RECIPES])
     )
     retriever = Retriever(store, fake_embedder, ref="v3.4.2")
     ticks = count()
@@ -75,8 +48,8 @@ def test_run_cases_measures_rank_and_latency(
         [
             case(
                 "howto-001",
-                ["docs/usage.md#trash"],
-                question="deleted documents restored trash",
+                [COOKIES.source_id],
+                question="овсяное печенье хлопья овсяные",
             )
         ],
         retriever,
@@ -86,7 +59,7 @@ def test_run_cases_measures_rank_and_latency(
 
     assert results[0].ranks == [1, 1, 1]
     assert results[0].latencies == [1.0, 1.0, 1.0]
-    assert results[0].top[0][0] == "docs/usage.md#trash"
+    assert results[0].top[0][0] == COOKIES.source_id
 
 
 def test_only_cases_with_sources_have_expectation() -> None:

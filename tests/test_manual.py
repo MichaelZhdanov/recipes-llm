@@ -30,7 +30,7 @@ QUESTIONS = {"howto-001": "как настроить почту"}
 
 
 def raw_with_judge() -> dict[str, Any]:
-    howto = AnswerCase(case("howto-001", ["docs/usage.md#mail"]), [RUN])
+    howto = AnswerCase(case("howto-001", ["recipe/10"]), [RUN])
     records = answer_records([howto])
     records[0]["judge"] = json.loads(
         json.dumps(Verdict([True, False], [], ["", ""], [True, True]).__dict__)

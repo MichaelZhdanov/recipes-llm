@@ -145,7 +145,7 @@ class Verdict:
 def quoted_lines(source: SourceText, start: int, end: int) -> str:
     """Строки источника, где найдена цитата: их судья и сравнивает с утверждением."""
     lines = source.text.split("\n")
-    first = start - source.chunk.start_line
+    first = start - 1
     return "\n".join(lines[first : first + end - start + 1])
 
 
@@ -157,7 +157,7 @@ def claims_of(run: AnswerRun) -> list[Claim]:
         if not statement.kept:
             continue
         fragments = [
-            f"{by_number[c.source].chunk.path}:{c.start_line}-{c.end_line}\n"
+            f"«{by_number[c.source].chunk.name}», строки {c.start_line}-{c.end_line}\n"
             + quoted_lines(by_number[c.source], c.start_line, c.end_line)
             for c in statement.citations
             if c.valid and c.start_line is not None and c.end_line is not None

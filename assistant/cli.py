@@ -46,16 +46,11 @@ def format_hits(hits: Sequence[Hit]) -> str:
     blocks = []
     for number, hit in enumerate(hits, start=1):
         chunk = hit.chunk
-        preview = " ".join(chunk.text.split())[:200]
-        lines = [
-            f"{number}. [{hit.score:.3f}] {chunk.kind}: {chunk.breadcrumb}",
-            f"   {chunk.path}:{chunk.start_line}-{chunk.end_line}",
-            f"   {chunk.url}",
-        ]
-        if chunk.site_url:
-            lines.append(f"   сайт: {chunk.site_url}")
-        lines.append(f"   «{preview}»")
-        blocks.append("\n".join(lines))
+        blocks.append(
+            f"{number}. [{hit.score:.3f}] {chunk.name}\n"
+            f"   {chunk.url}\n"
+            f"   ингредиенты: {', '.join(chunk.ingredients)}"
+        )
     return "\n\n".join(blocks)
 
 

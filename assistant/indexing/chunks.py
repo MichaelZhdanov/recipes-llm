@@ -1,37 +1,62 @@
-"""Кусок индекса и ссылка на источник.
+"""Точка индекса — один рецепт.
 
-Каждый кусок знает, откуда он: путь, строки, версия данных (`ref`). Ссылка
-`url` ведёт ровно на тот текст, который попал в индекс; `site_url` — на ту же
-страницу на сайте, если она есть. На этапе 1 кусок станет рецептом.
+Из строки датасета (`dataset.Recipe`) получается `Chunk`: его payload лежит
+в Qdrant и возвращается поиском целиком.
+
+- `text` — то, что видит модель: название первой строкой, дальше по строке
+  на ингредиент («Молоко — 250 мл»). Цитата из ответа сверяется с этим
+  текстом, а номер строки показывает, на какой ингредиент она опирается.
+- `embedding_text()` — название и имена ингредиентов без количеств:
+  для похожести по смыслу «250 мл» только шум.
+- `ingredients` — имена в нижнем регистре: по ним фильтр Qdrant
+  «с чем и без чего» (этап 2). Регистр на сайте не всегда один и тот же.
 """
-
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ChunkKind = Literal["doc", "code"]
+from assistant.indexing.dataset import Recipe
 
 
 class Chunk(BaseModel):
-    """Кусок индекса. Все поля обязательны (приёмка F1)."""
+    """Рецепт в индексе. Все поля обязательны (приёмка F1)."""
 
     model_config = ConfigDict(frozen=True)
 
-    kind: ChunkKind
-    path: str = Field(min_length=1)
-    start_line: int = Field(ge=1)
-    end_line: int = Field(ge=1)
-    title: str = Field(min_length=1)
-    # Путь заголовков для документации («Configuration > OCR settings > …»)
-    # или «файл > класс > метод» для кода.
-    breadcrumb: str = Field(min_length=1)
-    # Чем кусок является как источник. Части одного длинного раздела делят source_id.
-    source_id: str = Field(min_length=1)
+    recipe_id: int = Field(ge=1)
     url: str = Field(min_length=1)
-    site_url: str | None
-    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    ingredients: list[str]
     text: str = Field(min_length=1)
+    # Ревизия датасета, из которой взят рецепт.
+    ref: str = Field(min_length=1)
+
+    @property
+    def source_id(self) -> str:
+        """Идентификатор источника для ссылок и отчётов eval."""
+        return f"recipe/{self.recipe_id}"
 
     def embedding_text(self) -> str:
-        """Текст для эмбеддинга: путь заголовков даёт куску контекст раздела."""
-        return f"{self.breadcrumb}\n\n{self.text}"
+        return f"{self.name}\n{', '.join(self.ingredients)}"
+
+
+def recipe_text(recipe: Recipe) -> str:
+    lines = [recipe.name]
+    lines += [
+        f"{item.name} — {item.amount}" if item.amount else item.name
+        for item in recipe.ingredients
+    ]
+    return "\n".join(lines)
+
+
+def recipe_chunk(recipe: Recipe, ref: str) -> Chunk:
+    return Chunk(
+        recipe_id=recipe.id,
+        url=recipe.url,
+        name=recipe.name,
+        # Порядок как на сайте, повторы после нижнего регистра убираются.
+        ingredients=list(
+            dict.fromkeys(item.name.lower() for item in recipe.ingredients)
+        ),
+        text=recipe_text(recipe),
+        ref=ref,
+    )

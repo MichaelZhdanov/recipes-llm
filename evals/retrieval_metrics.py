@@ -82,16 +82,6 @@ def hit_rank(case: Case, chunks: Sequence[Chunk]) -> int | None:
     return first_hit_rank(case.expected_sources, [c.source_id for c in chunks])
 
 
-def missing_sources(
-    cases: Sequence[Case],
-    has_source: Callable[[str], bool],
-) -> list[str]:
-    """Кейсы, ссылающиеся на источник, которого нет в индексе: такой кейс не засчитается никогда."""
-    return [
-        f"{c.id}: {s}" for c in cases for s in c.expected_sources if not has_source(s)
-    ]
-
-
 def run_cases(
     cases: Sequence[Case],
     retriever: Retriever,

@@ -7,7 +7,7 @@
 """
 
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -58,7 +58,7 @@ def point_id(chunk: Chunk) -> str:
     return str(
         uuid.uuid5(
             _POINT_NAMESPACE,
-            f"{chunk.ref}:{chunk.path}:{chunk.start_line}-{chunk.end_line}",
+            f"{chunk.ref}:{chunk.recipe_id}",
         )
     )
 
@@ -80,16 +80,18 @@ class VectorStore:
             ),
             metadata=manifest.model_dump(),
         )
-        for field in ("kind", "source_id"):
-            self._client.create_payload_index(
-                self._collection, field, field_schema=models.PayloadSchemaType.KEYWORD
-            )
+        # Фильтр «с чем и без чего» (этап 2) идёт по именам ингредиентов.
+        self._client.create_payload_index(
+            self._collection,
+            "ingredients",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+        )
 
     def upsert(
         self, chunks: Sequence[Chunk], vectors: Sequence[list[float]], batch: int = 256
     ) -> None:
         if len(chunks) != len(vectors):
-            raise ValueError(f"{len(chunks)} кусков, но {len(vectors)} векторов")
+            raise ValueError(f"{len(chunks)} рецептов, но {len(vectors)} векторов")
         for start in range(0, len(chunks), batch):
             points = [
                 models.PointStruct(
@@ -114,23 +116,8 @@ class VectorStore:
     def count(self) -> int:
         return self._client.count(self._collection, exact=True).count
 
-    def has_source(self, source_id: str) -> bool:
-        source_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="source_id", match=models.MatchValue(value=source_id)
-                )
-            ]
-        )
-        return (
-            self._client.count(
-                self._collection, count_filter=source_filter, exact=True
-            ).count
-            > 0
-        )
-
     def verify(self) -> int:
-        """Читает все точки и проверяет, что payload — полный кусок. Возвращает число точек."""
+        """Читает все точки и проверяет, что payload — полный рецепт. Возвращает число точек."""
         total = 0
         offset = None
         while True:
@@ -147,24 +134,9 @@ class VectorStore:
             if offset is None:
                 return total
 
-    def search(
-        self, vector: list[float], limit: int, kinds: Collection[str] | None = None
-    ) -> list[Hit]:
-        query_filter = None
-        if kinds:
-            query_filter = models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="kind", match=models.MatchAny(any=list(kinds))
-                    )
-                ]
-            )
+    def search(self, vector: list[float], limit: int) -> list[Hit]:
         response = self._client.query_points(
-            self._collection,
-            query=vector,
-            limit=limit,
-            query_filter=query_filter,
-            with_payload=True,
+            self._collection, query=vector, limit=limit, with_payload=True
         )
         return [
             Hit(chunk=Chunk.model_validate(point.payload), score=point.score)

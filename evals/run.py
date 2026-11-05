@@ -93,7 +93,6 @@ from evals.retrieval_metrics import (
     CaseResult,
     K,
     has_expectation,
-    missing_sources,
     recall_per_run,
     run_cases,
 )
@@ -315,17 +314,6 @@ def _write(path: Path, report: str, raw: object) -> None:
     path.write_text(report, encoding="utf-8")
 
 
-def _check_sources(cases: Sequence[Case], store: VectorStore) -> bool:
-    missing = missing_sources(cases, store.has_source)
-    if missing:
-        print(
-            "кейсы ссылаются на источники, которых нет в индексе:",
-            *missing,
-            sep="\n  ",
-        )
-    return not missing
-
-
 def _retrieval_stage(
     settings: Settings,
     runs: int,
@@ -346,8 +334,6 @@ def _retrieval_stage(
         embedder = make_embedder(settings, http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
-        if not _check_sources(cases, store):
-            return 2
         results = run_cases(cases, retriever, runs=runs)
 
     today = date.today()
@@ -438,8 +424,6 @@ def _answer_stage(
         llm = make_llm(settings, llm_http)
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         retriever = Retriever(store, embedder, ref=settings.dataset_revision)
-        if not _check_sources(cases, store):
-            return 2
         journal = _open_journal(journal_file, resume is not None, revision, cases, runs)
         if journal is None:
             return 2

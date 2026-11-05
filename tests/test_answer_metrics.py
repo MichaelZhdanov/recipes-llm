@@ -3,6 +3,7 @@ from datetime import date
 from typing import Literal
 
 import pytest
+from chunk_helpers import text_chunk
 from eval_helpers import MANIFEST
 
 from assistant.generation.answer import Answer, AnswerStatement, Reason
@@ -46,19 +47,13 @@ def meta(llm_stats: LlmStats) -> RunMeta:
     )
 
 
+# Номер рецепта вместо якоря документации: источник «recipe/<номер>».
+RECIPE_IDS = {"mail": 1, "trash": 2, "timezone": 3}
+
+
 def chunk(anchor: str, text: str) -> Chunk:
-    return Chunk(
-        kind="doc",
-        path="docs/usage.md",
-        start_line=1,
-        end_line=1 + text.count("\n"),
-        title=anchor,
-        breadcrumb=f"Usage > {anchor}",
-        source_id=f"docs/usage.md#{anchor}",
-        url="https://x/blob/v3.4.2/docs/usage.md?plain=1#L1-L2",
-        site_url=None,
-        ref="v3.4.2",
-        text=text,
+    return text_chunk(
+        text, recipe_id=RECIPE_IDS.setdefault(anchor, len(RECIPE_IDS) + 1)
     )
 
 
@@ -102,7 +97,7 @@ def run(
     reason: Reason | None = None,
     checked: list[CheckedStatement] | None = None,
     text: str = "Почта забирается из IMAP.",
-    top: str = "docs/usage.md#mail",
+    top: str = "recipe/1",
 ) -> AnswerRun:
     checked = (
         checked
@@ -147,7 +142,7 @@ def case(
         expected_behavior="abstain" if category == "out_of_scope" else "answer",
         expected_sources=[]
         if category == "out_of_scope"
-        else (sources or ["docs/usage.md#mail"]),
+        else (sources or ["recipe/1"]),
         must_include=must_include or [],
         must_not_include=must_not_include or [],
     )
@@ -215,8 +210,8 @@ def test_false_refusal_counts_any_not_found_in_scope() -> None:
 def test_expected_source_cited_overall_and_when_retrieved() -> None:
     results = [
         AnswerCase(
-            case("howto-001", sources=["docs/usage.md#mail"]),
-            [run(None), run("model_not_found"), run(None, top="docs/usage.md#other")],
+            case("howto-001", sources=["recipe/1"]),
+            [run(None), run("model_not_found"), run(None, top="recipe/99")],
         )
     ]
 

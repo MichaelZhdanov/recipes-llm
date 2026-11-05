@@ -6,9 +6,9 @@
 3. GigaChat отвечает JSON по схеме: утверждения с цитатами
    (`citations.py`, промпт `prompts/answer_v1.md`).
 4. Код проверяет каждую цитату. Утверждение без подтверждённой цитаты
-   удаляется, ссылки сужаются до строк цитаты.
+   удаляется, в источниках ответа остаются только процитированные рецепты.
 5. Если не осталось ни одного утверждения, ответ — «не нашёл», и к нему
-   прикладываются найденные куски: вдруг они всё же помогут.
+   прикладываются найденные рецепты: вдруг они всё же помогут.
 
 Порога по score поиска нет: решение «есть ответ или нет» принимает модель,
 а код проверяет, что ответ подтверждён. Подобрать порог на 32 кейсах значило
@@ -51,7 +51,7 @@ from assistant.security.pii import mask_pii
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 PROMPT_VERSION = "answer_v1"
 K = 5
-# Сколько найденных кусков приложить к ответу «не нашёл».
+# Сколько найденных рецептов приложить к ответу «не нашёл».
 SUGGESTIONS = 3
 # 6 утверждений с цитатами укладываются примерно в 1000 токенов, остальное — запас.
 MAX_TOKENS = 2000
@@ -79,16 +79,12 @@ _FINISH_REASONS: dict[str, Reason] = {"blacklist": "blacklist", "length": "lengt
 
 
 class SourceLink(BaseModel):
-    """Источник в ответе: ссылка на форк на строки цитаты и страница документации."""
+    """Источник в ответе: рецепт и ссылка на его страницу на povarenok.ru."""
 
     number: int
-    kind: str
-    path: str
-    start_line: int
-    end_line: int
-    title: str
+    recipe_id: int
+    name: str
     url: str
-    site_url: str | None
 
 
 class AnswerStatement(BaseModel):
@@ -146,10 +142,6 @@ def escape_source_text(text: str) -> str:
     return _SOURCE_TAG.sub(r"&lt;\1", text)
 
 
-def _attribute(value: str) -> str:
-    return value.replace('"', "'").replace("\n", " ")
-
-
 def prepare_sources(hits: Sequence[Hit]) -> list[SourceText]:
     """Тексты ровно в том виде, в каком они уйдут в модель.
 
@@ -168,10 +160,10 @@ def prepare_sources(hits: Sequence[Hit]) -> list[SourceText]:
 
 def user_message(question: str, sources: Sequence[SourceText]) -> str:
     """Источники и вопрос."""
+    # Название рецепта — первая строка текста, в атрибуты оно не идёт: это
+    # текст с сайта, и только text проходит маскирование и экранирование.
     blocks = [
-        f'<source id="{s.number}" path="{s.chunk.path}" '
-        f'lines="{s.chunk.start_line}-{s.chunk.end_line}" '
-        f'title="{_attribute(s.chunk.breadcrumb)}">\n{s.text}\n</source>'
+        f'<source id="{s.number}" recipe="{s.chunk.recipe_id}">\n{s.text}\n</source>'
         for s in sources
     ]
     return "\n\n".join(
@@ -183,18 +175,9 @@ def user_message(question: str, sources: Sequence[SourceText]) -> str:
     )
 
 
-def _link(number: int, chunk: Chunk, start: int, end: int) -> SourceLink:
-    # Ссылка куска ведёт на все его строки; сужаем до строк цитаты.
-    base = chunk.url.rsplit("#L", 1)[0]
+def _link(number: int, chunk: Chunk) -> SourceLink:
     return SourceLink(
-        number=number,
-        kind=chunk.kind,
-        path=chunk.path,
-        start_line=start,
-        end_line=end,
-        title=chunk.breadcrumb,
-        url=f"{base}#L{start}-L{end}",
-        site_url=chunk.site_url,
+        number=number, recipe_id=chunk.recipe_id, name=chunk.name, url=chunk.url
     )
 
 
@@ -204,24 +187,14 @@ def build_statements(
 ) -> tuple[list[AnswerStatement], list[SourceLink]]:
     """Оставляет подтверждённые утверждения и собирает список источников.
 
-    Один процитированный кусок — один источник в ответе. Его строки — от первой
-    до последней подтверждённой цитаты из него. Номера идут по первому упоминанию.
+    Один процитированный рецепт — один источник в ответе. Номера идут
+    по первому упоминанию.
     """
     kept = [s for s in checked if s.kept]
-    spans: dict[int, tuple[int, int]] = {}
-    for statement in kept:
-        for c in statement.citations:
-            if c.start_line is None or c.end_line is None:
-                continue  # цитата не подтвердилась
-            first, last = spans.get(c.source, (c.start_line, c.end_line))
-            spans[c.source] = (min(first, c.start_line), max(last, c.end_line))
-
+    cited = [c.source for s in kept for c in s.citations if c.valid]
+    order = {source: number for number, source in enumerate(dict.fromkeys(cited), 1)}
     chunks = {s.number: s.chunk for s in sources}
-    order = {source: number for number, source in enumerate(spans, start=1)}
-    links = [
-        _link(order[source], chunks[source], first, last)
-        for source, (first, last) in spans.items()
-    ]
+    links = [_link(number, chunks[source]) for source, number in order.items()]
     statements = []
     for statement in kept:
         cited = list(dict.fromkeys(c.source for c in statement.citations if c.valid))
@@ -234,10 +207,7 @@ def build_statements(
 
 
 def suggestions(hits: Sequence[Hit], limit: int = SUGGESTIONS) -> list[SourceLink]:
-    return [
-        _link(n, h.chunk, h.chunk.start_line, h.chunk.end_line)
-        for n, h in enumerate(hits[:limit], start=1)
-    ]
+    return [_link(n, h.chunk) for n, h in enumerate(hits[:limit], start=1)]
 
 
 def check_completion(
@@ -362,18 +332,7 @@ _REASON_TEXT: dict[Reason, str] = {
 
 
 def _source_lines(link: SourceLink) -> list[str]:
-    span = (
-        f"{link.start_line}"
-        if link.start_line == link.end_line
-        else f"{link.start_line}-{link.end_line}"
-    )
-    lines = [
-        f"[{link.number}] {link.path}:{span} — {link.title}",
-        f"    {link.url}",
-    ]
-    if link.site_url:
-        lines.append(f"    сайт: {link.site_url}")
-    return lines
+    return [f"[{link.number}] {link.name}", f"    {link.url}"]
 
 
 def render_markdown(answer: Answer) -> str:

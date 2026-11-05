@@ -1,85 +1,57 @@
-"""Куски индекса для тестов.
+"""Рецепты в индексе для тестов.
 
-Нарезчик документации ушёл вместе с Paperless, а тестам поиска, сборки
-индекса и ответов нужны куски с настоящими номерами строк и заголовками.
-На этапе 1 кусок станет рецептом: тогда меняется эта фабрика и проверки
-полей куска, а не каждый тест.
+`make_chunk` идёт через ту же `recipe_chunk`, что и сборка индекса, поэтому
+тесты видят ровно такой текст и такие имена ингредиентов, как в проде.
+`text_chunk` — точка с произвольным текстом: проверке цитат всё равно,
+рецепт это или нет, ей нужен текст со строками.
 """
 
-import re
-
-from assistant.indexing.chunks import Chunk
-
-_HEADING = re.compile(r"^(#{1,6}) (.+?)(?: \{#([\w-]+)\})?\s*$")
-
-
-def slug(title: str) -> str:
-    return re.sub(r"[^\w]+", "-", title.lower()).strip("-")
+from assistant.indexing.chunks import Chunk, recipe_chunk
+from assistant.indexing.dataset import Ingredient, Recipe
 
 
 def make_chunk(
-    text: str,
+    name: str,
+    ingredients: dict[str, str | None] | None = None,
     *,
-    source_id: str = "docs/a.md#a",
-    start_line: int = 1,
-    kind: str = "doc",
+    recipe_id: int = 1,
     ref: str = "v3.4.2",
 ) -> Chunk:
-    """Один кусок: путь и заголовок берутся из source_id вида `путь#якорь`."""
-    path, _, anchor = source_id.partition("#")
-    end_line = start_line + text.count("\n")
-    return Chunk.model_validate(
-        {
-            "kind": kind,
-            "path": path,
-            "start_line": start_line,
-            "end_line": end_line,
-            "title": anchor or path,
-            "breadcrumb": anchor or path,
-            "source_id": source_id,
-            "url": f"https://x/{path}#L{start_line}-L{end_line}",
-            "site_url": None,
-            "ref": ref,
-            "text": text,
-        }
+    items = ingredients if ingredients is not None else {"Соль": "по вкусу"}
+    recipe = Recipe(
+        id=recipe_id,
+        url=f"https://www.povarenok.ru/recipes/show/{recipe_id}/",
+        name=name,
+        ingredients=tuple(Ingredient(k, v) for k, v in items.items()),
+    )
+    return recipe_chunk(recipe, ref)
+
+
+def text_chunk(text: str, *, recipe_id: int = 1, ref: str = "v3.4.2") -> Chunk:
+    return Chunk(
+        recipe_id=recipe_id,
+        url=f"https://www.povarenok.ru/recipes/show/{recipe_id}/",
+        name=text.split("\n", 1)[0] or "рецепт",
+        ingredients=[],
+        text=text,
+        ref=ref,
     )
 
 
-def markdown_sections(
-    markdown: str, *, path: str, ref: str = "v3.4.2", repo_url: str = "https://x"
-) -> list[Chunk]:
-    """Разделы Markdown как куски: заголовок с текстом до следующего заголовка.
-
-    Якорь — из `{#id}` или из текста заголовка, путь заголовков — от `#`.
-    Заголовок без текста (и раздел первого уровня) куском не становится.
-    """
-    lines = markdown.split("\n")
-    headings = [(n, m) for n, line in enumerate(lines) if (m := _HEADING.match(line))]
-    chunks: list[Chunk] = []
-    trail: dict[int, str] = {}
-    for index, (start, match) in enumerate(headings):
-        level, title, anchor = len(match[1]), match[2], match[3]
-        trail = {k: v for k, v in trail.items() if k < level} | {level: title}
-        end = headings[index + 1][0] if index + 1 < len(headings) else len(lines)
-        body = lines[start:end]
-        while body and not body[-1].strip():
-            body.pop()
-        if level == 1 or len(body) == 1:
-            continue
-        first, last = start + 1, start + len(body)
-        chunks.append(
-            Chunk(
-                kind="doc",
-                path=path,
-                start_line=first,
-                end_line=last,
-                title=title,
-                breadcrumb=" > ".join(trail[k] for k in sorted(trail)),
-                source_id=f"{path}#{anchor or slug(title)}",
-                url=f"{repo_url}/blob/{ref}/{path}?plain=1#L{first}-L{last}",
-                site_url=None,
-                ref=ref,
-                text="\n".join(body),
-            )
-        )
-    return chunks
+# Небольшой набор рецептов для тестов поиска, сборки индекса и ответов.
+COCKTAIL = make_chunk(
+    "Густой молочно-клубничный коктейль",
+    {"Молоко": "250 мл", "Клубника": "200 г", "Сахар": "15 г"},
+    recipe_id=164365,
+)
+CHICKEN = make_chunk(
+    "Курица с рисом в духовке",
+    {"Курица": "500 г", "Рис": "200 г", "Лук репчатый": "1 шт", "Соль": "по вкусу"},
+    recipe_id=2001,
+)
+COOKIES = make_chunk(
+    "Овсяное печенье",
+    {"Хлопья овсяные": "200 г", "Яйцо куриное": "2 шт", "Сахар": "100 г"},
+    recipe_id=3001,
+)
+RECIPES = [COCKTAIL, CHICKEN, COOKIES]

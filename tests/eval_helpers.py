@@ -3,10 +3,11 @@
 import json
 from typing import Literal
 
+from chunk_helpers import text_chunk
+
 from assistant.generation.answer import assemble
 from assistant.generation.citations import SourceText
 from assistant.generation.gigachat import Completion, Usage
-from assistant.indexing.chunks import Chunk
 from assistant.retrieval.store import Hit, IndexManifest
 from evals.answer_metrics import AnswerRun
 from evals.dataset import Case
@@ -18,7 +19,7 @@ MANIFEST = IndexManifest(
     embedding_model="fake-model",
     dim=64,
     built_at="2026-11-04T00:00:00+00:00",
-    chunks={"doc": 3},
+    chunks={"recipe": 3},
     assistant_version="0.1.0",
 )
 
@@ -54,24 +55,12 @@ def result(
 # --- Ответ ассистента: один источник, три утверждения, второе с выдуманной цитатой ---
 
 TEXT = """\
-## Mail
+Mail
 
 Paperless can fetch attachments from IMAP mail accounts.
 It checks the mail every ten minutes by default."""
 
-CHUNK = Chunk(
-    kind="doc",
-    path="docs/usage.md",
-    start_line=10,
-    end_line=13,
-    title="Mail",
-    breadcrumb="Usage > Mail",
-    source_id="docs/usage.md#mail",
-    url="https://x/blob/v3.4.2/docs/usage.md?plain=1#L10-L13",
-    site_url=None,
-    ref="v3.4.2",
-    text=TEXT,
-)
+CHUNK = text_chunk(TEXT, recipe_id=10)
 SOURCES = [SourceText(1, CHUNK, TEXT)]
 
 

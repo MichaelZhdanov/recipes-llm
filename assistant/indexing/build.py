@@ -60,12 +60,10 @@ def build_index(
 ) -> BuildReport:
     """Строит индекс заново. ref и commit — версия данных, они попадут в паспорт."""
     if not chunks:
-        raise ValueError("нет кусков для индекса")
+        raise ValueError("нет рецептов для индекса")
     started = time.monotonic()
-    counts = Counter(c.kind for c in chunks)
-    log(
-        f"кусков: {len(chunks)} ({', '.join(f'{k} {v}' for k, v in sorted(counts.items()))})"
-    )
+    counts = {"recipe": len(chunks)}
+    log(f"рецептов: {len(chunks)}")
 
     vectors: list[list[float]] = []
     for start in range(0, len(chunks), _PROGRESS_STEP):

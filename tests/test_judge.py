@@ -88,9 +88,9 @@ def test_claims_are_kept_statements_with_quoted_lines() -> None:
         "Проверка раз в десять минут.",
     ]
     assert claims[0].fragments == [
-        "docs/usage.md:12-12\nPaperless can fetch attachments from IMAP mail accounts."
+        "«Mail», строки 3-3\nPaperless can fetch attachments from IMAP mail accounts."
     ]
-    assert claims[1].fragments[0].startswith("docs/usage.md:13-13\nIt checks the mail")
+    assert claims[1].fragments[0].startswith("«Mail», строки 4-4\nIt checks the mail")
 
 
 def test_judge_message_numbers_statements_and_facts() -> None:
@@ -116,7 +116,7 @@ def test_canary_scores_count_missing_verdict_as_miss() -> None:
 
 def test_rescore_rebuilds_answers_from_raw_data() -> None:
     """Пересчёт собирает ответ тем же кодом, что и живой путь: результат совпадает."""
-    original = AnswerCase(case("howto-001", ["docs/usage.md#mail"]), [RUN])
+    original = AnswerCase(case("howto-001", ["recipe/10"]), [RUN])
     raw: list[dict[str, Any]] = json.loads(
         json.dumps(answer_records([original]), ensure_ascii=False)
     )
@@ -125,7 +125,7 @@ def test_rescore_rebuilds_answers_from_raw_data() -> None:
 
     assert rebuilt.runs[0].answer == RUN.answer
     assert rebuilt.runs[0].checked == RUN.checked
-    assert rebuilt.runs[0].cited_source_ids() == {"docs/usage.md#mail"}
+    assert rebuilt.runs[0].cited_source_ids() == {"recipe/10"}
 
 
 def test_verdicts_are_matched_by_number_and_missing_is_none() -> None:
@@ -176,7 +176,7 @@ def test_refusal_means_facts_absent_without_calling_judge() -> None:
             ref="v3.4.2",
         )
     )
-    howto = case("howto-001", ["docs/usage.md#mail"]).model_copy(
+    howto = case("howto-001", ["recipe/10"]).model_copy(
         update={"must_include": ["почтовый аккаунт"]}
     )
 
