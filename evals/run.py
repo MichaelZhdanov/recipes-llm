@@ -235,6 +235,25 @@ def answer_records(
     ]
 
 
+def judging_record(judging: Judging) -> dict[str, object]:
+    """Судья и его вердикты по канарейкам: по ним сравнивают двух судей
+    (`evals/compare_judges.py`)."""
+    return {
+        "model": judging.model,
+        "prompt_version": judging.prompt_version,
+        "canaries": [
+            {"id": c.id, "expected": c.supported, "mark": m}
+            for c, m in zip(judging.canaries, judging.canary_marks, strict=True)
+        ],
+        "clarity_canaries": [
+            {"id": c.id, "expected": c.clear, "mark": m}
+            for c, m in zip(
+                judging.clarity_canaries, judging.clarity_marks, strict=True
+            )
+        ],
+    }
+
+
 def meta_record(meta: RunMeta) -> dict[str, object]:
     return {
         "manifest": meta.manifest.model_dump(),
@@ -560,7 +579,12 @@ def _finish(
     path = report_path(REPORTS_DIR, today, label)
     # Сначала сырые данные: если отчёт упадёт, дорогая генерация не пропадёт,
     # и отчёт можно собрать заново через --rescore.
-    raw = {"meta": meta_record(meta), "records": answer_records(results, judging)}
+    raw: dict[str, object] = {
+        "meta": meta_record(meta),
+        "records": answer_records(results, judging),
+    }
+    if judging is not None:
+        raw["judging"] = judging_record(judging)
     _write_raw(path, raw)
     report = render_answer_report(results, meta=meta, judging=judging, today=today)
     path.write_text(report, encoding="utf-8")
