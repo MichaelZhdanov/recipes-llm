@@ -24,6 +24,7 @@ from assistant.tools.search_recipes import (
     LENGTH_ATTEMPTS,
     NAME,
     SEARCH_RECIPES,
+    SearchArgs,
     SearchPlanner,
     parse_arguments,
     system_prompt,
@@ -203,15 +204,29 @@ def test_planner_forces_the_call_and_keeps_the_last_turns() -> None:
     assert args.query == "курица без лука"
 
 
-@pytest.mark.parametrize(
-    "call",
-    [None, {"name": "escalate", "arguments": {}}],
-    ids=["text", "other-function"],
-)
-def test_planner_without_search_call_is_an_error(call: FunctionCall | None) -> None:
-    llm = FakeLlm(call, finish_reason="stop")
+def test_text_instead_of_a_call_falls_back_to_the_question() -> None:
+    """«Какая погода?»: модель ответила текстом. «Всегда ищем» — поиск по вопросу."""
+    llm = FakeLlm(None, finish_reason="stop")
+    planner = SearchPlanner(llm, model="claude-haiku-5-5", vocabulary=VOCABULARY)
 
-    with pytest.raises(LlmError, match="finish_reason: stop"):
+    args = planner.plan("какая погода завтра?")
+
+    assert args == SearchArgs("какая погода завтра?", IngredientFilter())
+    assert planner.fallbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("call", "finish_reason"),
+    [(None, "blacklist"), ({"name": "escalate", "arguments": {}}, "function_call")],
+    ids=["refusal", "other-function"],
+)
+def test_planner_without_search_call_is_an_error(
+    call: FunctionCall | None, finish_reason: str
+) -> None:
+    """Отказ модели или чужая функция — сбой, а не повод молча искать."""
+    llm = FakeLlm(call, finish_reason=finish_reason)
+
+    with pytest.raises(LlmError, match=f"finish_reason: {finish_reason}"):
         SearchPlanner(llm, model="GigaChat-2-Pro", vocabulary=VOCABULARY).plan("борщ")
 
 

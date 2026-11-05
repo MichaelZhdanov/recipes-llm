@@ -202,9 +202,11 @@ class SearchPlanner:
         self._model = model
         self._vocabulary = frozenset(vocabulary)
         self._system: Message = {"role": "system", "content": system_prompt(vocabulary)}
-        # Модели с версией из ответов API и число повторов: пишутся в отчёт eval.
+        # Модели с версией из ответов API, число повторов и ответов текстом
+        # вместо вызова: пишутся в отчёт eval.
         self.served: set[str] = set()
         self.retries = 0
+        self.fallbacks = 0
 
     def plan(self, question: str, history: Sequence[Message] = ()) -> SearchArgs:
         messages: list[Message] = [
@@ -227,8 +229,16 @@ class SearchPlanner:
             if completion.finish_reason != "length":
                 break
         call = completion.function_call
-        if call is None or call["name"] != NAME:
-            raise LlmError(
-                f"модель не вызвала {NAME} (finish_reason: {completion.finish_reason})"
+        if call is not None and call["name"] == NAME:
+            return parse_arguments(
+                call["arguments"], self._vocabulary, question=question
             )
-        return parse_arguments(call["arguments"], self._vocabulary, question=question)
+        if completion.finish_reason == "stop":
+            # Claude принудительный вызов не получает (tool_choice auto) и на
+            # «какая погода» может ответить текстом. «Всегда ищем» — значит,
+            # ищем по вопросу как есть, без условий; такие случаи считаются.
+            self.fallbacks += 1
+            return SearchArgs(query=question, conditions=IngredientFilter())
+        raise LlmError(
+            f"модель не вызвала {NAME} (finish_reason: {completion.finish_reason})"
+        )
