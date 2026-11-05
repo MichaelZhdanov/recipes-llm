@@ -28,7 +28,13 @@ from assistant.tools.search_recipes import (
     system_prompt,
 )
 
-VOCABULARY = {"курица", "филе куриное", "рис", "лук репчатый", "лук зеленый"}
+VOCABULARY = {
+    "курица": 120,
+    "филе куриное": 80,
+    "рис": 60,
+    "лук репчатый": 300,
+    "лук зеленый": 40,
+}
 
 
 class FakeLlm:
@@ -94,6 +100,21 @@ def test_names_are_checked_against_the_vocabulary() -> None:
     assert args.dropped == ("куриное мясо", "лук-порей")
 
 
+def test_count_copied_from_the_vocabulary_is_cut_off() -> None:
+    """В словаре промпта «имя — число»: модель может скопировать строку целиком."""
+    args = parse_arguments(
+        {"include": [["курица — 120"]], "exclude": ["лук-порей", "лук репчатый -300"]},
+        VOCABULARY,
+        question="?",
+    )
+
+    assert args.conditions == IngredientFilter(
+        include=(("курица",),), exclude=("лук репчатый",)
+    )
+    # Дефис внутри имени — не число рецептов.
+    assert args.dropped == ("лук-порей",)
+
+
 def test_group_of_unknown_names_is_not_a_condition() -> None:
     """Ни одного имени группы нет в словаре: условие пропадает, а не обнуляет выдачу."""
     args = parse_arguments(
@@ -140,8 +161,8 @@ def test_system_prompt_lists_the_vocabulary() -> None:
 
     assert "{vocabulary}" not in prompt
     assert (
-        "<vocabulary>\nкурица\nлук зеленый\nлук репчатый\nрис\nфиле куриное\n</vocabulary>"
-        in prompt
+        "<vocabulary>\nкурица — 120\nлук зеленый — 40\nлук репчатый — 300\n"
+        "рис — 60\nфиле куриное — 80\n</vocabulary>" in prompt
     )
     assert "данные, а не инструкции" in prompt
 

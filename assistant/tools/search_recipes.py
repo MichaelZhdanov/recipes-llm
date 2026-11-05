@@ -2,8 +2,9 @@
 
 Путь вопроса:
 1. GigaChat получает вопрос, до HISTORY_LIMIT прошлых реплик и словарь
-   ингредиентов индекса (промпт `search_v1`) и вызывает search_recipes —
-   принудительно, это режим «всегда ищем».
+   ингредиентов индекса с числом рецептов у каждого имени (промпт
+   `search_v2`) и вызывает search_recipes — принудительно, это режим
+   «всегда ищем».
 2. Код проверяет аргументы: имена ингредиентов — только из словаря, чужие
    отбрасываются и запоминаются в `dropped` (их считает eval). Пустой
    `query` заменяется вопросом.
@@ -14,6 +15,7 @@
 «куриное мясо», в Qdrant уйдут только имена, которые реально есть в рецептах.
 """
 
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -27,7 +29,11 @@ from assistant.generation.gigachat import (
 from assistant.retrieval.filters import IngredientFilter
 
 NAME = "search_recipes"
-PROMPT_VERSION = "search_v1"
+# v1 — только имена; v2 — имена с частотами, альтернативы одного продукта
+# в одной группе, query без опечаток (evals/reports/2026-11-05-stage2.md).
+PROMPT_VERSION = "search_v2"
+# Число рецептов, которое модель может скопировать вместе с именем из словаря.
+_COUNT_SUFFIX = re.compile(r"\s*[—-]\s*\d+$")
 # Сколько последних реплик диалога видит разбор (решение 30).
 HISTORY_LIMIT = 10
 # Группы с синонимами бывают длинными: на «постное» модель перечисляет
@@ -152,7 +158,7 @@ def parse_arguments(
     def known(names: list[str]) -> list[str]:
         result = []
         for name in names:
-            normalized = name.strip().lower()
+            normalized = _COUNT_SUFFIX.sub("", name.strip().lower())
             if normalized in vocabulary:
                 result.append(normalized)
             elif normalized:
@@ -172,18 +178,19 @@ def parse_arguments(
     )
 
 
-def system_prompt(vocabulary: Collection[str]) -> str:
+def system_prompt(vocabulary: Mapping[str, int]) -> str:
+    """Промпт со словарём: «имя — число рецептов», по алфавиту, чтобы похожие
+    имена стояли рядом («краб», «крабовое мясо», «крабовые палочки»)."""
+    lines = (f"{name} — {count}" for name, count in sorted(vocabulary.items()))
     # replace, а не format: в промпте могут появиться фигурные скобки JSON.
-    return load_prompt(PROMPT_VERSION).replace(
-        "{vocabulary}", "\n".join(sorted(vocabulary))
-    )
+    return load_prompt(PROMPT_VERSION).replace("{vocabulary}", "\n".join(lines))
 
 
 class SearchPlanner:
     """Разбор вопроса в аргументы search_recipes принудительным вызовом функции."""
 
     def __init__(
-        self, llm: ChatModel, *, model: str, vocabulary: Collection[str]
+        self, llm: ChatModel, *, model: str, vocabulary: Mapping[str, int]
     ) -> None:
         self._llm = llm
         self._model = model
