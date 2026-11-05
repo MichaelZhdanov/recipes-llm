@@ -79,13 +79,16 @@ from evals.dataset import (
     CLARITY_CANARIES_FILE,
     DATASET_DIR,
     HOLDOUT_DIR,
+    RELEVANCE_CANARIES_FILE,
     Case,
     load_canaries,
     load_cases,
     load_clarity_canaries,
+    load_relevance_canaries,
 )
 from evals.judge import Judge, Judging, run_judge
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
+from evals.relevance import Relevance, RelevanceJudge, judge_relevance
 from evals.report import (
     RunMeta,
     answer_gates,
@@ -114,8 +117,11 @@ ANSWER_CATEGORIES = frozenset(
 REPORTS_DIR = Path(__file__).parent / "reports"
 
 
-def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
+def raw_records(
+    results: Sequence[CaseResult], relevance: Relevance | None = None
+) -> list[dict[str, object]]:
     """Сырые данные поиска: одна запись на пару «кейс, прогон»."""
+    marks = relevance.marks if relevance else {}
     return [
         {
             "id": r.case.id,
@@ -124,6 +130,8 @@ def raw_records(results: Sequence[CaseResult]) -> list[dict[str, object]]:
             "available": r.available,
             "top": [dataclasses.asdict(found) for found in run.top],
             "latency": run.latency,
+            # Вердикты судьи по рецептам топа: судится только первый прогон.
+            "relevance": marks.get(r.case.id) if number == 0 else None,
         }
         for r in results
         for number, run in enumerate(r.runs)
@@ -352,6 +360,7 @@ def _retrieval_stage(
     sample: int | None,
     seed: int,
     categories: frozenset[str] = RETRIEVAL_CATEGORIES,
+    judge: bool = True,
 ) -> int:
     # Коммит запоминается до прогона: правки во время долгого прогона
     # не должны попасть в его отчёт.
@@ -374,6 +383,9 @@ def _retrieval_stage(
             )
             return 2
         results = mark_available(run_cases(cases, retriever, runs=runs), recipes)
+    relevance = None
+    if judge and any(r.case.category == "semantic" for r in results):
+        relevance = _judge_relevance(settings, results)
 
     today = date.today()
     report = render_report(
@@ -385,9 +397,10 @@ def _retrieval_stage(
         stats=embedder.stats,
         today=today,
         sample=sampled,
+        relevance=relevance,
     )
     path = report_path(REPORTS_DIR, today, label)
-    _write(path, report, raw_records(results))
+    _write(path, report, raw_records(results, relevance))
     value = primary(results)
     print(
         "основная метрика (среднее name_hit@5 и include_precision@5) = "
@@ -395,6 +408,15 @@ def _retrieval_stage(
     )
     # Порогов у метрик поиска пока нет: их выставит этап 2 (CLAUDE.md, «Верификация»).
     return 0
+
+
+def _judge_relevance(settings: Settings, results: Sequence[CaseResult]) -> Relevance:
+    """Судья оценивает выдачу по вопросам «по смыслу». Ключ GigaChat нужен только здесь."""
+    canaries = load_relevance_canaries() if RELEVANCE_CANARIES_FILE.exists() else []
+    with make_http_client() as http:
+        judge = RelevanceJudge(make_llm(settings, http))
+        _log(f"судья {judge.model}: выдача по смыслу и {len(canaries)} канареек")
+        return judge_relevance(results, judge, canaries)
 
 
 def _judge(
@@ -616,7 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--no-judge",
         action="store_true",
-        help="без модели-судьи (groundedness не считается)",
+        help="без модели-судьи (groundedness и релевантность по смыслу не считаются)",
     )
     parser.add_argument(
         "--resume",
@@ -643,6 +665,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.sample,
             args.seed,
             args.categories or RETRIEVAL_CATEGORIES,
+            not args.no_judge,
         )
     label = args.label or ("holdout" if args.split == "holdout" else None)
     return _answer_stage(

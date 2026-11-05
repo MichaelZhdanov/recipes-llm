@@ -10,7 +10,9 @@
 - `judge/canaries.yaml` — «канарейки» для проверки модели-судьи:
   утверждение, фрагмент и правильный вердикт `supported`;
 - `judge/clarity_canaries.yaml` — канарейки для оценки грамотности
-  `clear`: смысл подтверждён, а текст хороший или плохой.
+  `clear`: смысл подтверждён, а текст хороший или плохой;
+- `judge/relevance_canaries.yaml` — канарейки судьи релевантности:
+  вопрос, рецепт и правильный ответ `relevant`.
 """
 
 from pathlib import Path
@@ -23,6 +25,7 @@ DATASET_DIR = Path(__file__).parent / "dataset"
 HOLDOUT_DIR = DATASET_DIR / "holdout"
 CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
 CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
+RELEVANCE_CANARIES_FILE = DATASET_DIR / "judge" / "relevance_canaries.yaml"
 
 Category = Literal[
     "include",
@@ -148,6 +151,24 @@ class ClarityCanary(BaseModel):
     notes: str = ""
 
 
+class RelevanceCanary(BaseModel):
+    """Вопрос и рецепт с известным ответом «подходит или нет» для судьи релевантности.
+
+    Канарейки с `relevant: false` расходятся с вопросом тонко (в постном
+    блюде сливочное масло, «к чаю» — пирог с мясом): если судья их принимает,
+    его метрике semantic_relevance верить нельзя.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^relevance-\d{3}$")
+    question: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    ingredients: list[str] = Field(min_length=1)
+    relevant: bool
+    notes: str = ""
+
+
 def _read_list(file: Path) -> list[object]:
     raw = yaml.safe_load(file.read_text(encoding="utf-8")) or []
     if not isinstance(raw, list):
@@ -180,5 +201,13 @@ def load_canaries(file: Path = CANARIES_FILE) -> list[Canary]:
 
 def load_clarity_canaries(file: Path = CLARITY_CANARIES_FILE) -> list[ClarityCanary]:
     canaries = [ClarityCanary.model_validate(item) for item in _read_list(file)]
+    _check_unique([canary.id for canary in canaries])
+    return canaries
+
+
+def load_relevance_canaries(
+    file: Path = RELEVANCE_CANARIES_FILE,
+) -> list[RelevanceCanary]:
+    canaries = [RelevanceCanary.model_validate(item) for item in _read_list(file)]
     _check_unique([canary.id for canary in canaries])
     return canaries

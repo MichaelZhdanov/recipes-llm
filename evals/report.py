@@ -45,6 +45,7 @@ from evals.judge import (
     must_include_judged,
     unjudged,
 )
+from evals.relevance import Relevance, relevance_canary_scores, semantic_relevance
 from evals.retrieval_metrics import (
     CODE_CHECKED,
     CaseResult,
@@ -120,6 +121,22 @@ def _value(value: float | None) -> str:
     return "—" if value is None else f"{value:.2f}"
 
 
+def _mark(value: bool | None) -> str:
+    return {True: "✅ ", False: "❌ ", None: "? "}[value]
+
+
+def _relevance_rows(relevance: Relevance | None) -> list[str]:
+    if relevance is None:
+        return []
+    caught, accepted = relevance_canary_scores(relevance)
+    return [
+        f"| semantic_relevance@{K}: доля подходящих рецептов в топе (semantic, судья) "
+        f"| {semantic_relevance(relevance)} |",
+        f"| канарейки: судья отверг неподходящие / принял подходящие | {caught} / {accepted} |",
+        f"| неразобранных ответов судьи, токены судьи | {relevance.failures}, {relevance.tokens} |",
+    ]
+
+
 def _found_lines(r: CaseResult) -> list[str]:
     top = r.runs[-1].top if r.runs else []
     return [
@@ -138,6 +155,7 @@ def render_report(
     stats: EmbeddingStats,
     today: date,
     sample: str | None = None,
+    relevance: Relevance | None = None,
 ) -> str:
     latencies = [lat for r in results for lat in r.latencies]
     cost = estimate_cost(manifest.embedding_model, stats.tokens)
@@ -160,6 +178,7 @@ def render_report(
         f"| Кейсов | {len(results)} ({', '.join(f'{k} {v}' for k, v in sorted(categories.items()))}), "
         f"прогонов {len(results[0].runs) if results else 0} |",
         "| Промпт | не используется |",
+        f"| Судья | {f'{relevance.model}, рубрика `{relevance.prompt_version}`' if relevance else 'не запускался'} |",
         *_sample_row(sample),
         "",
         "## Метрики",
@@ -173,6 +192,7 @@ def render_report(
         f"| include_precision@{K}: доля топа, где есть все нужные ингредиенты (include) | {_value(include_precision(results))} |",
         f"| exclude_violations@{K}: доля топа с исключённым ингредиентом (exclude, меньше — лучше) | {_value(exclude_violations(results))} |",
         f"| **основная: среднее name_hit@{K} и include_precision@{K}** | **{_value(primary(results))}** |",
+        *_relevance_rows(relevance),
         f"| задержка поиска p50 / p95 | {percentile(latencies, 0.5):.2f} / "
         f"{percentile(latencies, 0.95):.2f} с |",
         f"| токены запросов к API эмбеддингов | {stats.tokens}{f' ({cost})' if cost else ''} |",
@@ -239,13 +259,25 @@ def render_report(
     semantic = [r for r in results if r.case.category == "semantic"]
     if semantic:
         lines += ["", "## Вопросы по смыслу: что нашлось", ""]
-        for r in semantic:
+        if relevance:
             lines += [
-                f"### {r.case.id} — «{r.case.question}»",
-                "",
-                *_found_lines(r),
+                "✅ — судья счёл рецепт подходящим, ❌ — нет, ? — без вердикта.",
                 "",
             ]
+        for r in semantic:
+            marks = relevance.marks.get(r.case.id, []) if relevance else []
+            found = [
+                f"{_mark(marks[n]) if n < len(marks) else ''}{line}"
+                for n, line in enumerate(_found_lines(r))
+            ]
+            lines += [f"### {r.case.id} — «{r.case.question}»", "", *found, ""]
+    if relevance and relevance.canaries:
+        lines += ["", "## Канарейки судьи релевантности", ""]
+        lines += [
+            f"- {c.id}: «{c.question}» → {c.name}: ожидалось "
+            f"{'подходит' if c.relevant else 'не подходит'}, судья — {_mark(m)}"
+            for c, m in zip(relevance.canaries, relevance.canary_marks, strict=True)
+        ]
     return "\n".join(lines).rstrip() + "\n"
 
 
