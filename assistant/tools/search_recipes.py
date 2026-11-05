@@ -36,11 +36,14 @@ PROMPT_VERSION = "search_v2"
 _COUNT_SUFFIX = re.compile(r"\s*[—-]\s*\d+$")
 # Сколько последних реплик диалога видит разбор (решение 30).
 HISTORY_LIMIT = 10
-# Группы с синонимами бывают длинными: на «постное» модель перечисляет
-# десятки продуктов, и 1000 токенов не хватало (finish_reason: length,
-# evals/reports/2026-11-05-stage2.md). Лишний запас ничего не стоит:
-# платятся только выданные токены.
-MAX_TOKENS = 3000
+# Самый длинный честный разбор — около 500 токенов (на «постное» — несколько
+# десятков продуктов). Больше — это зацикливание: GigaChat повторяет имена,
+# пока не кончится лимит, и возвращает пустой ответ с finish_reason: length.
+# 1000 обрывает цикл за ≈ 20 с, 3000 — за минуту (evals/reports/2026-11-05-stage2.md).
+MAX_TOKENS = 1000
+# Зацикливание случайно: тот же запрос в следующий раз обычно проходит
+# (проверено на своих вопросах; repetition_penalty и maxItems его не убирают).
+LENGTH_ATTEMPTS = 3
 
 SEARCH_RECIPES: dict[str, object] = {
     "name": NAME,
@@ -196,8 +199,9 @@ class SearchPlanner:
         self._model = model
         self._vocabulary = frozenset(vocabulary)
         self._system: Message = {"role": "system", "content": system_prompt(vocabulary)}
-        # Модели с версией из ответов API: пишутся в отчёт eval.
+        # Модели с версией из ответов API и число повторов: пишутся в отчёт eval.
         self.served: set[str] = set()
+        self.retries = 0
 
     def plan(self, question: str, history: Sequence[Message] = ()) -> SearchArgs:
         messages: list[Message] = [
@@ -205,15 +209,20 @@ class SearchPlanner:
             *history[-HISTORY_LIMIT:],
             {"role": "user", "content": question},
         ]
-        completion = self._llm.chat(
-            messages,
-            model=self._model,
-            temperature=DETERMINISTIC_TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            functions=[SEARCH_RECIPES],
-            function_call={"name": NAME},
-        )
-        self.served.add(completion.model)
+        for attempt in range(LENGTH_ATTEMPTS):
+            if attempt:
+                self.retries += 1
+            completion = self._llm.chat(
+                messages,
+                model=self._model,
+                temperature=DETERMINISTIC_TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                functions=[SEARCH_RECIPES],
+                function_call={"name": NAME},
+            )
+            self.served.add(completion.model)
+            if completion.finish_reason != "length":
+                break
         call = completion.function_call
         if call is None or call["name"] != NAME:
             raise LlmError(

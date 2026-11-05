@@ -21,6 +21,7 @@ from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
 from assistant.tools.search_recipes import (
     HISTORY_LIMIT,
+    LENGTH_ATTEMPTS,
     NAME,
     SEARCH_RECIPES,
     SearchPlanner,
@@ -38,13 +39,18 @@ VOCABULARY = {
 
 
 class FakeLlm:
-    """Отвечает заданным вызовом функции и запоминает запросы."""
+    """Отвечает заданным вызовом функции и запоминает запросы. `loops` первых
+    ответов — зацикливание: пустой ответ с finish_reason length."""
 
     def __init__(
-        self, call: FunctionCall | None, finish_reason: str = "function_call"
+        self,
+        call: FunctionCall | None,
+        finish_reason: str = "function_call",
+        loops: int = 0,
     ) -> None:
         self.call = call
         self.finish_reason = finish_reason
+        self.loops = loops
         self.requests: list[dict[str, object]] = []
         self.stats = LlmStats()
 
@@ -68,6 +74,8 @@ class FakeLlm:
                 "response_format": response_format,
             }
         )
+        if len(self.requests) <= self.loops:
+            return Completion("", "length", f"{model}:1", Usage(10, max_tokens, 0, 0))
         return Completion(
             content="",
             finish_reason=self.finish_reason,
@@ -205,6 +213,27 @@ def test_planner_without_search_call_is_an_error(call: FunctionCall | None) -> N
 
     with pytest.raises(LlmError, match="finish_reason: stop"):
         SearchPlanner(llm, model="GigaChat-2-Pro", vocabulary=VOCABULARY).plan("борщ")
+
+
+def test_loop_is_retried_with_the_same_request() -> None:
+    """Зацикливание случайно: тот же запрос в следующий раз обычно проходит."""
+    llm = FakeLlm(search_call(query="суп без мяса", exclude=["мясо"]), loops=2)
+    planner = SearchPlanner(llm, model="GigaChat-2-Pro", vocabulary=VOCABULARY)
+
+    args = planner.plan("а без мяса?")
+
+    assert args.query == "суп без мяса"
+    assert planner.retries == 2
+    assert len({str(r) for r in llm.requests}) == 1
+
+
+def test_endless_loop_is_an_error_after_the_attempts() -> None:
+    llm = FakeLlm(search_call(query="суп"), loops=LENGTH_ATTEMPTS)
+    planner = SearchPlanner(llm, model="GigaChat-2-Pro", vocabulary=VOCABULARY)
+
+    with pytest.raises(LlmError, match="finish_reason: length"):
+        planner.plan("а без мяса?")
+    assert len(llm.requests) == LENGTH_ATTEMPTS
 
 
 def test_question_to_filtered_search(
