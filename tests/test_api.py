@@ -93,7 +93,7 @@ def test_empty_or_huge_question_is_rejected(question: str) -> None:
             EmbeddingError("cloud.ru ответил HTTP 402"),
             "поиск недоступен",
         ),
-        (LlmError("GigaChat ответил HTTP 402"), "модель GigaChat недоступна"),
+        (LlmError("GigaChat ответил HTTP 402"), "модель недоступна"),
         (httpx2.ConnectError("нет сети"), "внешний сервис не отвечает"),
     ],
 )

@@ -21,13 +21,13 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
-from assistant.generation.answer import load_prompt
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
     LlmError,
     Message,
 )
+from assistant.generation.prompt import load_prompt
 from assistant.retrieval.filters import IngredientFilter
 
 NAME = "search_recipes"

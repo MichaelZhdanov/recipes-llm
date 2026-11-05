@@ -1,14 +1,19 @@
-"""Ответ на вопрос со ссылками: поиск → промпт → GigaChat → проверка ссылок.
+"""Ответ на вопрос со ссылками на рецепты. Режим «всегда ищем» (решение 7):
 
-1. Поиск даёт топ-K кусков (этап 1).
-2. Каждый кусок проходит маскирование ПДн и экранирование и попадает в промпт
-   блоком `<source id="N">`. Ровно этот текст потом сверяется с цитатами.
-3. GigaChat отвечает JSON по схеме: утверждения с цитатами
-   (`citations.py`, промпт `prompts/answer_v1.md`).
-4. Код проверяет каждую цитату. Утверждение без подтверждённой цитаты
+1. Разбор вопроса с историей диалога в запрос и условия (`SearchPlanner`,
+   этап 2), поиск с фильтром — топ-K рецептов.
+2. Рецепты, которые ассистент уже называл в диалоге, восстанавливаются по
+   ссылкам povarenok.ru в его прошлых ответах: «сколько муки во втором?»
+   опирается на них.
+3. Каждый рецепт проходит маскирование ПДн и экранирование и попадает в
+   промпт блоком `<recipe id="N">`. Ровно этот текст потом сверяется с цитатами.
+4. Модель отвечает JSON по схеме (`citations.py`, промпт `prompts/recipes_v1.md`):
+   утверждения с цитатами — строками рецепта, «не нашёл» или болтовня.
+5. Код проверяет каждую цитату и числа. Утверждение без подтверждения
    удаляется, в источниках ответа остаются только процитированные рецепты.
-5. Если не осталось ни одного утверждения, ответ — «не нашёл», и к нему
-   прикладываются найденные рецепты: вдруг они всё же помогут.
+6. Если не осталось ни одного подтверждённого утверждения, ответ — «не
+   нашёл», и к нему прикладываются найденные рецепты: вдруг они всё же
+   помогут. Если «не нашёл» сказала сама модель, подсказок нет.
 
 Порога по score поиска нет: решение «есть ответ или нет» принимает модель,
 а код проверяет, что ответ подтверждён. Подобрать порог на 32 кейсах значило
@@ -19,8 +24,6 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import cache
-from pathlib import Path
 from typing import Literal
 
 import httpx2
@@ -39,16 +42,19 @@ from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
     Completion,
+    Message,
 )
 from assistant.generation.llm import llm_model, make_chat_model
+from assistant.generation.prompt import load_prompt
 from assistant.indexing.chunks import Chunk
+from assistant.indexing.dataset import recipe_ids_in
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
+from assistant.tools.search_recipes import HISTORY_LIMIT, SearchArgs, SearchPlanner
 
-PROMPTS_DIR = Path(__file__).parent / "prompts"
-PROMPT_VERSION = "answer_v1"
+PROMPT_VERSION = "recipes_v1"
 K = 5
 # Сколько найденных рецептов приложить к ответу «не нашёл».
 SUGGESTIONS = 3
@@ -59,7 +65,7 @@ MAX_TOKENS = 2000
 # - model_not_found — модель сама сказала, что в источниках ответа нет;
 # - filtered_out — модель ответила, но ни одна цитата не подтвердилась;
 # - format_error — ответ не по схеме;
-# - blacklist — сработали тематические ограничения GigaChat;
+# - blacklist — модель отказалась отвечать (ограничения GigaChat, отказ Claude);
 # - length — ответ упёрся в MAX_TOKENS;
 # - no_sources — поиск ничего не вернул (пустой индекс).
 Reason = Literal[
@@ -95,8 +101,10 @@ class AnswerStatement(BaseModel):
 class Answer(BaseModel):
     """Ответ для пользователя: то, что видят CLI и `POST /ask`."""
 
-    status: Literal["answer", "not_found"]
+    status: Literal["answer", "not_found", "chat"]
     reason: Reason | None
+    # Ответ на болтовню или подсказка модели при «не нашёл»; без фактов о рецептах.
+    message: str = ""
     statements: list[AnswerStatement]
     # У ответа — процитированные источники, у «не нашёл» — что может пригодиться.
     sources: list[SourceLink]
@@ -116,6 +124,8 @@ class Trace:
     checked: list[CheckedStatement]
     retrieval_seconds: float
     generation_seconds: float
+    # Во что разобран вопрос; None — без разбора (пересчёт старых прогонов).
+    args: SearchArgs | None = None
 
 
 @dataclass(frozen=True)
@@ -124,53 +134,58 @@ class AnswerResult:
     trace: Trace
 
 
-@cache
-def load_prompt(version: str) -> str:
-    return (PROMPTS_DIR / f"{version}.md").read_text(encoding="utf-8")
-
-
-_SOURCE_TAG = re.compile(r"<(/?source)", re.IGNORECASE)
+_RECIPE_TAG = re.compile(r"<(/?recipe)", re.IGNORECASE)
 
 
 def escape_source_text(text: str) -> str:
-    """Кусок не может закрыть свой блок: `</source>` в тексте становится `&lt;/source>`.
+    """Рецепт не может закрыть свой блок: `</recipe>` в тексте становится `&lt;/recipe>`.
 
-    Иначе документ мог бы «выйти» из блока данных и дописать промпт.
+    Иначе текст с сайта мог бы «выйти» из блока данных и дописать промпт.
     Переводы строк не меняются, номера строк сохраняются.
     """
-    return _SOURCE_TAG.sub(r"&lt;\1", text)
+    return _RECIPE_TAG.sub(r"&lt;\1", text)
 
 
-def prepare_sources(hits: Sequence[Hit]) -> list[SourceText]:
-    """Тексты ровно в том виде, в каком они уйдут в модель.
+def prepare_sources(
+    hits: Sequence[Hit], earlier: Sequence[Chunk] = ()
+) -> list[SourceText]:
+    """Тексты ровно в том виде, в каком они уйдут в модель: найденные сейчас,
+    потом названные раньше в диалоге (без повторов).
 
-    Маскирование здесь, а не только в клиенте GigaChat: цитаты сверяются
+    Маскирование здесь, а не только в клиенте LLM: цитаты сверяются
     с тем, что видела модель. Клиент маскирует ещё раз, это ничего не меняет.
     """
+    chunks = {hit.chunk.recipe_id: hit.chunk for hit in hits}
+    for chunk in earlier:
+        chunks.setdefault(chunk.recipe_id, chunk)
     return [
         SourceText(
             number=number,
-            chunk=hit.chunk,
-            text=escape_source_text(mask_pii(hit.chunk.text).text),
+            chunk=chunk,
+            text=escape_source_text(mask_pii(chunk.text).text),
         )
-        for number, hit in enumerate(hits, start=1)
+        for number, chunk in enumerate(chunks.values(), start=1)
     ]
 
 
 def user_message(question: str, sources: Sequence[SourceText]) -> str:
-    """Источники и вопрос."""
+    """Рецепты и вопрос."""
     # Название рецепта — первая строка текста, в атрибуты оно не идёт: это
     # текст с сайта, и только text проходит маскирование и экранирование.
-    blocks = [
-        f'<source id="{s.number}" recipe="{s.chunk.recipe_id}">\n{s.text}\n</source>'
-        for s in sources
-    ]
+    blocks = [f'<recipe id="{s.number}">\n{s.text}\n</recipe>' for s in sources]
     return "\n\n".join(
         [
-            "Источники:",
-            "\n\n".join(blocks),
+            "Рецепты:",
+            "\n\n".join(blocks) if blocks else "(ничего не нашлось)",
             f"Вопрос пользователя: {question}",
         ]
+    )
+
+
+def earlier_recipe_ids(history: Sequence[Message]) -> list[int]:
+    """id рецептов из ссылок в прошлых ответах ассистента."""
+    return recipe_ids_in(
+        "\n".join(m["content"] for m in history if m["role"] == "assistant")
     )
 
 
@@ -209,20 +224,32 @@ def suggestions(hits: Sequence[Hit], limit: int = SUGGESTIONS) -> list[SourceLin
     return [_link(n, h.chunk) for n, h in enumerate(hits[:limit], start=1)]
 
 
-def check_completion(
-    completion: Completion, sources: Sequence[SourceText]
-) -> tuple[list[CheckedStatement], Reason | None]:
+@dataclass(frozen=True)
+class Checked:
+    """Ответ модели после проверки кодом."""
+
+    checked: list[CheckedStatement]
+    reason: Reason | None
+    chat: bool = False
+    message: str = ""
+
+
+def check_completion(completion: Completion, sources: Sequence[SourceText]) -> Checked:
     """Разбирает ответ модели и проверяет ссылки. Без сети: так же работает пересчёт eval."""
     if completion.finish_reason != "stop":
-        return [], _FINISH_REASONS.get(completion.finish_reason, "format_error")
+        return Checked(
+            [], _FINISH_REASONS.get(completion.finish_reason, "format_error")
+        )
     try:
         parsed = ModelAnswer.model_validate_json(completion.content)
     except ValidationError:
-        return [], "format_error"
+        return Checked([], "format_error")
+    if parsed.status == "chat":
+        return Checked([], None, chat=True, message=parsed.message)
     if parsed.status == "not_found":
-        return [], "model_not_found"
+        return Checked([], "model_not_found", message=parsed.message)
     checked = check_answer(parsed, sources)
-    return checked, None if any(s.kept for s in checked) else "filtered_out"
+    return Checked(checked, None if any(s.kept for s in checked) else "filtered_out")
 
 
 def assemble(
@@ -234,20 +261,31 @@ def assemble(
     ref: str,
     retrieval_seconds: float = 0.0,
     generation_seconds: float = 0.0,
+    args: SearchArgs | None = None,
 ) -> AnswerResult:
     """Собирает ответ из найденного и ответа модели (None — модель не вызывалась)."""
-    if completion is None:
-        checked: list[CheckedStatement] = []
-        reason: Reason | None = "no_sources"
-    else:
-        checked, reason = check_completion(completion, sources)
-    if reason is None:
+    result = (
+        Checked([], "no_sources")
+        if completion is None
+        else check_completion(completion, sources)
+    )
+    checked, reason = result.checked, result.reason
+    # У болтовни нет ни утверждений, ни ссылок. Если модель сама сказала «не
+    # нашёл», найденное ей не подошло — подсказки из него только мешают
+    # («курс доллара» → салат «777»). При остальных отказах подсказки есть.
+    statements: list[AnswerStatement] = []
+    links: list[SourceLink] = []
+    if reason is not None:
+        links = [] if reason == "model_not_found" else suggestions(hits)
+    elif not result.chat:
         statements, links = build_statements(checked, sources)
-    else:
-        statements, links = [], suggestions(hits)
+    status: Literal["answer", "not_found", "chat"] = (
+        "chat" if result.chat else "answer" if reason is None else "not_found"
+    )
     answer = Answer(
-        status="answer" if reason is None else "not_found",
+        status=status,
         reason=reason,
+        message=result.message,
         statements=statements,
         sources=links,
         model=completion.model if completion else "",
@@ -261,6 +299,7 @@ def assemble(
         checked=checked,
         retrieval_seconds=retrieval_seconds,
         generation_seconds=generation_seconds,
+        args=args,
     )
     return AnswerResult(answer=answer, trace=trace)
 
@@ -284,21 +323,27 @@ class Answerer:
         self._ref = ref
         self._k = k
         self._clock = clock
+        # Разбор вопроса той же моделью, со словарём ингредиентов индекса.
+        self._planner = SearchPlanner(
+            llm, model=model, vocabulary=retriever.vocabulary()
+        )
 
-    def answer(self, question: str) -> AnswerResult:
+    def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
+        """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога."""
+        history = list(history)[-HISTORY_LIMIT:]
         started = self._clock()
-        hits = self._retriever.search(question, k=self._k)
+        args = self._planner.plan(question, history)
+        hits = self._retriever.search(args.query, k=self._k, conditions=args.conditions)
+        earlier = self._retriever.recipes(earlier_recipe_ids(history))
         retrieved = self._clock()
-        sources = prepare_sources(hits)
+        sources = prepare_sources(hits, earlier)
         completion = None
         if sources:
             completion = self._llm.chat(
                 [
                     {"role": "system", "content": load_prompt(self.prompt_version)},
-                    {
-                        "role": "user",
-                        "content": user_message(question, sources),
-                    },
+                    *history,
+                    {"role": "user", "content": user_message(question, sources)},
                 ],
                 model=self.model,
                 temperature=DETERMINISTIC_TEMPERATURE,
@@ -317,6 +362,7 @@ class Answerer:
             ref=self._ref,
             retrieval_seconds=retrieved - started,
             generation_seconds=self._clock() - retrieved if completion else 0.0,
+            args=args,
         )
 
 
@@ -324,7 +370,7 @@ _REASON_TEXT: dict[Reason, str] = {
     "model_not_found": "Не нашёл ответа в найденных источниках",
     "filtered_out": "Не нашёл ответа, который подтверждают источники",
     "no_sources": "Не нашёл ничего по вопросу",
-    "blacklist": "GigaChat не стал отвечать на этот вопрос (тематические ограничения)",
+    "blacklist": "Модель не стала отвечать на этот вопрос",
     "length": "Не получилось собрать ответ: он не уместился в лимит модели",
     "format_error": "Не получилось собрать ответ: модель ответила не по формату",
 }
@@ -335,9 +381,13 @@ def _source_lines(link: SourceLink) -> list[str]:
 
 
 def render_markdown(answer: Answer) -> str:
-    """Ответ текстом для консоли и чата: утверждения с [n], источники, пометка GigaChat."""
+    """Ответ текстом для консоли и чата: утверждения с [n] и ссылки на рецепты."""
+    if answer.status == "chat":
+        return answer.message
     if answer.reason is not None:
         lines = [f"{_REASON_TEXT[answer.reason]}."]
+        if answer.message:
+            lines.append(answer.message)
         if answer.sources:
             lines += ["", "Вот что может пригодиться:"]
     else:
@@ -345,13 +395,15 @@ def render_markdown(answer: Answer) -> str:
             f"{s.text} " + "".join(f"[{n}]" for n in s.sources)
             for s in answer.statements
         ]
-        lines += ["", "Источники:"]
+        lines += ["", "Рецепты:"]
     for link in answer.sources:
         lines += _source_lines(link)
-    if answer.model:
+    # Пометка о сервисе — условие Freemium GigaChat (п. 5.4 соглашения);
+    # у Claude её нет (решение автора).
+    if answer.model.startswith("GigaChat"):
         lines += [
             "",
-            f"Ответ сгенерирован GigaChat ({answer.model}) по найденным источникам.",
+            f"Ответ сгенерирован GigaChat ({answer.model}) по найденным рецептам.",
         ]
     return "\n".join(lines)
 

@@ -6,6 +6,9 @@ k разных рецептов. Условия «с чем и без чего»
 проверяет Qdrant, векторы ранжируют то, что прошло фильтр.
 """
 
+from collections.abc import Sequence
+
+from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import (
@@ -30,3 +33,11 @@ class Retriever:
     ) -> list[Hit]:
         vector = self._embedder.embed_query(question)
         return self._store.search(vector, limit=k, conditions=conditions)
+
+    def vocabulary(self) -> dict[str, int]:
+        """Словарь ингредиентов индекса — для разбора вопроса."""
+        return self._store.vocabulary()
+
+    def recipes(self, ids: Sequence[int]) -> list[Chunk]:
+        """Рецепты по id — найденные раньше в диалоге."""
+        return self._store.recipes(ids)

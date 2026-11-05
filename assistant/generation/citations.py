@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from assistant.indexing.chunks import Chunk
 
-# --- Формат ответа модели (JSON по схеме, см. prompts/answer_v1.md) ---
+# --- Формат ответа модели (JSON по схеме, см. prompts/recipes_v1.md) ---
 
 
 class Citation(BaseModel):
@@ -51,27 +51,37 @@ class Statement(BaseModel):
 class ModelAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["answer", "not_found"]
+    # answer — утверждения с цитатами; not_found — ответа в рецептах нет;
+    # chat — болтовня («привет», «спасибо»), без поиска фактов.
+    status: Literal["answer", "not_found", "chat"]
+    # Короткий текст без фактов о рецептах: ответ на болтовню или подсказка,
+    # что спросить, при not_found. При answer — пустой.
+    message: str = ""
     statements: list[Statement]
 
 
-# Та же схема в JSON Schema для `response_format` GigaChat. Написана руками,
-# а не через ModelAnswer.model_json_schema(): та выдаёт $defs и $ref, а их
-# поддержку в GigaChat мы не проверяли. Совпадение с моделью проверяет тест.
+# Та же схема в JSON Schema для `response_format`. Написана руками, а не через
+# ModelAnswer.model_json_schema(): та выдаёт $defs и $ref, а их поддержку
+# в GigaChat мы не проверяли. Claude требует additionalProperties: false
+# у каждого объекта. Совпадение с моделью проверяет тест.
 ANSWER_SCHEMA: dict[str, object] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
-        "status": {"type": "string", "enum": ["answer", "not_found"]},
+        "status": {"type": "string", "enum": ["answer", "not_found", "chat"]},
+        "message": {"type": "string"},
         "statements": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "text": {"type": "string"},
                     "citations": {
                         "type": "array",
                         "items": {
                             "type": "object",
+                            "additionalProperties": False,
                             "properties": {
                                 "source": {"type": "integer"},
                                 "quote": {"type": "string"},
@@ -84,7 +94,7 @@ ANSWER_SCHEMA: dict[str, object] = {
             },
         },
     },
-    "required": ["status", "statements"],
+    "required": ["status", "message", "statements"],
 }
 
 

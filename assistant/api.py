@@ -2,9 +2,9 @@
 
 Запуск: `uvicorn assistant.api:create_app --factory`.
 
-- `GET /health` — процесс жив; Qdrant, ключи и GigaChat здесь не нужны.
+- `GET /health` — процесс жив; Qdrant, ключи и LLM здесь не нужны.
 - `POST /ask {"question": "…"}` — ответ со ссылками, тот же, что у `make ask`.
-  Если Qdrant, API эмбеддингов или GigaChat недоступны, ответ 503 с короткой
+  Если Qdrant, API эмбеддингов или LLM недоступны, ответ 503 с короткой
   причиной, подробности — в лог сервиса.
 
 Входа здесь нет: порт сервиса опубликован только на 127.0.0.1, а
@@ -137,10 +137,10 @@ def create_app(
             logger.error("поиск недоступен: %s", error)
             raise HTTPException(503, "поиск недоступен") from error
         except LlmError as error:
-            logger.error("GigaChat недоступен: %s", error)
-            raise HTTPException(503, "модель GigaChat недоступна") from error
+            logger.error("LLM недоступна: %s", error)
+            raise HTTPException(503, "модель недоступна") from error
         except httpx2.TransportError as error:
-            # Сеть до API эмбеддингов или GigaChat: повторы уже не помогли.
+            # Сеть до API эмбеддингов или LLM: повторы уже не помогли.
             logger.error("внешний сервис не отвечает: %s", error)
             raise HTTPException(503, "внешний сервис не отвечает") from error
 
