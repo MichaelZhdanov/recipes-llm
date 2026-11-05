@@ -15,44 +15,18 @@ def test_defaults_without_environment() -> None:
     assert settings.embedding_provider == "cloudru"
     # Пустая модель: берётся модель провайдера по умолчанию.
     assert settings.embedding_model == ""
-    assert settings.engineer_telegram_ids == frozenset()
     assert settings.escalation_chat_id is None
     assert settings.gigachat_api_key.get_secret_value() == ""
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("1, 2,3", {1, 2, 3}),
-        ("42", {42}),
-        (" 7 , ,8 ", {7, 8}),
-    ],
-)
-def test_engineer_ids_are_parsed_from_comma_separated_string(
-    monkeypatch: pytest.MonkeyPatch, raw: str, expected: set[int]
-) -> None:
-    monkeypatch.setenv("ENGINEER_TELEGRAM_IDS", raw)
-
-    assert Settings().engineer_telegram_ids == frozenset(expected)
-
-
-def test_engineer_ids_reject_non_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ENGINEER_TELEGRAM_IDS", "1,abc")
-
-    with pytest.raises(ValidationError):
-        Settings()
 
 
 def test_empty_values_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ESCALATION_CHAT_ID", "")
     monkeypatch.setenv("DATASET_REVISION", "")
-    monkeypatch.setenv("ENGINEER_TELEGRAM_IDS", "")
 
     settings = Settings()
 
     assert settings.escalation_chat_id is None
     assert settings.dataset_revision == "ffaf49ee7439afe6dbf0653714ceacb9b57ff830"
-    assert settings.engineer_telegram_ids == frozenset()
 
 
 def test_negative_chat_id_for_telegram_groups(monkeypatch: pytest.MonkeyPatch) -> None:

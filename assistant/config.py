@@ -5,10 +5,10 @@
 Список переменных с пояснениями лежит в `.env.example`.
 """
 
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import SecretStr, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Пока один провайдер LLM; другие — S2 из плана (смена модели).
 LlmProvider = Literal["gigachat"]
@@ -63,13 +63,4 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.
     escalation_chat_id: int | None = None
-    # NoDecode: без него pydantic-settings ждёт JSON вида "[1, 2]", а в .env привычнее "1,2".
-    engineer_telegram_ids: Annotated[frozenset[int], NoDecode] = frozenset()
     log_level: LogLevel = "INFO"
-
-    @field_validator("engineer_telegram_ids", mode="before")
-    @classmethod
-    def _split_comma_separated(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return value
