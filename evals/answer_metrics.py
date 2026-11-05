@@ -153,6 +153,15 @@ class AnswerRun:
 class AnswerCase:
     case: Case
     runs: list[AnswerRun]
+    # Есть ли в индексе рецепты, на которые ссылается уточнение («сколько муки
+    # во втором?»); False — на этом индексе кейс не проверить (выборка из
+    # датасета), и в метрики он не идёт. None — не проверялось.
+    available: bool | None = None
+
+
+def needs_earlier_recipes(case: Case) -> bool:
+    """Уточнение, ответ на которое — в рецепте из прошлого ответа."""
+    return case.category == "follow_up" and bool(case.must_include)
 
 
 def only_run(results: Sequence[AnswerCase], run: int) -> list[AnswerCase]:
@@ -168,8 +177,14 @@ def per_run(
 
 
 def _runs(results: Iterable[AnswerCase], categories: Iterable[str]) -> list[AnswerRun]:
+    """Прогоны кейсов этих категорий, кроме кейсов, которые на индексе не проверить."""
     wanted = set(categories)
-    return [run for r in results if r.case.category in wanted for run in r.runs]
+    return [
+        run
+        for r in results
+        if r.case.category in wanted and r.available is not False
+        for run in r.runs
+    ]
 
 
 def _citations(results: Sequence[AnswerCase]) -> list[CheckedCitation]:
@@ -265,6 +280,8 @@ def must_include_found(results: Sequence[AnswerCase]) -> Rate:
     """
     k = n = 0
     for r in results:
+        if r.available is False:
+            continue
         for run in r.runs:
             for fact in r.case.must_include:
                 n += 1

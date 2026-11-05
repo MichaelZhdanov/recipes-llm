@@ -71,6 +71,7 @@ from assistant.indexing.dataset import (
     ensure_dataset,
     known_sha256,
     read_dataset,
+    recipe_ids_in,
 )
 from assistant.retrieval.embeddings import EmbeddingStats, make_embedder
 from assistant.retrieval.filters import IngredientFilter
@@ -79,7 +80,7 @@ from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from assistant.tools.search_recipes import PROMPT_VERSION as SEARCH_PROMPT
 from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 from evals import progress
-from evals.answer_metrics import AnswerCase, AnswerRun
+from evals.answer_metrics import AnswerCase, AnswerRun, needs_earlier_recipes
 from evals.dataset import (
     CANARIES_FILE,
     CLARITY_CANARIES_FILE,
@@ -224,6 +225,7 @@ def answer_records(
             ],
             "checked": [dataclasses.asdict(s) for s in run.checked],
             "searches": [dataclasses.asdict(args) for args in run.searches],
+            "available": r.available,
             "judge": (
                 dataclasses.asdict(verdicts[(r.case.id, number)])
                 if (r.case.id, number) in verdicts
@@ -347,10 +349,13 @@ def load_answer_cases(
     records: Sequence[dict[str, Any]], cases: dict[str, Case]
 ) -> list[AnswerCase]:
     runs: dict[str, list[AnswerRun]] = {}
+    available: dict[str, bool | None] = {}
     for record in records:
         runs.setdefault(record["id"], []).append(load_answer_run(record))
+        available[record["id"]] = record.get("available")
     return [
-        AnswerCase(cases[case_id], case_runs) for case_id, case_runs in runs.items()
+        AnswerCase(cases[case_id], case_runs, available[case_id])
+        for case_id, case_runs in runs.items()
     ]
 
 
@@ -392,6 +397,28 @@ def _no_cases(directory: Path, categories: frozenset[str]) -> int:
     """Прогонять нечего: понятное сообщение и код 2, а не пустой отчёт."""
     _log(f"нет кейсов в {directory} для категорий {', '.join(sorted(categories))}")
     return 2
+
+
+def mark_answerable(
+    results: Sequence[AnswerCase], retriever: Retriever
+) -> list[AnswerCase]:
+    """Отмечает уточнения, рецептов прошлого ответа которых нет в индексе.
+
+    На выборке из датасета их нет почти никогда: ассистент честно говорит
+    «не нашёл», и это не ложный отказ. Рецепты не подставляются из датасета:
+    тогда проверялась бы не та система, что работает у пользователя.
+    """
+    marked = []
+    for r in results:
+        if not needs_earlier_recipes(r.case):
+            marked.append(r)
+            continue
+        ids = recipe_ids_in(
+            "\n".join(turn.text for turn in r.case.turns if turn.role == "assistant")
+        )
+        found = {chunk.recipe_id for chunk in retriever.recipes(ids)}
+        marked.append(dataclasses.replace(r, available=set(ids) <= found))
+    return marked
 
 
 def run_answers(
@@ -653,6 +680,7 @@ def _answer_stage(
 
         try:
             results = run_answers(cases, answerer, runs=runs, done=done, on_case=save)
+            results = mark_answerable(results, retriever)
             judging = _judge(settings, results, judge_choice) if judge else None
         except BaseException:
             # Готовые кейсы уже в журнале: подсказываем, как продолжить, и падаем как раньше.

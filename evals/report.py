@@ -708,6 +708,21 @@ def render_answer_report(
             f"{sum(c.valid for c in cited)} / {len(cited)} |"
         )
 
+    unanswerable = [r for r in results if r.available is False]
+    if unanswerable:
+        lines += [
+            "",
+            f"## Уточнения про рецепты не из индекса ({len(unanswerable)}) — не в метриках",
+            "",
+            "Рецептов прошлого ответа нет в индексе (выборка из датасета): ассистенту",
+            "не по чему отвечать. На полном индексе эти кейсы проверяются.",
+            "",
+        ]
+        lines += [
+            f"- {r.case.id} — «{r.case.question}»: "
+            + ", ".join(_outcome_cell(run) for run in r.runs)
+            for r in unanswerable
+        ]
     lines += _problem_sections(results)
     lines += _judge_sections(results, judging)
     return "\n".join(lines).rstrip() + "\n"

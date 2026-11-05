@@ -322,3 +322,16 @@ def test_claude_cost_counts_input_cache_and_output_separately() -> None:
     # 10k × $0.10 + 2k × $0.50 + 100k × $0.01 за 1M = $0.003.
     assert cost_usd("claude-haiku-5-5", stats) == pytest.approx(0.003)
     assert cost_usd("GigaChat-2-Pro", stats) is None
+
+
+def test_follow_up_about_a_recipe_not_in_the_index_is_not_counted() -> None:
+    """«Сколько муки во втором?», а второго рецепта нет в выборке: честное
+    «не нашёл» — не ложный отказ, и must_include его не касается."""
+    follow_up = case("follow_up-003", "follow_up", must_include=["50 г"])
+    results = [
+        AnswerCase(follow_up, [run("model_not_found")], available=False),
+        AnswerCase(case("include-001", "include"), [run(None)]),
+    ]
+
+    assert false_refusal(results) == Rate(0, 1)
+    assert must_include_found(results) == Rate(0, 0)

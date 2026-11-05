@@ -2,6 +2,7 @@ import dataclasses
 import json
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import pytest
 from eval_helpers import CHUNK, MANIFEST, SOURCES, answered, case, found, result
@@ -21,6 +22,7 @@ from evals.run import (
     answer_records,
     load_answer_run,
     load_meta,
+    mark_answerable,
     meta_record,
     pick_cases,
     raw_records,
@@ -212,3 +214,33 @@ def test_rescore_keeps_earlier_recipes_and_searches() -> None:
 
     assert [s.chunk.recipe_id for s in restored.sources] == [CHUNK.recipe_id, 99]
     assert restored.searches == searches
+
+
+def test_follow_ups_are_marked_by_whether_their_recipes_are_in_the_index() -> None:
+    """Уточнению нужны рецепты из прошлого ответа: нет их в индексе — кейс не проверить."""
+
+    class Index:
+        def recipes(self, ids: list[int]) -> list[Any]:
+            return [CHUNK.model_copy(update={"recipe_id": i}) for i in ids if i == 1]
+
+    def follow_up(case_id: str, url_id: int) -> AnswerCase:
+        kase = case(
+            case_id,
+            "follow_up",
+            must_include=["50 г"],
+            turns=[
+                {"role": "user", "text": "что испечь?"},
+                {
+                    "role": "assistant",
+                    "text": f"https://www.povarenok.ru/recipes/show/{url_id}/",
+                },
+            ],
+        )
+        return AnswerCase(kase, [])
+
+    marked = mark_answerable(
+        [follow_up("follow_up-001", 1), follow_up("follow_up-002", 2)],
+        Index(),  # type: ignore[arg-type]
+    )
+
+    assert [r.available for r in marked] == [True, False]
