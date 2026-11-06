@@ -23,8 +23,10 @@ from assistant import __version__
 TIMEOUT = 5.0
 # Страница рецепта — около 400 КБ; больше — не страница рецепта.
 MAX_BYTES = 2_000_000
-# Фото отдаём в Telegram только с сайта рецептов: адрес берётся из чужого HTML.
+# Фото берём только с сайта рецептов: адрес берётся из чужого HTML.
 PHOTO_PREFIX = "https://www.povarenok.ru/"
+# Telegram принимает фото до 10 МБ; фото блюда на povarenok — около 100 КБ.
+MAX_PHOTO_BYTES = 5_000_000
 
 
 @dataclass(frozen=True)
@@ -95,3 +97,26 @@ def fetch_card(client: httpx2.Client, url: str) -> RecipeCard | None:
         return None
     # Кодировка — из заголовка (windows-1251 у povarenok); httpx2 её учитывает.
     return parse_card(response.text)
+
+
+def fetch_photo(client: httpx2.Client, url: str) -> bytes | None:
+    """Фото блюда скачивает сам бот и отдаёт Telegram файлом: по ссылке Telegram
+    забирает картинки povarenok через раз («failed to get HTTP URL content»).
+    None — не с сайта рецептов, не 200, не картинка или слишком велика."""
+    if not url.startswith(PHOTO_PREFIX):
+        return None
+    try:
+        response = client.get(
+            url,
+            follow_redirects=False,
+            timeout=TIMEOUT,
+            headers={"User-Agent": f"recipes-llm/{__version__}"},
+        )
+    except httpx2.HTTPError:
+        return None
+    image = response.headers.get("Content-Type", "").startswith("image/")
+    if response.status_code != 200 or not image:
+        return None
+    if len(response.content) > MAX_PHOTO_BYTES:
+        return None
+    return response.content

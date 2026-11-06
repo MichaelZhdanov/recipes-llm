@@ -2,7 +2,14 @@
 
 import httpx2
 
-from assistant.bot.recipe_page import MAX_BYTES, RecipeCard, fetch_card, parse_card
+from assistant.bot.recipe_page import (
+    MAX_BYTES,
+    MAX_PHOTO_BYTES,
+    RecipeCard,
+    fetch_card,
+    fetch_photo,
+    parse_card,
+)
 
 URL = "https://www.povarenok.ru/recipes/show/1/"
 # Синтетическая страница с той же разметкой, что у povarenok.ru.
@@ -62,3 +69,23 @@ def test_page_in_windows_1251_is_decoded_and_bad_answers_give_no_card() -> None:
     assert fetch_card(page, URL) == parse_card(PAGE)
     assert fetch_card(client(404, b""), URL) is None
     assert fetch_card(client(200, b"x" * (MAX_BYTES + 1)), URL) is None
+
+
+def image(status: int, body: bytes, content_type: str = "image/jpeg") -> httpx2.Client:
+    return httpx2.Client(
+        transport=httpx2.MockTransport(
+            lambda request: httpx2.Response(
+                status, content=body, headers={"Content-Type": content_type}
+            )
+        )
+    )
+
+
+def test_photo_is_downloaded_only_from_the_recipe_site_and_only_if_an_image() -> None:
+    photo = "https://www.povarenok.ru/data/main.jpg"
+
+    assert fetch_photo(image(200, b"jpeg"), photo) == b"jpeg"
+    assert fetch_photo(image(200, b"jpeg"), "https://evil.example/x.jpg") is None
+    assert fetch_photo(image(200, b"<html>", "text/html"), photo) is None
+    assert fetch_photo(image(404, b""), photo) is None
+    assert fetch_photo(image(200, b"x" * (MAX_PHOTO_BYTES + 1)), photo) is None

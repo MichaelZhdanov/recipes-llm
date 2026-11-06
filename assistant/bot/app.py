@@ -34,6 +34,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -55,7 +56,7 @@ from assistant.bot.format import (
 )
 from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
 from assistant.bot.pages import PageChecker
-from assistant.bot.recipe_page import fetch_card
+from assistant.bot.recipe_page import fetch_card, fetch_photo
 from assistant.bot.service import ERROR_REPLY, BotService, RecipeLookup, Reply
 from assistant.bot.store import Store, Vote, VoteReason
 from assistant.config import Settings
@@ -245,10 +246,11 @@ class Handlers:
             reply = ERROR_REPLY
         if reply.photo is not None:
             try:
-                await bot.send_photo(chat_id, reply.photo, caption=reply.text)
+                photo = BufferedInputFile(reply.photo, filename="recipe.jpg")
+                await bot.send_photo(chat_id, photo, caption=reply.text)
                 return
             except TelegramBadRequest:
-                # Telegram не смог забрать фото по адресу — тогда без фото.
+                # Telegram не принял картинку — тогда без фото.
                 logger.warning("фото рецепта не отправилось", exc_info=True)
         await bot.send_message(chat_id, reply.text)
 
@@ -354,6 +356,7 @@ async def run(settings: Settings) -> None:
         recipes=recipe_lookup(VectorStore(qdrant)),
         make_steps=lambda text: make_steps(text, writer, reviewer),
         fetch_card=lambda url: fetch_card(pages_http, url),
+        fetch_photo=lambda url: fetch_photo(pages_http, url),
         gigachat_note=settings.llm_provider == "gigachat",
     )
     bot = make_bot(token)

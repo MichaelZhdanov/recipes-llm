@@ -44,8 +44,8 @@ class Reply:
     text: str
     buttons: Keyboard = field(default_factory=list)
     answer_id: int | None = None
-    # Фото к сообщению (адрес на povarenok.ru); текст тогда — подпись.
-    photo: str | None = None
+    # Фото к сообщению — сама картинка (скачана с povarenok.ru); текст — подпись.
+    photo: bytes | None = None
 
 
 ERROR_REPLY = Reply(ERROR_TEXT)
@@ -57,6 +57,8 @@ RecipeLookup = Callable[[int], Chunk | None]
 StepsMaker = Callable[[str], Steps]
 # Карточка страницы рецепта по адресу: recipe_page.fetch_card; None — не вышло.
 CardFetcher = Callable[[str], RecipeCard | None]
+# Фото по адресу: recipe_page.fetch_photo; None — не вышло.
+PhotoFetcher = Callable[[str], bytes | None]
 # Кэш шагов сбрасывается, когда меняется любой из двух промптов.
 STEPS_VERSION = f"{steps_module.PROMPT_VERSION}+{steps_module.REVIEW_PROMPT_VERSION}"
 
@@ -71,6 +73,7 @@ class BotService:
         recipes: RecipeLookup,
         make_steps: StepsMaker,
         fetch_card: CardFetcher,
+        fetch_photo: PhotoFetcher,
         gigachat_note: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -80,6 +83,7 @@ class BotService:
         self.recipes = recipes
         self.make_steps = make_steps
         self.fetch_card = fetch_card
+        self.fetch_photo = fetch_photo
         self.gigachat_note = gigachat_note
         self._clock = clock
 
@@ -194,9 +198,10 @@ class BotService:
                 self.store.save_card(recipe.url, card)
         if card is None:
             return Reply(card_caption(recipe.name, recipe.url, 0, 0))
+        # Фото не кэшируется: оно около 100 КБ, а нажимают кнопку редко.
         return Reply(
             card_caption(recipe.name, recipe.url, card.steps, card.step_photos),
-            photo=card.photo,
+            photo=self.fetch_photo(card.photo) if card.photo else None,
         )
 
     def _new_steps(self, recipe: Chunk) -> SavedSteps | None:

@@ -29,6 +29,7 @@ from aiogram.methods import (
     TelegramMethod,
 )
 from aiogram.methods.base import TelegramType
+from aiogram.types import BufferedInputFile
 from chunk_helpers import make_chunk
 from pydantic import SecretStr
 
@@ -137,6 +138,7 @@ class RecordingStore(Store):
 
 
 PHOTO = "https://www.povarenok.ru/data/pie.jpg"
+PHOTO_BYTES = b"\xff\xd8 jpeg"
 # Рецепт 1 ответа — с живой страницей; в индексе — с тем же адресом.
 PIE = make_chunk("Блины на молоке", {"Молоко": "500 мл"}, recipe_id=1).model_copy(
     update={"url": ALIVE}
@@ -195,6 +197,7 @@ def make_service(
         recipes=index.get,
         make_steps=steps or FakeSteps(),
         fetch_card=cards or FakeCards(),
+        fetch_photo=lambda url: PHOTO_BYTES if url == PHOTO else None,
     )
 
 
@@ -642,7 +645,7 @@ def test_card_is_fetched_once_and_shown_with_the_dish_photo() -> None:
     reply = service.card(7, answer_id, 1)
     again = service.card(7, answer_id, 1)
 
-    assert reply.photo == PHOTO
+    assert reply.photo == PHOTO_BYTES
     assert "На странице — 6 шагов, из них с фото — 5." in reply.text
     assert again == reply and cards.urls == [ALIVE]
     assert service.card(8, answer_id, 1).text == GONE_TEXT
@@ -668,5 +671,7 @@ def test_card_button_sends_the_photo_with_a_caption() -> None:
     telegram = feed(service, press("card:1:1", message_id=101))
 
     (photo,) = [m for m in telegram.calls if isinstance(m, SendPhoto)]
-    assert photo.photo == PHOTO
+    # Картинку скачал бот и отдал файлом: по ссылке Telegram её не всегда забирает.
+    assert isinstance(photo.photo, BufferedInputFile)
+    assert photo.photo.data == PHOTO_BYTES
     assert "Смотреть пошагово на povarenok.ru" in (photo.caption or "")
