@@ -218,6 +218,9 @@ def load_cases(directory: Path = DATASET_DIR) -> list[Case]:
 RETIRED_CANARIES = {
     "canary-043": "2026-11-06, автор: зачем нужен общеизвестный продукт "
     "(«желатин — чтобы застыло») — не ошибка, а общеизвестное о продукте",
+    "relevance-036": "2026-11-06, автор: кофейная выпечка к кофе подходит — "
+    "напиток как вкусовая добавка не мешает; не подходит то, что на напитке "
+    "готовят (мясо, тушённое в вине)",
 }
 
 
@@ -235,11 +238,12 @@ def load_clarity_canaries(file: Path = CLARITY_CANARIES_FILE) -> list[ClarityCan
 
 
 def load_relevance_canaries(
-    file: Path = RELEVANCE_CANARIES_FILE,
+    file: Path = RELEVANCE_CANARIES_FILE, *, retired: bool = False
 ) -> list[RelevanceCanary]:
+    """Канарейки релевантности; устаревшие (RETIRED_CANARIES) — только с retired=True."""
     canaries = [RelevanceCanary.model_validate(item) for item in _read_list(file)]
     _check_unique([canary.id for canary in canaries])
-    return canaries
+    return [c for c in canaries if retired or c.id not in RETIRED_CANARIES]
 
 
 def load_steps_canaries(file: Path = STEPS_CANARIES_FILE) -> list[StepsCanary]:
