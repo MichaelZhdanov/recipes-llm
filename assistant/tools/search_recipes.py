@@ -33,7 +33,7 @@ from assistant.retrieval.filters import IngredientFilter
 NAME = "search_recipes"
 # v1 — только имена; v2 — имена с частотами, альтернативы одного продукта
 # в одной группе, query без опечаток (evals/reports/2026-11-05-stage2.md).
-PROMPT_VERSION = "search_v2"
+PROMPT_VERSION = "search_v3"
 # Число рецептов, которое модель может скопировать вместе с именем из словаря.
 _COUNT_SUFFIX = re.compile(r"\s*[—-]\s*\d+$")
 # Сколько последних реплик диалога видит разбор (решение 30).
@@ -208,11 +208,18 @@ class SearchPlanner:
         self.retries = 0
         self.fallbacks = 0
 
-    def plan(self, question: str, history: Sequence[Message] = ()) -> SearchArgs:
+    def plan(
+        self, question: str, history: Sequence[Message] = (), note: str = ""
+    ) -> SearchArgs:
+        """note — замечание проверки ответа: прошлый поиск нашёл не то (правило 8)."""
+        content = question
+        if note:
+            # Текст модели: из блока данных тегом не выйти.
+            content += f"\n\n<review>\n{note.replace('<', '&lt;')}\n</review>"
         messages: list[Message] = [
             self._system,
             *history[-HISTORY_LIMIT:],
-            {"role": "user", "content": question},
+            {"role": "user", "content": content},
         ]
         for attempt in range(LENGTH_ATTEMPTS):
             if attempt:
