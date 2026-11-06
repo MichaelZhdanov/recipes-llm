@@ -58,7 +58,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
     environment: prod
-    # Первая сборка полного индекса на сервере — до 40 минут (≈1 100 запросов к API).
+    # Сборка полного индекса на сервере (только с ALLOW_INDEX_REBUILD) — около часа.
     timeout-minutes: 90
     # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
     concurrency:
@@ -74,6 +74,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ESCALATION_CHAT_ID: ${{ secrets.ESCALATION_CHAT_ID }}
+          # Переменная Actions, не секрет: 1 — деплою можно пересобрать индекс
+          # (≈ 200 ₽); 0 или не задана — нельзя, снимок грузит deploy/upload_index.sh.
+          ALLOW_INDEX_REBUILD: ${{ vars.ALLOW_INDEX_REBUILD }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
@@ -87,7 +90,9 @@ jobs:
           # скрипта, даже если клон на сервере старый (или скрипта там ещё нет).
           remote="cd /opt/recipes-llm && git fetch --quiet origin main"
           remote="$remote && git checkout --quiet --detach $GITHUB_SHA"
-          remote="$remote && deploy/deploy.sh $GITHUB_SHA"
+          rebuild=""
+          if [ "$ALLOW_INDEX_REBUILD" = "1" ]; then rebuild=" --rebuild-index"; fi
+          remote="$remote && deploy/deploy.sh $GITHUB_SHA$rebuild"
           # Ключ сервера не проверяется (решение автора): сервер может переезжать.
           # Ключи API — в stdin, а не в команде: так их не видно в ps на
           # сервере. Незаданный в GitHub ключ не передаётся, и в .env на

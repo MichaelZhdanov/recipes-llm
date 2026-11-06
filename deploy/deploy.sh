@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Деплой на сервере: deploy/deploy.sh <коммит>. Запускается от root.
+# Деплой на сервере: deploy/deploy.sh <коммит> [--rebuild-index]. Запускается от root.
 #
 # GitHub Actions сначала переводит клон на коммит, потом вызывает скрипт:
 #   printf 'GIGACHAT_API_KEY=%s\n' … | ssh root@<сервер> \
@@ -9,7 +9,13 @@
 # процессов (ps), stdin — нет.
 #
 # Шаги: ключи API в .env → код ровно того коммита, что проверил CI →
-# стек (Qdrant и бот) → датасет и индекс, если их ещё нет → состояние сервисов.
+# стек (Qdrant и бот) → индекс тот? → состояние сервисов.
+#
+# Индекс сам не строится: полная сборка — ≈ 200 ₽ эмбеддингов и около часа, а
+# снимок уже посчитан локально и загружается deploy/upload_index.sh. Индекса
+# нет или он не тот — деплой падает с подсказкой. Строит только с флагом
+# --rebuild-index: его передаёт CI, если переменная Actions ALLOW_INDEX_REBUILD
+# равна 1 (по умолчанию 0).
 #
 # Весь код — в функции main: bash читает скрипт по ходу выполнения, а git
 # checkout ниже может заменить этот самый файл. Функцию bash разбирает целиком
@@ -17,11 +23,11 @@
 set -euo pipefail
 
 main() {
-    if [[ $# -ne 1 ]]; then
-        echo "использование: $0 <коммит>  (ключи API — в stdin)" >&2
+    if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--rebuild-index" ) ]]; then
+        echo "использование: $0 <коммит> [--rebuild-index]  (ключи API — в stdin)" >&2
         exit 2
     fi
-    local sha="$1"
+    local sha="$1" rebuild="${2:-}"
 
     cd "$(dirname "$(readlink -f "$0")")/.."
     # Два деплоя (из CI и ручной) не идут одновременно: оба могут строить индекс.
@@ -46,12 +52,24 @@ main() {
     docker compose rm --stop --force assistant
     make --no-print-directory up
 
-    # Индекс строится, только если его нет или он для другой ревизии, модели
-    # или размера выборки (INDEX_SAMPLE в .env сервера; пусто — весь датасет).
-    # YES=1: сборку на сервере уже подтвердил push в main.
-    echo "== датасет и индекс (если их ещё нет)"
-    make --no-print-directory data
-    make --no-print-directory index-if-needed YES=1
+    # Индекс тот, если совпадают ревизия, модель и размер выборки (INDEX_SAMPLE
+    # в .env сервера; пусто — весь датасет).
+    echo "== индекс"
+    if make --no-print-directory index-check; then
+        :
+    elif [[ "$rebuild" == "--rebuild-index" ]]; then
+        # YES=1: сборку дороже 50 ₽ явно разрешили переменной в GitHub.
+        echo "== пересборка индекса разрешена (ALLOW_INDEX_REBUILD)"
+        make --no-print-directory data
+        make --no-print-directory index-if-needed YES=1
+    else
+        echo "Индекса на сервере нет или он не тот, а пересборка не разрешена." >&2
+        echo "  Загрузить снимок с машины, где лежит index/: deploy/upload_index.sh" >&2
+        echo "  (спросит IP сервера и путь к ключу ssh), потом снова деплой." >&2
+        echo "  Или пересобрать (≈ 200 ₽, около часа): переменная ALLOW_INDEX_REBUILD=1" >&2
+        echo "  в GitHub (Settings → Environments → prod → Variables) и Run workflow." >&2
+        exit 1
+    fi
 
     # make up уже дождался healthy (--wait): здесь — только что запущено.
     echo "== проверка"

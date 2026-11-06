@@ -145,3 +145,54 @@ def test_rerun_updates_the_clone_even_after_a_deploy(tmp_path: Path) -> None:
 
     assert update_repo(origin, app_dir).returncode == 0
     assert (app_dir / "deploy" / "deploy.sh").exists()
+
+
+def test_deploy_accepts_only_the_rebuild_flag(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY / "deploy.sh"), "abc123", "--yes-rebuild"],
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--rebuild-index" in result.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ci_allows_index_rebuild_only_when_variable_is_1() -> None:
+    """Полная сборка индекса стоит ≈ 200 ₽: по умолчанию деплой её не делает."""
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+    assert "ALLOW_INDEX_REBUILD: ${{ vars.ALLOW_INDEX_REBUILD }}" in ci
+    assert '[ "$ALLOW_INDEX_REBUILD" = "1" ]; then rebuild=" --rebuild-index"' in ci
+    deploy = (DEPLOY / "deploy.sh").read_text()
+    # Сборка — только в ветке с флагом, после проверки индекса.
+    assert deploy.index("index-check") < deploy.index('"--rebuild-index" ]]; then')
+    assert deploy.count("index-if-needed YES=1") == 1
+
+
+@pytest.mark.parametrize(
+    ("stdin", "message"),
+    [
+        ("", "две строки"),
+        ("203.0.113.7\n/nonexistent/key\n", "ключ не читается"),
+    ],
+)
+def test_upload_index_needs_host_and_readable_key(stdin: str, message: str) -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY / "upload_index.sh")],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_index_snapshot_stays_out_of_git_and_docker_context() -> None:
+    assert "index/" in (ROOT / ".gitignore").read_text().splitlines()
+    assert "index/" in (ROOT / ".dockerignore").read_text().splitlines()

@@ -172,12 +172,18 @@ Haiku получает найденные рецепты в помеченных
 git push main / Actions → CI → Run workflow
   └─ check (lint, тесты, сборка образа) ─► deploy: ssh root@сервер, checkout <SHA>, deploy/deploy.sh <SHA>
         └─ deploy.sh: ключи из секретов GitHub → .env, make up с профилем bot (бот и Qdrant, ждёт healthy),
-                      датасет и индекс, если их нет
+                      индекс тот? (make index-check) — нет: стоп с подсказкой; сборка — только при ALLOW_INDEX_REBUILD=1
 ```
 
 Публичных портов и домена не нужно: бот сам забирает сообщения у Telegram (long polling), стек слушает только `127.0.0.1`. Сервер готовит [`deploy/bootstrap.sh`](deploy/bootstrap.sh) (один раз, от root): ставит Docker, клонирует репозиторий в `/opt/recipes-llm`, дописывает ключ деплоя в `authorized_keys` root и создаёт `.env`. Секреты environment `prod` в GitHub: `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, `ANTHROPIC_API_KEY`, `CLOUD_RU_API_KEY`, `GIGACHAT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `ESCALATION_CHAT_ID`. На сервере работает только бот: HTTP API наружу не нужен. Здоровье бота — файл-сердцебиение: раз в минуту бот спрашивает Telegram `getMe`, healthcheck Docker требует, чтобы файл был не старше трёх минут.
 
-Полный индекс на сервер переносится снимком Qdrant, а не пересобирается (≈ 200 ₽ и час на сервере): `POST /collections/<коллекция>/snapshots` локально, `scp` файла ≈ 1,6 ГБ, `POST /collections/<коллекция>/snapshots/upload` на сервере и переключение алиаса `recipes`. Паспорт индекса едет внутри снимка, поэтому деплой видит, что индекс уже тот, и не пересобирает его.
+**Индекс на сервер — снимком, а не пересборкой.** Полная сборка на сервере — ≈ 200 ₽ эмбеддингов и около часа, а индекс уже посчитан локально. Поэтому деплой индекс сам не строит: если его нет или он не тот (`make index-check`: ревизия, модель, размер выборки), деплой останавливается с подсказкой. Снимок (`index/<коллекция>.snapshot`, ≈ 1,6 ГБ, в `.gitignore` и `.dockerignore`) загружает [`deploy/upload_index.sh`](deploy/upload_index.sh) — IP сервера и путь к ключу ssh в stdin:
+
+```sh
+printf '%s\n%s\n' <IP сервера> deploy/deploy.key | deploy/upload_index.sh   # без stdin спросит сам
+```
+
+Скрипт поднимает Qdrant на сервере, копирует снимок, восстанавливает из него коллекцию, переключает алиас `recipes` одним запросом и удаляет прежнюю коллекцию. Паспорт индекса едет внутри снимка, поэтому следующий деплой видит, что индекс тот. Пересобрать индекс на сервере можно явно: переменная Actions `ALLOW_INDEX_REBUILD=1` в environment `prod` (по умолчанию `0`) и Run workflow.
 
 ## План
 
