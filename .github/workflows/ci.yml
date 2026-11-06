@@ -34,11 +34,19 @@ jobs:
       - name: Линтер и типы
         run: make lint
 
+      # Датасет — для гейта сохранённых ответов (tests/test_saved_answers.py):
+      # тексты рецептов в репозиторий не кладём, тест собирает их из CSV.
+      - name: Датасет
+        run: make .env && make data
+
       - name: Тесты
+        env:
+          # Без датасета гейт сохранённых ответов в CI — ошибка, а не пропуск.
+          REQUIRE_DATASET: "1"
         run: make test
 
       - name: Проверка docker-compose.yml
-        run: make .env && docker compose config -q
+        run: docker compose config -q
 
       - name: Сборка образа ассистента
         run: docker compose build assistant
