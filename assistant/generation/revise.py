@@ -28,7 +28,7 @@ from assistant.generation.citations import (
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel
 from assistant.generation.prompt import load_prompt
 
-PROMPT_VERSION = "recipes_revise_v1"
+PROMPT_VERSION = "recipes_revise_v2"
 MAX_TOKENS = 2000
 
 REVISE_SCHEMA: dict[str, object] = {

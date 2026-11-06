@@ -46,6 +46,7 @@ from assistant.generation.citations import (
     ModelAnswer,
     SourceText,
     check_answer,
+    numbers_in,
 )
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
@@ -73,8 +74,10 @@ from assistant.tools.search_recipes import (
     system_prompt,
 )
 
-PROMPT_VERSION = "recipes_v1"
-AUTO_PROMPT_VERSION = "recipes_auto_v1"
+# v2 (2026-11-06, решения автора): живой тон на «вы», эпитеты и немного эмодзи,
+# вступление к ответу без фактов, явный список того, чего в данных нет.
+PROMPT_VERSION = "recipes_v2"
+AUTO_PROMPT_VERSION = "recipes_auto_v2"
 # «Модель решает»: сколько поисков за один вопрос, потом — ответ без функций.
 MAX_SEARCHES = 3
 K = 5
@@ -313,7 +316,12 @@ def check_completion(completion: Completion, sources: Sequence[SourceText]) -> C
     if parsed.status == "not_found":
         return Checked([], "model_not_found", message=parsed.message)
     checked = check_answer(parsed, sources)
-    return Checked(checked, None if any(s.kept for s in checked) else "filtered_out")
+    if not any(s.kept for s in checked):
+        return Checked(checked, "filtered_out")
+    # Вступление — живая фраза без фактов о рецептах. Число в нём проверить
+    # нечем (цитат у вступления нет), поэтому такое вступление код убирает.
+    intro = parsed.message.strip()
+    return Checked(checked, None, message="" if numbers_in(intro) else intro)
 
 
 def assemble(
@@ -525,7 +533,8 @@ def render_markdown(answer: Answer) -> str:
         if answer.sources:
             lines += ["", "Вот что может пригодиться:"]
     else:
-        lines = [
+        lines = [answer.message] if answer.message else []
+        lines += [
             f"{s.text} " + "".join(f"[{n}]" for n in s.sources)
             for s in answer.statements
         ]

@@ -122,7 +122,7 @@ def source_number(result: AnswerResult, recipe_id: int) -> int:
 
 
 def answer_citing(
-    retriever: Retriever, statements: list[tuple[str, int, str]]
+    retriever: Retriever, statements: list[tuple[str, int, str]], message: str = ""
 ) -> AnswerResult:
     """Сначала узнаём номера источников, потом отвечаем, ссылаясь на рецепты."""
     probe = ask(
@@ -130,6 +130,7 @@ def answer_citing(
     )
     content = {
         "status": "answer",
+        "message": message,
         "statements": [
             {
                 "text": text,
@@ -256,7 +257,7 @@ def test_prompt_has_system_rules_recipes_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="курица с рисом")
 
     system, user = llm.calls[0]
-    assert PROMPT_VERSION == "recipes_v1"
+    assert PROMPT_VERSION == "recipes_v2"
     assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert '<recipe id="1">\nКурица с рисом в духовке\n' in user["content"]
@@ -310,6 +311,33 @@ def test_render_answer_with_links_and_gigachat_note(retriever: Retriever) -> Non
     )
     claude = result.answer.model_copy(update={"model": "claude-haiku-5-5"})
     assert "сгенерирован" not in render_markdown(claude)
+
+
+def test_intro_goes_first_and_an_intro_with_numbers_is_dropped(
+    retriever: Retriever,
+) -> None:
+    """Вступление — живая фраза без фактов: число в нём проверить нечем."""
+    statement = [("🍗 Нужны курица и рис.", CHICKEN.recipe_id, CHICKEN_QUOTE)]
+
+    result = answer_citing(retriever, statement, message="🍗 Вот что нашлось к ужину:")
+    with_number = answer_citing(retriever, statement, message="Вот 500 г курицы:")
+
+    assert render_markdown(result.answer).startswith(
+        "🍗 Вот что нашлось к ужину:\n🍗 Нужны курица и рис. [1]"
+    )
+    assert with_number.answer.message == ""
+    assert render_markdown(with_number.answer).startswith("🍗 Нужны курица и рис. [1]")
+
+
+def test_intro_is_not_shown_when_nothing_is_confirmed(retriever: Retriever) -> None:
+    result = answer_citing(
+        retriever,
+        [("Выдумка.", CHICKEN.recipe_id, "Ананас — 1 шт")],
+        message="Вот что нашлось:",
+    )
+
+    assert result.answer.status == "not_found"
+    assert "Вот что нашлось" not in render_markdown(result.answer)
 
 
 def test_render_not_found_offers_what_was_found(retriever: Retriever) -> None:
@@ -471,7 +499,7 @@ def test_auto_searches_then_answers_with_checked_citation(retriever: Retriever) 
 
     assert result.answer.status == "answer"
     assert [link.recipe_id for link in result.answer.sources] == [CHICKEN.recipe_id]
-    assert result.answer.prompt_version == "recipes_auto_v1"
+    assert result.answer.prompt_version == "recipes_auto_v2"
     [args] = result.trace.searches
     assert args.query == "курица с рисом"
     assert args.conditions.include == (("курица",),)
