@@ -33,7 +33,7 @@ from assistant.generation.gigachat import ChatModel, LlmStats, Usage
 from assistant.generation.prompt import load_prompt
 from assistant.generation.revise import Remark, Reviser
 
-PROMPT_VERSION = "review_v4"
+PROMPT_VERSION = "review_v5"
 MODEL = "claude-sonnet-5-5"
 EFFORT = "high"
 MAX_TOKENS = 2000
