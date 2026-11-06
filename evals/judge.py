@@ -197,7 +197,13 @@ def claims_of(run: AnswerRun) -> list[Claim]:
     """Утверждения, которые увидел пользователь, с процитированными рецептами
     целиком: рецепт короткий, а по полному списку ингредиентов судья видит,
     честно ли «без лука»."""
-    claims = [claim_of(s, run.sources) for s in run.checked if s.kept]
+    # С проверкой перед отправкой судят итог — то, что увидел пользователь.
+    statements = (
+        run.review.final
+        if run.review is not None
+        else [s for s in run.checked if s.kept]
+    )
+    claims = [claim_of(s, run.sources) for s in statements]
     if run.answer.status == "answer" and run.answer.message:
         recipes = dict.fromkeys(f for c in claims for f in c.fragments)
         claims.append(Claim(run.answer.message, list(recipes), intro=True))

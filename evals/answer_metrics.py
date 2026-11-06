@@ -39,6 +39,7 @@ from assistant.generation.citations import (
     check_citation,
 )
 from assistant.generation.gigachat import LlmStats, Usage
+from assistant.generation.review import Review
 from assistant.tools.search_recipes import SearchArgs
 from evals.dataset import Case
 
@@ -115,6 +116,8 @@ class AnswerRun:
     content: str
     # Поиски: в always — один разбор, в auto — сколько модель решила (может, ноль).
     searches: tuple[SearchArgs, ...] = ()
+    # Проверка Sonnet перед отправкой; None — её не было. Итоговые утверждения — в final.
+    review: Review | None = None
 
     @classmethod
     def from_result(cls, result: AnswerResult) -> AnswerRun:
@@ -131,6 +134,7 @@ class AnswerRun:
             finish_reason=completion.finish_reason if completion else None,
             content=completion.content if completion else "",
             searches=trace.searches,
+            review=trace.review,
         )
 
     @property

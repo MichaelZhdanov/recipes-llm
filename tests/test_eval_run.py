@@ -329,3 +329,35 @@ def test_stored_judging_round_trips_without_calling_the_judge() -> None:
         900,
         1,
     )
+
+
+def test_review_survives_raw_data_and_the_judge_sees_the_final_answer() -> None:
+    """Итог проверки без LLM не повторить: пересчёт берёт его из сырых данных."""
+    from eval_helpers import RUN
+
+    from assistant.generation.review import Mark, Review
+    from evals.judge import claims_of
+    from evals.run import load_answer_run
+
+    original = RUN
+    kept = [s for s in original.checked if s.kept]
+    review = Review(
+        first={1: Mark(True, "ок"), 2: Mark(False, "выдумано")},
+        intro=None,
+        revised={2: None},
+        second={},
+        final=kept[:1],
+        intro_kept=False,
+        seconds=2.5,
+    )
+    final_answer = original.answer.model_copy(
+        update={"statements": original.answer.statements[:1]}
+    )
+    run = dataclasses.replace(original, answer=final_answer, review=review)
+    [record] = answer_records([AnswerCase(case("by_name-001"), [run])])
+
+    restored = load_answer_run(json.loads(json.dumps(record, ensure_ascii=False)))
+
+    assert restored.review == review
+    assert [s.text for s in restored.answer.statements] == [kept[0].text]
+    assert [c.text for c in claims_of(restored)] == [kept[0].text]

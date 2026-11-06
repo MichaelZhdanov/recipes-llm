@@ -50,7 +50,12 @@ def _statements(raw: dict[str, Any]) -> dict[tuple[str, int, int], tuple[str, st
     texts = {}
     for record in raw["records"]:
         judge = record.get("judge") or {}
-        kept = [s["text"] for s in record["checked"] if _kept(s)]
+        review = record.get("review")
+        kept = (
+            [s["text"] for s in review["final"]]
+            if review
+            else [s["text"] for s in record["checked"] if _kept(s)]
+        )
         answer = record.get("answer") or {}
         if answer.get("status") == "answer" and answer.get("message"):
             kept.append(answer["message"])  # вступление идёт последним, как у судьи

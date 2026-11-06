@@ -378,3 +378,30 @@ def test_report_lists_an_unsupported_intro_after_the_statements() -> None:
     )
 
     assert "«(вступление) Вот что нашлось:» — выдумано" in report
+
+
+def test_review_section_counts_revisions_drops_and_cost() -> None:
+    from assistant.generation.review import Mark, Review
+    from evals.report import review_section
+
+    kept = [s for s in RUN.checked if s.kept]
+    review = Review(
+        first={1: Mark(True, "ок"), 2: Mark(False, "«сверху» — подача")},
+        intro=Mark(False, "выдумано"),
+        revised={2: "Проверка раз в десять минут."},
+        second={2: Mark(True, "ок")},
+        final=kept,
+        intro_kept=False,
+        seconds=3.0,
+        review_usage=Usage(1000, 200, 0, 1200),
+        revise_usage=Usage(500, 100, 0, 600),
+    )
+    run = dataclasses.replace(RUN, review=review)
+
+    lines = "\n".join(review_section([AnswerCase(case("by_name-001"), [run])]))
+
+    assert "| «нет» в первой проверке → на доработку | 1 |" in lines
+    assert "| исправленное принято повторной проверкой | 1 |" in lines
+    assert "| вступлений убрано | 1 из 1 |" in lines
+    assert "— принято" in lines and "«сверху» — подача" in lines
+    assert review_section([AnswerCase(case("by_name-001"), [RUN])]) == []

@@ -54,10 +54,10 @@ import httpx2
 from qdrant_client import QdrantClient
 
 from assistant.config import AnswerMode, Settings
-from assistant.generation import cloudru
+from assistant.generation import claude, cloudru
 from assistant.generation import llm as assistant_llm
-from assistant.generation.answer import Answerer, assemble
-from assistant.generation.citations import SourceText
+from assistant.generation.answer import Answer, Answerer, assemble
+from assistant.generation.citations import CheckedCitation, CheckedStatement, SourceText
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
@@ -65,6 +65,9 @@ from assistant.generation.gigachat import (
     LlmStats,
     Usage,
 )
+from assistant.generation.review import EFFORT as REVIEW_EFFORT
+from assistant.generation.review import Mark, Review, Reviewer
+from assistant.generation.revise import Reviser
 from assistant.indexing.build import pick_sample
 from assistant.indexing.chunks import Chunk
 from assistant.indexing.dataset import (
@@ -254,6 +257,7 @@ def answer_records(
             ],
             "checked": [dataclasses.asdict(s) for s in run.checked],
             "searches": [dataclasses.asdict(args) for args in run.searches],
+            "review": review_record(run.review),
             "available": r.available,
             "judge": (
                 dataclasses.asdict(verdicts[(r.case.id, number)])
@@ -264,6 +268,48 @@ def answer_records(
         for r in results
         for number, run in enumerate(r.runs)
     ]
+
+
+def review_record(review: Review | None) -> dict[str, object] | None:
+    """Проверка перед отправкой — в сырые данные: без неё пересчёт не узнает,
+    что увидел пользователь (проверку без LLM не повторить)."""
+    if review is None:
+        return None
+    return {
+        "first": {str(n): dataclasses.asdict(m) for n, m in review.first.items()},
+        "intro": dataclasses.asdict(review.intro) if review.intro else None,
+        "revised": {str(n): text for n, text in review.revised.items()},
+        "second": {str(n): dataclasses.asdict(m) for n, m in review.second.items()},
+        "final": [dataclasses.asdict(s) for s in review.final],
+        "intro_kept": review.intro_kept,
+        "seconds": review.seconds,
+        "review_usage": dataclasses.asdict(review.review_usage),
+        "revise_usage": dataclasses.asdict(review.revise_usage),
+    }
+
+
+def load_review(data: dict[str, Any]) -> Review:
+    def statement(s: dict[str, Any]) -> CheckedStatement:
+        return CheckedStatement(
+            text=s["text"],
+            citations=[CheckedCitation(**c) for c in s["citations"]],
+            unknown_numbers=list(s["unknown_numbers"]),
+        )
+
+    def marks(items: dict[str, Any]) -> dict[int, Mark]:
+        return {int(n): Mark(**m) for n, m in items.items()}
+
+    return Review(
+        first=marks(data["first"]),
+        intro=Mark(**data["intro"]) if data["intro"] else None,
+        revised={int(n): text for n, text in data["revised"].items()},
+        second=marks(data["second"]),
+        final=[statement(s) for s in data["final"]],
+        intro_kept=bool(data["intro_kept"]),
+        seconds=float(data["seconds"]),
+        review_usage=Usage(**data["review_usage"]),
+        revise_usage=Usage(**data["revise_usage"]),
+    )
 
 
 def judging_record(judging: Judging) -> dict[str, object]:
@@ -407,7 +453,15 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
         args=searches[0] if searches else None,
         searches=searches,
     )
-    return AnswerRun.from_result(result)
+    run = AnswerRun.from_result(result)
+    if record.get("review"):
+        # Итог проверки не пересчитать без LLM: ответ — как его увидел пользователь.
+        return dataclasses.replace(
+            run,
+            answer=Answer.model_validate(record["answer"]),
+            review=load_review(record["review"]),
+        )
+    return run
 
 
 def load_answer_cases(
@@ -720,8 +774,10 @@ def _answer_stage(
     command: Sequence[str] = (),
     mode: AnswerMode | None = None,
     judge_choice: JudgeChoice = DEFAULT_JUDGE,
+    review: bool | None = None,
 ) -> int:
     revision = git_revision()
+    review = settings.answer_review if review is None else review
     mode = mode or settings.answer_mode
     directory = HOLDOUT_DIR if split == "holdout" else DATASET_DIR
     cases, sampled = _choose(
@@ -738,6 +794,7 @@ def _answer_stage(
     with (
         httpx2.Client(timeout=30) as embeddings_http,
         assistant_llm.make_http_client(settings) as llm_http,
+        claude.make_http_client() as review_http,
     ):
         embedder = make_embedder(settings, embeddings_http)
         llm = assistant_llm.make_chat_model(settings, llm_http)
@@ -747,11 +804,29 @@ def _answer_stage(
         if journal is None:
             return 2
         done = _resumed_cases(journal, cases)
+        reviewer = reviser = None
+        if review:
+            # Как в боте (answer.make_answerer): проверяет Sonnet, дорабатывает Haiku.
+            checker = claude.Claude(
+                api_key=settings.anthropic_api_key,
+                api_url=settings.anthropic_api_url,
+                client=review_http,
+                effort=REVIEW_EFFORT,
+            )
+            reviewer = Reviewer(checker)
+            reviser = Reviser(llm, model=model)
         answerer = Answerer(
-            retriever, llm, model=model, ref=settings.dataset_revision, mode=mode
+            retriever,
+            llm,
+            model=model,
+            ref=settings.dataset_revision,
+            mode=mode,
+            reviewer=reviewer,
+            reviser=reviser,
         )
         _log(
-            f"модель {model}, режим {mode}, {len(cases)} кейсов × {runs} прогона, "
+            f"модель {model}, режим {mode}, проверка перед отправкой "
+            f"{'включена' if review else 'выключена'}, {len(cases)} кейсов × {runs} прогона, "
             f"журнал {journal_file}"
         )
 
@@ -912,6 +987,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="answer — ассистент целиком; retrieval — только поиск (разбор вопроса, фильтр, векторы)",
     )
     parser.add_argument(
+        "--no-review",
+        action="store_true",
+        help="без проверки ответа Sonnet перед отправкой (ANSWER_REVIEW); для сравнения",
+    )
+    parser.add_argument(
         "--no-judge",
         action="store_true",
         help="без модели-судьи (groundedness и релевантность по смыслу не считаются)",
@@ -1007,6 +1087,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         list(argv) if argv is not None else sys.argv[1:],
         args.mode,
         judge_choice,
+        review=False if args.no_review else None,
     )
 
 

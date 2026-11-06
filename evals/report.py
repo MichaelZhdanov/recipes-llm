@@ -15,6 +15,8 @@ from datetime import date
 from pathlib import Path
 
 from assistant.generation.gigachat import LlmStats
+from assistant.generation.review import MODEL as REVIEW_MODEL
+from assistant.generation.review import PROMPT_VERSION as REVIEW_PROMPT
 from assistant.indexing.build import estimate_cost
 from assistant.retrieval.embeddings import RETRIEVAL_TASK, EmbeddingStats
 from assistant.retrieval.store import IndexManifest
@@ -725,6 +727,7 @@ def render_answer_report(
             for r in unanswerable
         ]
     lines += _problem_sections(results)
+    lines += review_section(results)
     lines += _judge_sections(results, judging)
     return "\n".join(lines).rstrip() + "\n"
 
@@ -831,6 +834,91 @@ def _clarity_canary_rows(judging: Judging) -> list[str]:
         f"| канарейки грамотности: судья поймал плохие тексты | {caught} | все | |",
         f"| канарейки грамотности: судья принял хорошие | {accepted} | все | |",
     ]
+
+
+def review_section(results: Sequence[AnswerCase], examples: int = 15) -> list[str]:
+    """Проверка Sonnet перед отправкой: что отправлено на доработку, что стало
+    с ответами, сколько это стоит по времени и деньгам."""
+    runs = [
+        (r.case.id, run) for r in results for run in r.runs if run.review is not None
+    ]
+    if not runs:
+        return []
+    reviews = [run.review for _, run in runs if run.review is not None]
+    checked = sum(len(v.first) for v in reviews)
+    flagged = sum(len(v.flagged) for v in reviews)
+    revised = sum(text is not None for v in reviews for text in v.revised.values())
+    accepted = sum(m.supported is True for v in reviews for m in v.second.values())
+    intros = [v for v in reviews if v.intro is not None]
+    intro_dropped = sum(not v.intro_kept for v in intros)
+    rejected = sum(run.answer.reason == "review_out" for _, run in runs)
+    seconds = sorted(v.seconds for v in reviews)
+    p95 = seconds[min(len(seconds) - 1, int(0.95 * len(seconds)))]
+    sonnet = LlmStats(
+        prompt_tokens=sum(v.review_usage.prompt_tokens for v in reviews),
+        completion_tokens=sum(v.review_usage.completion_tokens for v in reviews),
+        precached_prompt_tokens=sum(
+            v.review_usage.precached_prompt_tokens for v in reviews
+        ),
+    )
+    haiku = LlmStats(
+        prompt_tokens=sum(v.revise_usage.prompt_tokens for v in reviews),
+        completion_tokens=sum(v.revise_usage.completion_tokens for v in reviews),
+        precached_prompt_tokens=sum(
+            v.revise_usage.precached_prompt_tokens for v in reviews
+        ),
+    )
+    model = runs[0][1].answer.model.split(":")[0] or "claude-haiku-5-5"
+    cost = (cost_usd(REVIEW_MODEL, sonnet) or 0) + (cost_usd(model, haiku) or 0)
+    lines = [
+        "",
+        f"## Проверка перед отправкой (Sonnet, `{REVIEW_PROMPT}`, одна доработка Haiku)",
+        "",
+        "В пути ответа тот же Sonnet и та же рубрика, что у судьи eval: groundedness "
+        "по судье Sonnet после проверки — не независимая оценка. Независимая — ручная "
+        "разметка автора.",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| ответов проверено | {len(reviews)} |",
+        f"| утверждений проверено | {checked} |",
+        f"| «нет» в первой проверке → на доработку | {flagged} |",
+        f"| Haiku исправил (цитаты прошли код) | {revised} |",
+        f"| исправленное принято повторной проверкой | {accepted} |",
+        f"| удалено (не исправлено или снова «нет») | {flagged - accepted} |",
+        f"| вступлений убрано | {intro_dropped} из {len(intros)} |",
+        f"| ответов стало «не нашёл» (review_out) | {rejected} |",
+        f"| секунд на проверку: медиана / p95 | {statistics.median(seconds):.1f} / {p95:.1f} |",
+        f"| цена проверки и доработки | ≈${cost:.3f} за прогон, ≈${cost / len(reviews):.4f} за ответ |",
+        "",
+        "Примеры: до → после",
+        "",
+    ]
+    shown = 0
+    for case_id, run in runs:
+        review = run.review
+        if review is None:
+            continue
+        kept = [s for s in run.checked if s.kept]
+        for number in review.flagged:
+            if shown >= examples:
+                break
+            before = kept[number - 1].text if number - 1 < len(kept) else "?"
+            after = review.revised.get(number)
+            verdict = review.second.get(number)
+            outcome = (
+                f"«{after}» — принято"
+                if after and verdict is not None and verdict.supported is True
+                else (
+                    f"«{after}» — удалено после повторной проверки"
+                    if after
+                    else "удалено"
+                )
+            )
+            lines.append(f"- {case_id}: «{before}» → {outcome}")
+            lines.append(f"  - замечание: {review.first[number].comment}")
+            shown += 1
+    return lines
 
 
 def _judged_texts(run: AnswerRun) -> list[str]:
