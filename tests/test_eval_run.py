@@ -285,3 +285,47 @@ def test_judge_llm_gets_the_effort_only_for_claude(
             pass
 
     assert seen == [("anthropic", "high"), ("gigachat", "")]
+
+
+def test_stored_judging_round_trips_without_calling_the_judge() -> None:
+    """--reuse-judge: отчёт пересобирается по сохранённым вердиктам и канарейкам."""
+    from evals.dataset import load_canaries, load_clarity_canaries
+    from evals.judge import Judging, Verdict
+    from evals.run import judging_record, load_judging
+
+    results = [AnswerCase(case("by_name-001"), [answered([])])]
+    verdict = Verdict([True, False], [], ["ок", "выдумано"], [True, True], [[], []])
+    canaries = load_canaries()[:2]
+    clarity = load_clarity_canaries()[:1]
+    judging = Judging(
+        model="claude-sonnet-5-5, effort high",
+        prompt_version="judge_v6, грамотность clarity_v4",
+        verdicts={("by_name-001", 0): verdict},
+        canaries=canaries,
+        canary_marks=[True, None],
+        stats=LlmStats(requests=3, total_tokens=900),
+        failures=1,
+        clarity_canaries=clarity,
+        clarity_marks=[False],
+    )
+    data = json.loads(
+        json.dumps(
+            {
+                "records": answer_records(results, judging),
+                "judging": judging_record(judging),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    loaded = load_judging(data)
+
+    assert loaded.verdicts == {("by_name-001", 0): verdict}
+    assert [c.id for c in loaded.canaries] == [c.id for c in canaries]
+    assert loaded.canary_marks == [True, None]
+    assert loaded.clarity_marks == [False]
+    assert (loaded.stats.requests, loaded.stats.total_tokens, loaded.failures) == (
+        3,
+        900,
+        1,
+    )

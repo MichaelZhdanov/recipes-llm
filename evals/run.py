@@ -94,7 +94,14 @@ from evals.dataset import (
     load_clarity_canaries,
     load_relevance_canaries,
 )
-from evals.judge import JUDGE_EFFORT, JUDGE_MODELS, Judge, Judging, run_judge
+from evals.judge import (
+    JUDGE_EFFORT,
+    JUDGE_MODELS,
+    Judge,
+    Judging,
+    Verdict,
+    run_judge,
+)
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.relevance import Relevance, RelevanceJudge, judge_relevance
 from evals.report import (
@@ -265,6 +272,8 @@ def judging_record(judging: Judging) -> dict[str, object]:
     return {
         "model": judging.model,
         "prompt_version": judging.prompt_version,
+        "stats": judging.stats.as_dict(),
+        "failures": judging.failures,
         "canaries": [
             {"id": c.id, "expected": c.supported, "mark": m}
             for c, m in zip(judging.canaries, judging.canary_marks, strict=True)
@@ -276,6 +285,40 @@ def judging_record(judging: Judging) -> dict[str, object]:
             )
         ],
     }
+
+
+def load_judging(data: dict[str, Any]) -> Judging:
+    """Судья из сырых данных прогона — отчёт пересобирается без новых вызовов
+    (`--rescore RAW --reuse-judge`), например после правки самого отчёта."""
+    record = data["judging"]
+    by_id = {c.id: c for c in load_canaries()} if CANARIES_FILE.exists() else {}
+    clear_by_id = (
+        {c.id: c for c in load_clarity_canaries()}
+        if CLARITY_CANARIES_FILE.exists()
+        else {}
+    )
+    verdicts = {
+        (r["id"], r["run"]): Verdict(**r["judge"])
+        for r in data["records"]
+        if r.get("judge") is not None
+    }
+    stats = record.get("stats")
+    return Judging(
+        model=record["model"],
+        prompt_version=record["prompt_version"],
+        verdicts=verdicts,
+        canaries=[by_id[c["id"]] for c in record["canaries"]],
+        canary_marks=[c["mark"] for c in record["canaries"]],
+        # В прогонах до 2026-11-06 токены судьи в сырые данные не писались.
+        stats=(
+            LlmStats(**{**stats, "masked": Counter(stats["masked"])})
+            if stats
+            else LlmStats()
+        ),
+        failures=int(record.get("failures", 0)),
+        clarity_canaries=[clear_by_id[c["id"]] for c in record["clarity_canaries"]],
+        clarity_marks=[c["mark"] for c in record["clarity_canaries"]],
+    )
 
 
 def meta_record(meta: RunMeta) -> dict[str, object]:
@@ -815,6 +858,7 @@ def _rescore(
     label: str | None,
     judge: bool,
     judge_choice: JudgeChoice = DEFAULT_JUDGE,
+    reuse_judge: bool = False,
 ) -> int:
     """Метрики заново по сохранённым ответам модели: без генерации, ссылки — текущим кодом."""
     revision = git_revision()
@@ -826,7 +870,10 @@ def _rescore(
         store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=30))
         results = mark_answerable(results, store)
     meta = load_meta(data["meta"], revision=revision, rescored_from=str(raw_path))
-    judging = _judge(settings, results, judge_choice) if judge else None
+    if reuse_judge:
+        judging: Judging | None = load_judging(data)
+    else:
+        judging = _judge(settings, results, judge_choice) if judge else None
     return _finish(results, meta, judging, label or rescore_label(raw_path))
 
 
@@ -910,6 +957,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="продолжить прерванный прогон по журналу evals/reports/raw/*.partial.jsonl",
     )
     parser.add_argument(
+        "--reuse-judge",
+        action="store_true",
+        help="--rescore: вердикты судьи взять из сырых данных, не вызывая его снова",
+    )
+    parser.add_argument(
         "--rescore",
         type=Path,
         metavar="RAW_JSON",
@@ -921,7 +973,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     judge_choice = JudgeChoice(args.judge_provider, args.judge_model, args.judge_effort)
     if args.rescore:
         return _rescore(
-            settings, args.rescore, args.label, not args.no_judge, judge_choice
+            settings,
+            args.rescore,
+            args.label,
+            not args.no_judge,
+            judge_choice,
+            reuse_judge=args.reuse_judge,
         )
     if args.stage == "retrieval":
         return _retrieval_stage(
