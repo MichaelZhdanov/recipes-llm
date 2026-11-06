@@ -313,6 +313,15 @@ def render(
     return "\n".join(lines) + "\n"
 
 
+def _choice(spec: str) -> JudgeChoice:
+    """«cloudru:moonshotai/Kimi-K2.6:low» → кандидат; effort можно не задавать."""
+    provider, _, rest = spec.partition(":")
+    model, _, effort = rest.rpartition(":") if rest.count(":") else (rest, "", "")
+    if provider not in ("anthropic", "cloudru", "gigachat") or not model:
+        raise SystemExit(f"кандидат {spec!r}: нужно провайдер:модель[:effort]")
+    return JudgeChoice(provider, model, effort)  # type: ignore[arg-type]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m evals.gate_compare", description=__doc__
@@ -323,8 +332,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--only", nargs="+", help="подписи кандидатов (часть имени модели)"
     )
+    parser.add_argument(
+        "--candidate",
+        nargs="+",
+        default=[],
+        metavar="PROVIDER:MODEL[:EFFORT]",
+        help="кандидаты не из списка, например cloudru:moonshotai/Kimi-K2.6:low",
+    )
     args = parser.parse_args(argv)
-    candidates = [
+    extra = [_choice(spec) for spec in args.candidate]
+    candidates = extra or [
         c for c in CANDIDATES if not args.only or any(o in c.label for o in args.only)
     ]
     markings = {
