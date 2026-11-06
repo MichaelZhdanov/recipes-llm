@@ -1,4 +1,4 @@
-"""LLM ассистента по настройкам: GigaChat или Claude (`LLM_PROVIDER`).
+"""LLM ассистента по настройкам: cloud.ru, GigaChat или Claude (`LLM_PROVIDER`).
 
 Здесь выбирается модель, которая разбирает вопрос и (с этапа 3) отвечает.
 Судьи eval собираются той же фабрикой, но со своим провайдером и своим
@@ -14,12 +14,12 @@ from assistant.config import Settings
 from assistant.generation import claude, cloudru, gigachat
 from assistant.generation.gigachat import ChatModel
 
-# cloud.ru — модель выбирается сравнением поисковиков; пока — лидер открытых
-# моделей по Artificial Analysis Intelligence Index v4.0.
+# cloud.ru — GLM-5.1: быстрый и дешёвый писатель из сравнения
+# (evals/reports/2026-11-07-writers.md); хостит сам cloud.ru, данные в РФ.
 DEFAULT_MODELS = {
     "gigachat": gigachat.DEFAULT_MODEL,
     "anthropic": claude.DEFAULT_MODEL,
-    "cloudru": "moonshotai/Kimi-K2.6",
+    "cloudru": "zai-org/GLM-5.1",
 }
 
 

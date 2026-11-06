@@ -11,9 +11,9 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# LLM ассистента: GigaChat (данные в РФ) или Claude через API Anthropic.
+# LLM ассистента: модель cloud.ru, GigaChat (данные в РФ) или Claude через API Anthropic.
 LlmProvider = Literal["gigachat", "anthropic", "cloudru"]
-# Сколько думает Claude; пусто — по умолчанию модели. У GigaChat не используется.
+# Сколько думает модель (Claude, cloud.ru); пусто — по умолчанию модели. У GigaChat не используется.
 LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 # Режим ответа (решение 7): always — сначала поиск, потом ответ;
 # auto — модель сама решает, искать ли.
@@ -47,17 +47,22 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
-    # По умолчанию Claude Haiku 5.5: на разборе вопроса в фильтры она прошла
-    # пороги этапа 2, GigaChat-2-Pro — нет (evals/reports/2026-11-05-stage2.md).
-    llm_provider: LlmProvider = "anthropic"
+    # По умолчанию GLM-5.1 в cloud.ru (решение автора 2026-11-07). API Anthropic
+    # закрыт: организация отключена. Из моделей cloud.ru GLM-5.1 low пишет ответ
+    # за 9 с и 1,3–1,5 ₽ (0.94 утверждений без нарушений); Kimi K2.6 точнее
+    # (0.98), но 77 с и 6–8,5 ₽ (evals/reports/2026-11-07-writers.md).
+    llm_provider: LlmProvider = "cloudru"
     # Пустая модель — модель провайдера по умолчанию (assistant/generation/llm.py).
     llm_model: str = ""
-    # medium и high дали 0.92 и 0.93 — в пределах разброса; high думает дольше.
-    llm_effort: LlmEffort = "medium"
+    # low: так GLM-5.1 сравнивался с другими писателями (writers.md).
+    llm_effort: LlmEffort = "low"
     # Режим по умолчанию выберет сравнение always и auto в eval этапа 3.
     answer_mode: AnswerMode = "always"
-    # Проверка ответа Sonnet перед отправкой и одна доработка Haiku (review.py).
-    answer_review: bool = True
+    # Проверка ответа Sonnet перед отправкой и одна доработка (review.py).
+    # Выключена: API Anthropic закрыт, а проверка GLM с узкой рубрикой зря
+    # отправляла на доработку 15 % верных утверждений
+    # (evals/reports/2026-11-07-gate-narrow.md). Без проверки нет и шагов от ИИ.
+    answer_review: bool = False
     gigachat_api_key: SecretStr = SecretStr("")
     gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
     gigachat_api_url: str = GIGACHAT_API_URL

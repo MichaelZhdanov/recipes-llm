@@ -78,7 +78,10 @@ def test_search_without_embeddings_key_explains_what_to_do(
 def test_ask_without_llm_key_explains_what_to_do(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Провайдер задан явно: у cloud.ru (по умолчанию) ключ общий с эмбеддингами,
+    # и тест с ним пошёл бы в сеть.
     monkeypatch.setenv("CLOUD_RU_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
 
     code = main(["ask", "как включить OCR"])
 
