@@ -852,6 +852,13 @@ def review_section(results: Sequence[AnswerCase], examples: int = 15) -> list[st
     intros = [v for v in reviews if v.intro is not None]
     intro_dropped = sum(not v.intro_kept for v in intros)
     rejected = sum(run.answer.reason == "review_out" for _, run in runs)
+    irrelevant = sum(len(v.irrelevant) for v in reviews)
+    first_tries = [run for _, run in runs if run.first_try is not None]
+    first_irrelevant = sum(
+        len(run.first_try.review.irrelevant)
+        for run in first_tries
+        if run.first_try is not None and run.first_try.review is not None
+    )
     seconds = sorted(v.seconds for v in reviews)
     p95 = seconds[min(len(seconds) - 1, int(0.95 * len(seconds)))]
     sonnet = LlmStats(
@@ -887,6 +894,8 @@ def review_section(results: Sequence[AnswerCase], examples: int = 15) -> list[st
         f"| исправленное принято повторной проверкой | {accepted} |",
         f"| удалено (не исправлено или снова «нет») | {flagged - accepted} |",
         f"| вступлений убрано | {intro_dropped} из {len(intros)} |",
+        f"| рецепт не по вопросу (удалено без доработки) | {irrelevant + first_irrelevant} |",
+        f"| ответов с новым поиском (по вопросу не осталось ничего) | {len(first_tries)} |",
         f"| ответов стало «не нашёл» (review_out) | {rejected} |",
         f"| секунд на проверку: медиана / p95 | {statistics.median(seconds):.1f} / {p95:.1f} |",
         f"| цена проверки и доработки | ≈${cost:.3f} за прогон, ≈${cost / len(reviews):.4f} за ответ |",

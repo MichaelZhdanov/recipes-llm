@@ -99,6 +99,16 @@ class Rate:
 
 
 @dataclass(frozen=True)
+class FirstTry:
+    """Первая попытка ответа, если её рецепты оказались не по вопросу и
+    ассистент искал заново: запрос, найденное и что сказала проверка."""
+
+    query: str
+    top: list[tuple[str, float]]
+    review: Review | None
+
+
+@dataclass(frozen=True)
 class AnswerRun:
     """Один прогон ассистента по одному кейсу."""
 
@@ -118,6 +128,8 @@ class AnswerRun:
     searches: tuple[SearchArgs, ...] = ()
     # Проверка Sonnet перед отправкой; None — её не было. Итоговые утверждения — в final.
     review: Review | None = None
+    # Первая попытка, если был новый поиск («рецепты не по вопросу»); иначе None.
+    first_try: FirstTry | None = None
 
     @classmethod
     def from_result(cls, result: AnswerResult) -> AnswerRun:
@@ -135,6 +147,15 @@ class AnswerRun:
             content=completion.content if completion else "",
             searches=trace.searches,
             review=trace.review,
+            first_try=(
+                FirstTry(
+                    query=trace.first.args.query if trace.first.args else "",
+                    top=[(h.chunk.source_id, h.score) for h in trace.first.hits],
+                    review=trace.first.review,
+                )
+                if trace.first is not None
+                else None
+            ),
         )
 
     @property

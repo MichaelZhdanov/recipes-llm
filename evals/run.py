@@ -84,7 +84,12 @@ from assistant.retrieval.store import Hit, IndexManifest, VectorStore
 from assistant.tools.search_recipes import PROMPT_VERSION as SEARCH_PROMPT
 from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 from evals import progress
-from evals.answer_metrics import AnswerCase, AnswerRun, needs_earlier_recipes
+from evals.answer_metrics import (
+    AnswerCase,
+    AnswerRun,
+    FirstTry,
+    needs_earlier_recipes,
+)
 from evals.dataset import (
     CANARIES_FILE,
     CLARITY_CANARIES_FILE,
@@ -258,6 +263,15 @@ def answer_records(
             "checked": [dataclasses.asdict(s) for s in run.checked],
             "searches": [dataclasses.asdict(args) for args in run.searches],
             "review": review_record(run.review),
+            "first_try": (
+                {
+                    "query": run.first_try.query,
+                    "top": run.first_try.top,
+                    "review": review_record(run.first_try.review),
+                }
+                if run.first_try
+                else None
+            ),
             "available": r.available,
             "judge": (
                 dataclasses.asdict(verdicts[(r.case.id, number)])
@@ -285,6 +299,7 @@ def review_record(review: Review | None) -> dict[str, object] | None:
         "seconds": review.seconds,
         "review_usage": dataclasses.asdict(review.review_usage),
         "revise_usage": dataclasses.asdict(review.revise_usage),
+        "irrelevant": {str(n): comment for n, comment in review.irrelevant.items()},
     }
 
 
@@ -309,6 +324,8 @@ def load_review(data: dict[str, Any]) -> Review:
         seconds=float(data["seconds"]),
         review_usage=Usage(**data["review_usage"]),
         revise_usage=Usage(**data["revise_usage"]),
+        # До review_v4 рецепты на соответствие вопросу не проверялись.
+        irrelevant={int(n): c for n, c in data.get("irrelevant", {}).items()},
     )
 
 
@@ -456,10 +473,19 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
     run = AnswerRun.from_result(result)
     if record.get("review"):
         # Итог проверки не пересчитать без LLM: ответ — как его увидел пользователь.
-        return dataclasses.replace(
+        run = dataclasses.replace(
             run,
             answer=Answer.model_validate(record["answer"]),
             review=load_review(record["review"]),
+        )
+    if first := record.get("first_try"):
+        run = dataclasses.replace(
+            run,
+            first_try=FirstTry(
+                query=first["query"],
+                top=[(source_id, score) for source_id, score in first["top"]],
+                review=load_review(first["review"]) if first["review"] else None,
+            ),
         )
     return run
 

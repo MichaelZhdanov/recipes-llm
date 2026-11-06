@@ -361,3 +361,38 @@ def test_review_survives_raw_data_and_the_judge_sees_the_final_answer() -> None:
     assert restored.review == review
     assert [s.text for s in restored.answer.statements] == [kept[0].text]
     assert [c.text for c in claims_of(restored)] == [kept[0].text]
+
+
+def test_new_search_and_irrelevant_marks_survive_raw_data() -> None:
+    """Новый поиск после «рецепт не по вопросу» и сами отметки — в сырых данных:
+    без них отчёт не покажет, сколько раз проверка отправляла искать заново."""
+    from eval_helpers import RUN
+
+    from assistant.generation.review import Mark, Review
+    from evals.answer_metrics import FirstTry
+    from evals.run import load_answer_run
+
+    first_review = Review(
+        first={1: Mark(True, "блюдо с вином в составе", relevant=False)},
+        intro=None,
+        revised={},
+        second={},
+        final=[],
+        intro_kept=False,
+        seconds=1.5,
+        irrelevant={1: "блюдо с вином в составе"},
+    )
+    first_try = FirstTry(
+        query="блюдо к красному вину",
+        top=[("recipe/49177", 0.47)],
+        review=first_review,
+    )
+    run = dataclasses.replace(RUN, first_try=first_try)
+    [record] = answer_records([AnswerCase(case("semantic-011"), [run])])
+
+    restored = load_answer_run(json.loads(json.dumps(record, ensure_ascii=False)))
+
+    assert restored.first_try == first_try
+    # Старые сырые данные без новых полей читаются как раньше.
+    del record["first_try"]
+    assert load_answer_run(record).first_try is None
