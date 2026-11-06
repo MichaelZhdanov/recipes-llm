@@ -12,6 +12,8 @@
   «что не так?» тремя кнопками.
 - «🍳 Шаги» — только у рецептов без живой страницы: шаги пишет и проверяет
   `generation/steps.py` (~20 с), бот присылает их отдельным сообщением.
+- Здоровье для Docker — файл-сердцебиение (`health.py`): раз в минуту бот
+  спрашивает Telegram getMe и при успехе обновляет файл.
 """
 
 import asyncio
@@ -49,6 +51,7 @@ from assistant.bot.format import (
     Keyboard,
     status_text,
 )
+from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
 from assistant.bot.pages import PageChecker
 from assistant.bot.service import ERROR_REPLY, BotService, RecipeLookup, Reply
 from assistant.bot.store import Store, Vote, VoteReason
@@ -285,6 +288,19 @@ COMMANDS = [
 ]
 
 
+async def heartbeat(
+    bot: Bot, path: Path = HEARTBEAT, every: float = HEARTBEAT_EVERY
+) -> None:
+    while True:
+        try:
+            await bot.get_me()
+            path.touch()
+        except Exception:
+            # Сеть до Telegram или сбой API: проверка здоровья это увидит.
+            logger.warning("Telegram не ответил на getMe", exc_info=True)
+        await asyncio.sleep(every)
+
+
 def recipe_lookup(store: VectorStore) -> RecipeLookup:
     def lookup(recipe_id: int) -> Chunk | None:
         found = store.recipes([recipe_id])
@@ -313,12 +329,14 @@ async def run(settings: Settings) -> None:
     )
     bot = make_bot(token)
     dispatcher = build_dispatcher(Handlers(service))
+    beat = asyncio.create_task(heartbeat(bot))
     try:
         await bot.set_my_commands(COMMANDS)
         await dispatcher.start_polling(
             bot, allowed_updates=["message", "callback_query"]
         )
     finally:
+        beat.cancel()
         await bot.session.close()
         answerer.close()
         pages_http.close()

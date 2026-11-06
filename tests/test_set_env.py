@@ -79,6 +79,14 @@ def test_api_keys_from_github_replace_the_ones_on_the_server() -> None:
     )
 
 
+def test_bot_token_and_escalation_chat_are_accepted_on_deploy() -> None:
+    values = parse_values("TELEGRAM_BOT_TOKEN=42:abc\nESCALATION_CHAT_ID=-1001\n")
+
+    assert set_values("", values) == (
+        "TELEGRAM_BOT_TOKEN='42:abc'\nESCALATION_CHAT_ID='-1001'\n"
+    )
+
+
 def test_anthropic_key_is_accepted_on_deploy() -> None:
     """LLM ассистента по умолчанию — Claude: ключ приходит из секретов GitHub."""
     values = parse_values("ANTHROPIC_API_KEY=sk-ant-test\n")

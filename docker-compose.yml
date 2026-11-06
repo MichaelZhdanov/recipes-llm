@@ -2,7 +2,39 @@
 # Значения ${...} compose берёт из .env в этой папке.
 # Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
 # Каждый сервис получает только свои переменные через environment, без env_file.
+# Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот; Qdrant —
+# всегда. Локально по умолчанию api, на сервере deploy.sh включает только bot.
 name: recipes-llm
+
+# Все поля assistant/config.py: API и бот — один и тот же ассистент. Пустое
+# значение означает значение по умолчанию из config.py.
+x-settings: &settings
+  LLM_PROVIDER: ${LLM_PROVIDER:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_EFFORT: ${LLM_EFFORT:-}
+  ANSWER_MODE: ${ANSWER_MODE:-}
+  ANSWER_REVIEW: ${ANSWER_REVIEW:-}
+  GIGACHAT_API_KEY: ${GIGACHAT_API_KEY:-}
+  GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-}
+  GIGACHAT_API_URL: ${GIGACHAT_API_URL:-}
+  GIGACHAT_OAUTH_URL: ${GIGACHAT_OAUTH_URL:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_API_URL: ${ANTHROPIC_API_URL:-}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+  EMBEDDING_QUERY_INSTRUCTION: ${EMBEDDING_QUERY_INSTRUCTION:-}
+  CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
+  CLOUD_RU_API_URL: ${CLOUD_RU_API_URL:-}
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+  VOYAGE_API_URL: ${VOYAGE_API_URL:-}
+  # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
+  QDRANT_URL: http://qdrant:6333
+  DATASET_REVISION: ${DATASET_REVISION:-}
+  DATA_PATH: ${DATA_PATH:-}
+  INDEX_SAMPLE: ${INDEX_SAMPLE:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
+  LOG_LEVEL: ${LOG_LEVEL:-}
 
 services:
   qdrant:
@@ -25,39 +57,33 @@ services:
 
   assistant:
     build: .
+    profiles: [api]
     restart: unless-stopped
     ports:
       # HTTP API (/health, /ask) только для этой машины; порт меняется в .env
       # (ASSISTANT_PORT), если 8080 занят.
       - "127.0.0.1:${ASSISTANT_PORT:-8080}:8080"
-    # Все поля assistant/config.py. Пустое значение означает значение по умолчанию из config.py.
-    environment:
-      LLM_PROVIDER: ${LLM_PROVIDER:-}
-      LLM_MODEL: ${LLM_MODEL:-}
-      LLM_EFFORT: ${LLM_EFFORT:-}
-      ANSWER_MODE: ${ANSWER_MODE:-}
-      ANSWER_REVIEW: ${ANSWER_REVIEW:-}
-      GIGACHAT_API_KEY: ${GIGACHAT_API_KEY:-}
-      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-}
-      GIGACHAT_API_URL: ${GIGACHAT_API_URL:-}
-      GIGACHAT_OAUTH_URL: ${GIGACHAT_OAUTH_URL:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_API_URL: ${ANTHROPIC_API_URL:-}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
-      EMBEDDING_QUERY_INSTRUCTION: ${EMBEDDING_QUERY_INSTRUCTION:-}
-      CLOUD_RU_API_KEY: ${CLOUD_RU_API_KEY:-}
-      CLOUD_RU_API_URL: ${CLOUD_RU_API_URL:-}
-      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
-      VOYAGE_API_URL: ${VOYAGE_API_URL:-}
-      # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
-      QDRANT_URL: http://qdrant:6333
-      DATASET_REVISION: ${DATASET_REVISION:-}
-      DATA_PATH: ${DATA_PATH:-}
-      INDEX_SAMPLE: ${INDEX_SAMPLE:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
-      LOG_LEVEL: ${LOG_LEVEL:-}
+    environment: *settings
+
+  bot:
+    build: .
+    # Нужен TELEGRAM_BOT_TOKEN: без него бот сразу завершается.
+    profiles: [bot]
+    restart: unless-stopped
+    command: ["/app/.venv/bin/python", "-m", "assistant.bot"]
+    environment: *settings
+    volumes:
+      # История диалогов, оценки и кэши (SQLite) переживают пересборку образа.
+      - bot-data:/app/data/bot
+    healthcheck:
+      # Порта у бота нет: проверка — свежесть файла-сердцебиения (assistant/bot/health.py).
+      test: ["CMD", "/app/.venv/bin/python", "-m", "assistant.bot.health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+      retries: 3
 
 volumes:
   qdrant-data:
+  bot-data:

@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncGenerator, Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx2
@@ -45,6 +46,7 @@ from assistant.bot.format import (
     TOO_LONG_TEXT,
     WHAT_WRONG_TEXT,
 )
+from assistant.bot.health import fresh
 from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
 from assistant.bot.service import STEPS_VERSION, BotService
@@ -572,3 +574,17 @@ def test_steps_button_sends_status_then_steps() -> None:
     assert steps.message_id == 101
     assert (steps.text or "").startswith("🍳 <b>Оладьи</b>")
     assert any(isinstance(m, AnswerCallbackQuery) for m in telegram.calls)
+
+
+# --- Здоровье для Docker ---
+
+
+def test_heartbeat_is_fresh_only_for_three_minutes(tmp_path: Path) -> None:
+    beat = tmp_path / "heartbeat"
+    assert not fresh(beat)
+
+    beat.touch()
+    now = beat.stat().st_mtime
+
+    assert fresh(beat, now=now + 60)
+    assert not fresh(beat, now=now + 181)

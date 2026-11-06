@@ -9,7 +9,7 @@
 # процессов (ps), stdin — нет.
 #
 # Шаги: ключи API в .env → код ровно того коммита, что проверил CI →
-# стек → датасет и индекс, если их ещё нет → проверка /health.
+# стек (Qdrant и бот) → датасет и индекс, если их ещё нет → состояние сервисов.
 #
 # Весь код — в функции main: bash читает скрипт по ходу выполнения, а git
 # checkout ниже может заменить этот самый файл. Функцию bash разбирает целиком
@@ -38,7 +38,12 @@ main() {
     git fetch --quiet origin main
     git checkout --quiet --detach "$sha"
 
+    # На сервере — только бот: HTTP API наружу не нужен (решение автора).
+    # Переменная перекрывает COMPOSE_PROFILES из .env сервера. API от прошлых
+    # деплоев останавливается.
     echo "== стек"
+    export COMPOSE_PROFILES=bot
+    docker compose rm --stop --force assistant
     make --no-print-directory up
 
     # Индекс строится, только если его нет или он для другой ревизии, модели
@@ -48,11 +53,9 @@ main() {
     make --no-print-directory data
     make --no-print-directory index-if-needed YES=1
 
-    local port
-    port="$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | tr -d "'\"" || true)"
+    # make up уже дождался healthy (--wait): здесь — только что запущено.
     echo "== проверка"
-    curl -fsS "http://127.0.0.1:${port:-8080}/health"
-    echo
+    docker compose ps --format '{{.Service}}: {{.Status}}'
     echo "деплой $sha готов"
 }
 

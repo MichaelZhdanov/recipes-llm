@@ -72,6 +72,8 @@ jobs:
           CLOUD_RU_API_KEY: ${{ secrets.CLOUD_RU_API_KEY }}
           GIGACHAT_API_KEY: ${{ secrets.GIGACHAT_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ESCALATION_CHAT_ID: ${{ secrets.ESCALATION_CHAT_ID }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
@@ -94,6 +96,8 @@ jobs:
             [ -z "$CLOUD_RU_API_KEY" ] || printf 'CLOUD_RU_API_KEY=%s\n' "$CLOUD_RU_API_KEY"
             [ -z "$GIGACHAT_API_KEY" ] || printf 'GIGACHAT_API_KEY=%s\n' "$GIGACHAT_API_KEY"
             [ -z "$ANTHROPIC_API_KEY" ] || printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
+            [ -z "$TELEGRAM_BOT_TOKEN" ] || printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
+            [ -z "$ESCALATION_CHAT_ID" ] || printf 'ESCALATION_CHAT_ID=%s\n' "$ESCALATION_CHAT_ID"
           } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
                 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o ServerAliveInterval=30 "root@$DEPLOY_HOST" "$remote"

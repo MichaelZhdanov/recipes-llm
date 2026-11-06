@@ -18,10 +18,11 @@ INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)
 # init_env.py ещё раз: в старый .env он допишет секреты, появившиеся в новой
 # версии, заданные значения не трогает.
 # --wait ждёт, пока все healthcheck станут зелёными.
-up: .env ## поднять Qdrant и ассистента
+up: .env ## поднять стек: Qdrant и профили из COMPOSE_PROFILES (.env): api, bot
 	$(INIT_ENV)
 	docker compose up -d --build --wait --wait-timeout 300
-	@echo "Ассистент:  http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (HTTP API)"
+	@docker compose ps --format '{{.Service}}: {{.Status}}'
+	@echo "HTTP API:   http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (профиль api)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
 
 down: ## остановить стек (данные в томах Docker сохраняются)

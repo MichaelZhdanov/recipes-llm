@@ -19,7 +19,15 @@ from pathlib import Path
 
 from init_env import write_private
 
-ALLOWED = frozenset({"CLOUD_RU_API_KEY", "GIGACHAT_API_KEY", "ANTHROPIC_API_KEY"})
+ALLOWED = frozenset(
+    {
+        "CLOUD_RU_API_KEY",
+        "GIGACHAT_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "ESCALATION_CHAT_ID",
+    }
+)
 
 
 class EnvValueError(ValueError):

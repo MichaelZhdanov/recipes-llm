@@ -1,13 +1,14 @@
 """Переменные окружения описаны в нескольких местах, тесты не дают им разойтись.
 
 Источник правды — поля `Settings`. Каждое поле должно быть в `.env.example`
-и в `environment` сервиса assistant в `docker-compose.yml`. Секреты в
+и в `environment` сервисов assistant и bot в `docker-compose.yml`. Секреты в
 `.env.example` пустые.
 """
 
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from pydantic import SecretStr
 
@@ -63,14 +64,31 @@ def test_env_example_has_no_secret_values() -> None:
     assert not filled, f"в .env.example заполнены секреты: {sorted(filled)}"
 
 
-def test_assistant_gets_exactly_its_settings_in_compose() -> None:
-    environment = load_compose()["services"]["assistant"]["environment"]
+@pytest.mark.parametrize("service", ["assistant", "bot"])
+def test_assistant_and_bot_get_exactly_the_settings_in_compose(service: str) -> None:
+    environment = load_compose()["services"][service]["environment"]
 
     assert set(environment) == setting_env_names()
     for name, value in environment.items():
         # Пустое значение по умолчанию: тогда Settings берёт своё значение по умолчанию.
         expected = CONTAINER_OVERRIDES.get(name, f"${{{name}:-}}")
         assert value == expected, name
+
+
+def test_api_and_bot_are_profiles_qdrant_always_runs() -> None:
+    services = load_compose()["services"]
+
+    assert services["assistant"]["profiles"] == ["api"]
+    assert services["bot"]["profiles"] == ["bot"]
+    assert "profiles" not in services["qdrant"]
+    assert read_env_file(ROOT / ".env.example")["COMPOSE_PROFILES"] == "api"
+
+
+def test_bot_keeps_its_database_in_a_volume_and_has_a_healthcheck() -> None:
+    bot = load_compose()["services"]["bot"]
+
+    assert "bot-data:/app/data/bot" in bot["volumes"]
+    assert bot["healthcheck"]["test"][-2:] == ["-m", "assistant.bot.health"]
 
 
 def test_no_service_loads_whole_env_file() -> None:
