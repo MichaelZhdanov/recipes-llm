@@ -29,10 +29,15 @@ class Retriever:
         self._embedder = embedder
 
     def search(
-        self, question: str, k: int = 5, conditions: IngredientFilter | None = None
+        self,
+        question: str,
+        k: int = 5,
+        conditions: IngredientFilter | None = None,
+        skip: Sequence[int] = (),
     ) -> list[Hit]:
+        """skip — id рецептов, которых не должно быть в выдаче."""
         vector = self._embedder.embed_query(question)
-        return self._store.search(vector, limit=k, conditions=conditions)
+        return self._store.search(vector, limit=k, conditions=conditions, skip=skip)
 
     def vocabulary(self) -> dict[str, int]:
         """Словарь ингредиентов индекса — для разбора вопроса."""

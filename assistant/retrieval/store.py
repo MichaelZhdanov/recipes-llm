@@ -84,6 +84,24 @@ class Hit:
     score: float
 
 
+def search_filter(
+    conditions: IngredientFilter | None, skip_points: Sequence[str] = ()
+) -> models.Filter | None:
+    """Фильтр поиска: условия «с чем и без чего» и точки, которые пропустить."""
+    base = conditions.to_qdrant() if conditions else None
+    if not skip_points:
+        return base
+    not_these = models.HasIdCondition(has_id=list(skip_points))
+    if base is None:
+        return models.Filter(must_not=[not_these])
+    excluded = base.must_not
+    if excluded is None:
+        excluded = []
+    elif not isinstance(excluded, list):
+        excluded = [excluded]
+    return models.Filter(must=base.must, must_not=[*excluded, not_these])
+
+
 def recipe_point_id(ref: str, recipe_id: int) -> str:
     """id точки рецепта: один и тот же для той же ревизии, поэтому рецепт
     находится по id без поиска."""
@@ -300,13 +318,20 @@ class VectorStore:
         vector: list[float],
         limit: int,
         conditions: IngredientFilter | None = None,
+        skip: Sequence[int] = (),
     ) -> list[Hit]:
         """Ближайшие рецепты среди тех, что прошли условия (фильтр Qdrant
-        отбрасывает остальные до ранжирования векторами)."""
+        отбрасывает остальные до ранжирования векторами). skip — id рецептов,
+        которые проверка уже признала не ответом на вопрос."""
+        skip_points = (
+            [recipe_point_id(self.manifest().ref, recipe_id) for recipe_id in skip]
+            if skip
+            else []
+        )
         response = self._client.query_points(
             self._alias,
             query=vector,
-            query_filter=conditions.to_qdrant() if conditions else None,
+            query_filter=search_filter(conditions, skip_points),
             limit=limit,
             with_payload=True,
             search_params=self.search_params(),

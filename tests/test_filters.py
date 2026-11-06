@@ -121,3 +121,29 @@ def test_recipes_by_id_keep_the_order_and_skip_missing(indexed: VectorStore) -> 
 
     assert indexed.recipes(ids) == [COOKIES, CHICKEN]
     assert indexed.recipes([]) == []
+
+
+def test_skip_drops_recipes_already_rejected_by_the_review(
+    indexed: VectorStore, fake_embedder: Embedder
+) -> None:
+    """Новый поиск после «рецепт не по вопросу» не возвращает те же рецепты,
+    а условия «с чем и без чего» при этом действуют как раньше."""
+    vector = fake_embedder.embed_query("курица рис")
+
+    skipped = indexed.search(vector, limit=5, skip=[CHICKEN.recipe_id])
+    with_sugar = indexed.search(
+        vector,
+        limit=5,
+        conditions=IngredientFilter.of(include=[["сахар"]], exclude=["молоко"]),
+        skip=[CHICKEN.recipe_id],
+    )
+    no_cookies = indexed.search(
+        vector,
+        limit=5,
+        conditions=IngredientFilter.of(include=[["сахар"]]),
+        skip=[COOKIES.recipe_id],
+    )
+
+    assert CHICKEN.name not in [h.chunk.name for h in skipped] and len(skipped) == 2
+    assert [h.chunk.name for h in with_sugar] == [COOKIES.name]
+    assert [h.chunk.name for h in no_cookies] == [COCKTAIL.name]
