@@ -31,7 +31,11 @@ from assistant.indexing.dataset import (
     known_sha256,
     read_dataset,
 )
-from assistant.retrieval.embeddings import EmbeddingError, make_embedder
+from assistant.retrieval.embeddings import (
+    EmbeddingError,
+    embedding_model,
+    make_embedder,
+)
 from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import (
@@ -100,6 +104,33 @@ def _data(settings: Settings) -> int:
         f"датасет {settings.dataset_revision[:8]}: {path} ({path.stat().st_size} байт)"
     )
     return 0
+
+
+# index --check: индекс не подходит к настройкам — нужна сборка. Свой код, чтобы
+# деплой отличал «нужна сборка» от сбоя (1).
+INDEX_OUTDATED = 3
+
+
+def index_check(
+    store: VectorStore, settings: Settings, *, sample: int | None, seed: int
+) -> int:
+    """index --check: 0 — индекс подходит к настройкам, INDEX_OUTDATED — нужна сборка.
+
+    Ничего не строит и не обращается к API эмбеддингов: деплой по коду ответа
+    решает, строить ли индекс (только с явным разрешением) или остановиться.
+    """
+    reason = rebuild_reason(
+        store,
+        ref=settings.dataset_revision,
+        model=embedding_model(settings),
+        sample=sample,
+        seed=seed,
+    )
+    if reason is None:
+        print("индекс подходит к настройкам: ревизия, модель и размер выборки те же")
+        return 0
+    _log(f"нужна сборка индекса: {reason}")
+    return INDEX_OUTDATED
 
 
 def _index(
@@ -274,6 +305,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="только если индекса нет, он для другой ревизии или модели или это выборка",
     )
     index.add_argument(
+        "--check",
+        action="store_true",
+        help=f"только проверить: 0 — индекс подходит, {INDEX_OUTDATED} — нужна сборка",
+    )
+    index.add_argument(
         "--sample",
         type=int,
         metavar="N",
@@ -314,6 +350,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "data":
             return _data(settings)
+        if args.command == "index" and args.check:
+            store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
+            return index_check(
+                store,
+                settings,
+                sample=args.sample
+                if args.sample is not None
+                else settings.index_sample,
+                seed=args.seed,
+            )
         if args.command == "index":
             return _index(
                 settings,

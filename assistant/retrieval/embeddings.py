@@ -235,12 +235,17 @@ class HttpEmbedder:
         return [item["embedding"] for item in items]
 
 
+def embedding_model(settings: Settings) -> str:
+    """Модель эмбеддингов из настроек; пусто — модель провайдера по умолчанию."""
+    return settings.embedding_model or DEFAULT_MODELS[settings.embedding_provider]
+
+
 def make_embedder(settings: Settings, client: httpx2.Client) -> HttpEmbedder:
     if settings.embedding_provider == "cloudru":
         api_key, base_url = settings.cloud_ru_api_key, settings.cloud_ru_api_url
     else:
         api_key, base_url = settings.voyage_api_key, settings.voyage_api_url
-    model = settings.embedding_model or DEFAULT_MODELS[settings.embedding_provider]
+    model = embedding_model(settings)
     return HttpEmbedder(
         provider=PROVIDERS[settings.embedding_provider],
         api_key=api_key,

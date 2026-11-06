@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed ask search eval test lint format
+.PHONY: help up down data index index-if-needed index-check ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -45,6 +45,10 @@ index: .env ## построить индекс заново: make index [YES=1] 
 index-if-needed: .env ## построить индекс, только если его нет или он не тот
 	docker compose up -d --wait qdrant
 	$(RUN) index --if-needed $(if $(YES),--yes)
+
+index-check: .env ## индекс подходит к настройкам? ничего не строит; код 3 — нужна сборка
+	docker compose up -d --wait qdrant
+	$(RUN) index --check
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.

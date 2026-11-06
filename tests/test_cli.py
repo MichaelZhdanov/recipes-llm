@@ -1,7 +1,8 @@
 import pytest
 from eval_helpers import MANIFEST
 
-from assistant.cli import format_plan, main, rebuild_reason
+from assistant.cli import INDEX_OUTDATED, format_plan, index_check, main, rebuild_reason
+from assistant.config import Settings
 from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import VectorStore
 from assistant.tools.search_recipes import SearchArgs
@@ -119,3 +120,17 @@ def test_format_plan_shows_query_conditions_and_dropped_names() -> None:
         "нет в словаре, отброшено: куриное мясо"
     )
     assert format_plan(SearchArgs("борщ", IngredientFilter())) == "запрос: борщ"
+
+
+def test_index_check_builds_nothing_and_says_whether_a_build_is_needed(
+    store: VectorStore,
+) -> None:
+    """Деплой строит индекс только с разрешением: сначала он спрашивает --check."""
+    settings = Settings(dataset_revision="v3.4.2", embedding_model="fake-model")
+
+    assert index_check(store, settings, sample=None, seed=1) == INDEX_OUTDATED
+    store.recreate(MANIFEST)
+    assert index_check(store, settings, sample=None, seed=1) == 0
+    assert index_check(store, settings, sample=1000, seed=1) == INDEX_OUTDATED
+    # Ключа эмбеддингов нет — проверке он и не нужен.
+    assert not settings.cloud_ru_api_key.get_secret_value()
