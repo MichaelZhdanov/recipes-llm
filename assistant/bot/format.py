@@ -136,17 +136,44 @@ def answer_html(
 def answer_buttons(
     answer_id: int, answer: Answer, pages: Mapping[str, bool]
 ) -> Keyboard:
-    """👍/👎 под ответом и «🍳 Шаги» для рецептов без живой страницы."""
+    """👍/👎 под ответом; у рецепта с живой страницей — «📖 Шаги с фото»
+    (фото блюда и число шагов, сами шаги по ссылке), без неё — «🍳 Шаги» от ИИ."""
     if answer.status == "chat":
         return []
     rows: Keyboard = [
         [("👍", f"vote:{answer_id}:up"), ("👎", f"vote:{answer_id}:down")]
     ]
     for link in answer.sources:
-        if not pages.get(link.url, False):
-            label = link.name if len(link.name) <= 40 else link.name[:39] + "…"
+        label = link.name if len(link.name) <= 40 else link.name[:39] + "…"
+        if pages.get(link.url, False):
+            rows.append(
+                [(f"📖 Шаги с фото: {label}", f"card:{answer_id}:{link.recipe_id}")]
+            )
+        else:
             rows.append([(f"🍳 Шаги: {label}", f"steps:{answer_id}:{link.recipe_id}")])
     return rows
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def card_caption(name: str, url: str, steps: int, step_photos: int) -> str:
+    """Подпись к фото блюда: сколько шагов на странице — сами шаги по ссылке."""
+    link = f'<a href="{html.escape(url, quote=True)}">'
+    head = f"📖 <b>{html.escape(name)}</b>"
+    if not steps:
+        return f"{head}\n{link}Страница рецепта на povarenok.ru</a>"
+    count = f"{steps} {_plural(steps, 'шаг', 'шага', 'шагов')}"
+    if step_photos:
+        count += f", из них с фото — {step_photos}"
+    return (
+        f"{head}\nНа странице — {count}.\n{link}Смотреть пошагово на povarenok.ru</a>"
+    )
 
 
 def reason_buttons(answer_id: int) -> Keyboard:

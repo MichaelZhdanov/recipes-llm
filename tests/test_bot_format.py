@@ -9,6 +9,7 @@ from assistant.bot.format import (
     STATUS,
     answer_buttons,
     answer_html,
+    card_caption,
     reason_buttons,
     status_text,
 )
@@ -75,11 +76,14 @@ def test_gigachat_note_only_when_asked() -> None:
     assert "сгенерирован GigaChat" in answer_html(answer(["…"]), {}, gigachat_note=True)
 
 
-def test_buttons_vote_and_steps_only_for_dead_pages() -> None:
+def test_buttons_vote_photo_card_for_live_pages_and_steps_for_dead_ones() -> None:
     rows = answer_buttons(5, answer(["…"]), {ALIVE: True, DEAD: False})
 
     assert rows[0] == [("👍", "vote:5:up"), ("👎", "vote:5:down")]
-    assert rows[1:] == [[("🍳 Шаги: Оладьи", "steps:5:2")]]
+    assert rows[1:] == [
+        [("📖 Шаги с фото: Блины <тонкие> & нежные", "card:5:1")],
+        [("🍳 Шаги: Оладьи", "steps:5:2")],
+    ]
     assert [row[0][1] for row in reason_buttons(5)] == [
         "why:5:unclear",
         "why:5:wrong",
@@ -135,3 +139,18 @@ def test_redirect_is_not_followed_and_means_no_link() -> None:
 
     assert pages.alive(ALIVE) is False
     assert len(seen) == 1
+
+
+def test_card_caption_counts_steps_and_links_to_the_page() -> None:
+    caption = card_caption("Блины <тонкие>", ALIVE, 6, 5)
+    one = card_caption("Блины", ALIVE, 1, 0)
+    none = card_caption("Блины", ALIVE, 0, 0)
+
+    assert caption.startswith(
+        "📖 <b>Блины &lt;тонкие&gt;</b>\nНа странице — 6 шагов, из них с фото — 5."
+    )
+    assert f'<a href="{ALIVE}">Смотреть пошагово на povarenok.ru</a>' in caption
+    assert "— 1 шаг." in one and "с фото" not in one
+    assert "шаг" not in none and "Страница рецепта на povarenok.ru" in none
+    assert "— 3 шага." in card_caption("Блины", ALIVE, 3, 0)
+    assert "— 12 шагов." in card_caption("Блины", ALIVE, 12, 0)

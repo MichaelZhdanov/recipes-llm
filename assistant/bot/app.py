@@ -12,6 +12,8 @@
   «что не так?» тремя кнопками.
 - «🍳 Шаги» — только у рецептов без живой страницы: шаги пишет и проверяет
   `generation/steps.py` (~20 с), бот присылает их отдельным сообщением.
+- «📖 Шаги с фото» — у рецептов с живой страницей: фото блюда и сколько на
+  странице шагов, сами шаги — по ссылке (`recipe_page.py`).
 - Здоровье для Docker — файл-сердцебиение (`health.py`): раз в минуту бот
   спрашивает Telegram getMe и при успехе обновляет файл.
 """
@@ -53,6 +55,7 @@ from assistant.bot.format import (
 )
 from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
 from assistant.bot.pages import PageChecker
+from assistant.bot.recipe_page import fetch_card
 from assistant.bot.service import ERROR_REPLY, BotService, RecipeLookup, Reply
 from assistant.bot.store import Store, Vote, VoteReason
 from assistant.config import Settings
@@ -225,6 +228,30 @@ class Handlers:
         if isinstance(message, Message):
             await message.edit_text(text)
 
+    async def card(self, callback: CallbackQuery, bot: Bot) -> None:
+        parsed = parse_callback(callback.data, "card")
+        message = callback.message
+        if parsed is None or not parsed[1].isdigit() or message is None:
+            await callback.answer()
+            return
+        await callback.answer()
+        chat_id = message.chat.id
+        try:
+            reply = await asyncio.to_thread(
+                self.service.card, chat_id, parsed[0], int(parsed[1])
+            )
+        except Exception:
+            logger.exception("карточка рецепта не собрана")
+            reply = ERROR_REPLY
+        if reply.photo is not None:
+            try:
+                await bot.send_photo(chat_id, reply.photo, caption=reply.text)
+                return
+            except TelegramBadRequest:
+                # Telegram не смог забрать фото по адресу — тогда без фото.
+                logger.warning("фото рецепта не отправилось", exc_info=True)
+        await bot.send_message(chat_id, reply.text)
+
     async def steps(self, callback: CallbackQuery, bot: Bot) -> None:
         parsed = parse_callback(callback.data, "steps")
         message = callback.message
@@ -264,6 +291,7 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
     router.callback_query.register(handlers.why, F.data.startswith("why:"))
     router.callback_query.register(handlers.steps, F.data.startswith("steps:"))
+    router.callback_query.register(handlers.card, F.data.startswith("card:"))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     return dispatcher
@@ -325,6 +353,7 @@ async def run(settings: Settings) -> None:
         PageChecker(pages_http, store),
         recipes=recipe_lookup(VectorStore(qdrant)),
         make_steps=lambda text: make_steps(text, writer, reviewer),
+        fetch_card=lambda url: fetch_card(pages_http, url),
         gigachat_note=settings.llm_provider == "gigachat",
     )
     bot = make_bot(token)

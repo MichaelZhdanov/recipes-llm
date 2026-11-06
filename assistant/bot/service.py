@@ -20,11 +20,13 @@ from assistant.bot.format import (
     Keyboard,
     answer_buttons,
     answer_html,
+    card_caption,
     reason_buttons,
     steps_html,
     steps_refused_html,
 )
-from assistant.bot.pages import PageChecker
+from assistant.bot.pages import PAGE_TTL, PageChecker
+from assistant.bot.recipe_page import RecipeCard
 from assistant.bot.store import SavedSteps, Store, Vote, VoteReason
 from assistant.generation import steps as steps_module
 from assistant.generation.answer import Progress, render_markdown
@@ -42,6 +44,8 @@ class Reply:
     text: str
     buttons: Keyboard = field(default_factory=list)
     answer_id: int | None = None
+    # Фото к сообщению (адрес на povarenok.ru); текст тогда — подпись.
+    photo: str | None = None
 
 
 ERROR_REPLY = Reply(ERROR_TEXT)
@@ -51,6 +55,8 @@ GONE_REPLY = Reply(GONE_TEXT)
 RecipeLookup = Callable[[int], Chunk | None]
 # Шаги по тексту рецепта: steps.make_steps с моделями бота.
 StepsMaker = Callable[[str], Steps]
+# Карточка страницы рецепта по адресу: recipe_page.fetch_card; None — не вышло.
+CardFetcher = Callable[[str], RecipeCard | None]
 # Кэш шагов сбрасывается, когда меняется любой из двух промптов.
 STEPS_VERSION = f"{steps_module.PROMPT_VERSION}+{steps_module.REVIEW_PROMPT_VERSION}"
 
@@ -64,6 +70,7 @@ class BotService:
         *,
         recipes: RecipeLookup,
         make_steps: StepsMaker,
+        fetch_card: CardFetcher,
         gigachat_note: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -72,6 +79,7 @@ class BotService:
         self.pages = pages
         self.recipes = recipes
         self.make_steps = make_steps
+        self.fetch_card = fetch_card
         self.gigachat_note = gigachat_note
         self._clock = clock
 
@@ -162,6 +170,34 @@ class BotService:
         if saved.approved:
             return Reply(steps_html(recipe.name, json.loads(saved.text)))
         return Reply(steps_refused_html(recipe.name))
+
+    def card(self, chat_id: int, answer_id: int, recipe_id: int) -> Reply:
+        """Фото блюда и сколько шагов на странице; сами шаги — по ссылке.
+
+        Карточка кэшируется на неделю, как проверка страницы; если разобрать
+        страницу не вышло — просто ссылка, без кэша.
+        """
+        ids = self.store.recipe_ids(answer_id, chat_id)
+        if ids is None or recipe_id not in ids:
+            return GONE_REPLY
+        try:
+            recipe = self.recipes(recipe_id)
+        except DEPENDENCY_ERRORS as error:
+            logger.error("рецепт не найден: %s: %s", type(error).__name__, error)
+            return ERROR_REPLY
+        if recipe is None:
+            return GONE_REPLY
+        card = self.store.card(recipe.url, PAGE_TTL)
+        if card is None:
+            card = self.fetch_card(recipe.url)
+            if card is not None:
+                self.store.save_card(recipe.url, card)
+        if card is None:
+            return Reply(card_caption(recipe.name, recipe.url, 0, 0))
+        return Reply(
+            card_caption(recipe.name, recipe.url, card.steps, card.step_photos),
+            photo=card.photo,
+        )
 
     def _new_steps(self, recipe: Chunk) -> SavedSteps | None:
         result = self.make_steps(recipe.text)

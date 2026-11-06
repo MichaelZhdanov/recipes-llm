@@ -25,6 +25,7 @@ from aiogram.methods import (
     EditMessageText,
     SendChatAction,
     SendMessage,
+    SendPhoto,
     TelegramMethod,
 )
 from aiogram.methods.base import TelegramType
@@ -49,6 +50,7 @@ from assistant.bot.format import (
 from assistant.bot.health import fresh
 from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
+from assistant.bot.recipe_page import RecipeCard
 from assistant.bot.service import STEPS_VERSION, BotService
 from assistant.bot.store import Store
 from assistant.config import Settings
@@ -134,6 +136,11 @@ class RecordingStore(Store):
         super().set_message_id(answer_id, message_id)
 
 
+PHOTO = "https://www.povarenok.ru/data/pie.jpg"
+# Рецепт 1 ответа — с живой страницей; в индексе — с тем же адресом.
+PIE = make_chunk("Блины на молоке", {"Молоко": "500 мл"}, recipe_id=1).model_copy(
+    update={"url": ALIVE}
+)
 PANCAKES = make_chunk(
     "Оладьи", {"Кефир": "500 мл", "Мука пшеничная": "2 стак."}, recipe_id=2
 )
@@ -154,20 +161,40 @@ class FakeSteps:
         )
 
 
-def make_service(answerer: FakeAnswerer, steps: FakeSteps | None = None) -> BotService:
+CARD = RecipeCard(PHOTO, 6, 5)
+
+
+class FakeCards:
+    """Вместо страницы povarenok: заданная карточка и счётчик запросов."""
+
+    def __init__(self, card: RecipeCard | None = CARD) -> None:
+        self.card = card
+        self.urls: list[str] = []
+
+    def __call__(self, url: str) -> RecipeCard | None:
+        self.urls.append(url)
+        return self.card
+
+
+def make_service(
+    answerer: FakeAnswerer,
+    steps: FakeSteps | None = None,
+    cards: FakeCards | None = None,
+) -> BotService:
     store = RecordingStore()
     pages = httpx2.Client(
         transport=httpx2.MockTransport(
             lambda request: httpx2.Response(200 if str(request.url) == ALIVE else 404)
         )
     )
-    index: dict[int, Chunk] = {PANCAKES.recipe_id: PANCAKES}
+    index: dict[int, Chunk] = {PANCAKES.recipe_id: PANCAKES, PIE.recipe_id: PIE}
     return BotService(
         answerer,
         store,
         PageChecker(pages, store),
         recipes=index.get,
         make_steps=steps or FakeSteps(),
+        fetch_card=cards or FakeCards(),
     )
 
 
@@ -198,7 +225,10 @@ def test_answer_links_live_pages_and_offers_steps_for_dead_ones() -> None:
     assert f'<a href="{ALIVE}">способ приготовления</a>' in reply.text
     assert "Оладьи</b> — страница рецепта на сайте недоступна" in reply.text
     assert reply.buttons[0][0] == ("👍", f"vote:{reply.answer_id}:up")
-    assert reply.buttons[1] == [("🍳 Шаги: Оладьи", f"steps:{reply.answer_id}:2")]
+    assert reply.buttons[1:] == [
+        [("📖 Шаги с фото: Блины на молоке", f"card:{reply.answer_id}:1")],
+        [("🍳 Шаги: Оладьи", f"steps:{reply.answer_id}:2")],
+    ]
 
 
 def test_failure_of_a_dependency_leaves_history_untouched(
@@ -260,7 +290,7 @@ def test_steps_are_written_once_and_shared_through_the_cache() -> None:
     assert steps.texts == [PANCAKES.text]
     # Чужой ответ и рецепт не из ответа — «уже не найти».
     assert service.steps(8, first, 2).text == GONE_TEXT
-    assert service.steps(7, first, 1).text == GONE_TEXT
+    assert service.steps(7, first, 99).text == GONE_TEXT
 
 
 def test_refusal_is_cached_and_a_broken_answer_is_retried() -> None:
@@ -309,6 +339,9 @@ class FakeTelegram(BaseSession):
         if isinstance(method, SendMessage):
             self._message_id += 1
             result = self._message(method.chat_id, self._message_id, method.text)
+        elif isinstance(method, SendPhoto):
+            self._message_id += 1
+            result = self._message(method.chat_id, self._message_id, method.caption)
         elif isinstance(method, EditMessageText):
             result = self._message(method.chat_id, method.message_id, method.text)
         content = json.dumps({"ok": True, "result": result})
@@ -544,7 +577,7 @@ def test_vote_buttons_disappear_and_thumbs_down_asks_why() -> None:
     assert [
         [b.callback_data for b in row]
         for row in keyboard_edit.reply_markup.inline_keyboard
-    ] == [["steps:1:2"]]
+    ] == [["card:1:1"], ["steps:1:2"]]
     (question,) = [m for m in telegram.calls if isinstance(m, SendMessage)]
     assert question.text == WHAT_WRONG_TEXT
     assert [m.text for m in telegram.edits()] == [THANKS_TEXT]
@@ -595,3 +628,45 @@ def test_heartbeat_is_fresh_only_for_three_minutes(tmp_path: Path) -> None:
 
     assert fresh(beat, now=now + 60)
     assert not fresh(beat, now=now + 181)
+
+
+# --- Фото блюда и число шагов ---
+
+
+def test_card_is_fetched_once_and_shown_with_the_dish_photo() -> None:
+    cards = FakeCards()
+    service = make_service(FakeAnswerer(), cards=cards)
+    answer_id = service.ask(7, "блины").answer_id
+    assert answer_id is not None
+
+    reply = service.card(7, answer_id, 1)
+    again = service.card(7, answer_id, 1)
+
+    assert reply.photo == PHOTO
+    assert "На странице — 6 шагов, из них с фото — 5." in reply.text
+    assert again == reply and cards.urls == [ALIVE]
+    assert service.card(8, answer_id, 1).text == GONE_TEXT
+
+
+def test_unparsed_page_gives_a_plain_link_and_is_not_cached() -> None:
+    cards = FakeCards(card=None)
+    service = make_service(FakeAnswerer(), cards=cards)
+    answer_id = service.ask(7, "блины").answer_id
+    assert answer_id is not None
+
+    reply = service.card(7, answer_id, 1)
+    service.card(7, answer_id, 1)
+
+    assert reply.photo is None and "Страница рецепта на povarenok.ru" in reply.text
+    assert len(cards.urls) == 2
+
+
+def test_card_button_sends_the_photo_with_a_caption() -> None:
+    service = make_service(FakeAnswerer())
+    feed(service, update("блины"))
+
+    telegram = feed(service, press("card:1:1", message_id=101))
+
+    (photo,) = [m for m in telegram.calls if isinstance(m, SendPhoto)]
+    assert photo.photo == PHOTO
+    assert "Смотреть пошагово на povarenok.ru" in (photo.caption or "")
