@@ -42,8 +42,11 @@ import random
 import re
 import shlex
 import sys
+import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -575,6 +578,11 @@ def mark_answerable(
     return marked
 
 
+def _clock_text(seconds: float) -> str:
+    minutes, rest = divmod(int(seconds), 60)
+    return f"{minutes}:{rest:02d}"
+
+
 def run_answers(
     cases: Sequence[Case],
     answerer: Answerer,
@@ -582,28 +590,67 @@ def run_answers(
     runs: int,
     done: Mapping[str, AnswerCase] | None = None,
     on_case: Callable[[AnswerCase], None] | None = None,
+    workers: int = 1,
+    clock: Callable[[], float] = time.monotonic,
 ) -> list[AnswerCase]:
-    """Прогоняет кейсы по порядку. Готовые (done) берутся из журнала, а не заново.
+    """Прогоняет кейсы; готовые (done) берутся из журнала, а не заново.
 
-    on_case вызывается после каждого нового кейса: так он сразу попадает в журнал.
+    workers — сколько кейсов параллельно: думающая модель cloud.ru отвечает
+    около минуты, по одному весь набор шёл бы час. После каждого кейса в
+    stderr — сколько готово, сколько прошло и сколько примерно осталось.
+    on_case — сразу после кейса, под замком: так он попадает в журнал.
     """
-    results = []
+    results: dict[int, AnswerCase] = {}
+    todo: list[tuple[int, Case]] = []
     for index, case in enumerate(cases, start=1):
         if done is not None and case.id in done:
-            results.append(done[case.id])
-            _log(f"[{index}/{len(cases)}] {case.id}: из журнала")
-            continue
+            results[index] = done[case.id]
+            _log(f"{case.id}: из журнала")
+        else:
+            todo.append((index, case))
+    started = clock()
+    lock = threading.Lock()
+    finished = 0
+
+    def one(item: tuple[int, Case]) -> tuple[int, AnswerCase]:
+        nonlocal finished
+        index, case = item
         case_runs = [
             AnswerRun.from_result(answerer.answer(case.question, history(case)))
             for _ in range(runs)
         ]
-        outcome = ", ".join(run.answer.reason or "ответ" for run in case_runs)
-        _log(f"[{index}/{len(cases)}] {case.id}: {outcome}")
         result = AnswerCase(case=case, runs=case_runs)
-        if on_case is not None:
-            on_case(result)
-        results.append(result)
-    return results
+        outcome = ", ".join(run.answer.reason or "ответ" for run in case_runs)
+        with lock:
+            finished += 1
+            if on_case is not None:
+                on_case(result)
+            elapsed = clock() - started
+            left = elapsed / finished * (len(todo) - finished)
+            _log(
+                f"[{finished}/{len(todo)}] {case.id}: {outcome} · прошло "
+                f"{_clock_text(elapsed)} · осталось ≈ {_clock_text(left)}"
+            )
+        return index, result
+
+    if workers <= 1:
+        # По одному: сбой останавливает прогон, следующие кейсы не начинаются.
+        for item in todo:
+            index, result = one(item)
+            results[index] = result
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(one, item) for item in todo]
+            try:
+                for future in futures:
+                    index, result = future.result()
+                    results[index] = result
+            except BaseException:
+                # Сбой — не начинать новые кейсы; начатые доработают и попадут в журнал.
+                for future in futures:
+                    future.cancel()
+                raise
+    return [results[i] for i in sorted(results)]
 
 
 def _write_raw(path: Path, raw: object) -> None:
@@ -804,6 +851,7 @@ def _answer_stage(
     mode: AnswerMode | None = None,
     judge_choice: JudgeChoice = DEFAULT_JUDGE,
     review: bool | None = None,
+    workers: int = 1,
 ) -> int:
     revision = git_revision()
     review = settings.answer_review if review is None else review
@@ -868,7 +916,9 @@ def _answer_stage(
             )
 
         try:
-            results = run_answers(cases, answerer, runs=runs, done=done, on_case=save)
+            results = run_answers(
+                cases, answerer, runs=runs, done=done, on_case=save, workers=workers
+            )
             results = mark_answerable(results, retriever)
             judging = _judge(settings, results, judge_choice) if judge else None
         except BaseException:
@@ -988,6 +1038,12 @@ def _categories(value: str) -> frozenset[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.run", description=__doc__)
     parser.add_argument("--runs", type=int, default=RUNS)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="сколько кейсов параллельно (думающая модель отвечает около минуты)",
+    )
     parser.add_argument(
         "--sample",
         type=int,
@@ -1117,6 +1173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.mode,
         judge_choice,
         review=False if args.no_review else None,
+        workers=args.workers,
     )
 
 

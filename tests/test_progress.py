@@ -151,3 +151,15 @@ def test_resume_hint_keeps_flags_and_drops_old_resume() -> None:
         ["--label", "errors", "--resume", "old.jsonl", "--categories", "error"]
     ) == ["--label", "errors", "--categories", "error"]
     assert _without_resume(["--resume=old.jsonl", "--no-judge"]) == ["--no-judge"]
+
+
+def test_parallel_cases_keep_order_and_log_progress_with_eta(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Параллельно — те же результаты в том же порядке; в stderr — готово и ETA."""
+    answerer = FlakyAnswerer()
+    results = run_answers(CASES, cast(Answerer, answerer), runs=1, workers=3)
+
+    assert [r.case.id for r in results] == [c.id for c in CASES]
+    err = capsys.readouterr().err
+    assert f"[{len(CASES)}/{len(CASES)}]" in err and "осталось ≈ 0:00" in err
