@@ -106,3 +106,31 @@ def test_canaries_must_quote_lines_of_one_real_recipe() -> None:
     )
     assert "canaries: 2 шт., да 1, нет 2" in lines
     assert problems == 4
+
+
+def test_steps_canary_must_repeat_a_whole_real_recipe() -> None:
+    whole = (
+        "Овсяное печенье\nХлопья овсяные — 200 г\nЯйцо куриное — 2 шт\nСахар — 100 г"
+    )
+    steps = "1. Смешайте хлопья, яйца и сахар.\n2. Выпекайте до золотистого цвета."
+    files = {
+        "steps_canaries": [
+            {"id": "steps-001", "recipe": whole, "steps": steps, "approved": True},
+            # Строка рецепта пропущена: проверка «все ингредиенты использованы»
+            # судила бы по неполному списку.
+            {
+                "id": "steps-002",
+                "recipe": whole.rsplit("\n", 1)[0],
+                "steps": steps,
+                "approved": False,
+            },
+            {"id": "steps-003", "recipe": whole, "steps": steps},
+        ]
+    }
+
+    lines, problems = check_canaries(ROWS, files)
+
+    assert any(line.startswith("НЕ РЕЦЕПТ ЦЕЛИКОМ steps-002") for line in lines)
+    assert any(line.startswith("СХЕМА steps_canaries/steps-003") for line in lines)
+    assert "steps_canaries: 2 шт., да 1, нет 1" in lines
+    assert problems == 2

@@ -26,6 +26,7 @@ HOLDOUT_DIR = DATASET_DIR / "holdout"
 CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
 CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 RELEVANCE_CANARIES_FILE = DATASET_DIR / "judge" / "relevance_canaries.yaml"
+STEPS_CANARIES_FILE = DATASET_DIR / "judge" / "steps_canaries.yaml"
 
 Category = Literal[
     "include",
@@ -169,6 +170,25 @@ class RelevanceCanary(BaseModel):
     notes: str = ""
 
 
+class StepsCanary(BaseModel):
+    """Рецепт и шаги приготовления, написанные ИИ, с известным ответом «можно показать».
+
+    Шаги пишутся, когда страницы рецепта на сайте нет. Канарейки с
+    `approved: false` расходятся со стандартом тонко — один лишний
+    ингредиент, выдуманные «40 минут при 180°», опасный шаг: если проверка
+    шагов их пропускает, показывать её шаги пользователю нельзя.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^steps-\d{3}$")
+    # Рецепт целиком: название и все строки «Ингредиент — количество», через \n.
+    recipe: str = Field(min_length=1)
+    steps: str = Field(min_length=1)
+    approved: bool
+    notes: str = ""
+
+
 def _read_list(file: Path) -> list[object]:
     raw = yaml.safe_load(file.read_text(encoding="utf-8")) or []
     if not isinstance(raw, list):
@@ -218,5 +238,11 @@ def load_relevance_canaries(
     file: Path = RELEVANCE_CANARIES_FILE,
 ) -> list[RelevanceCanary]:
     canaries = [RelevanceCanary.model_validate(item) for item in _read_list(file)]
+    _check_unique([canary.id for canary in canaries])
+    return canaries
+
+
+def load_steps_canaries(file: Path = STEPS_CANARIES_FILE) -> list[StepsCanary]:
+    canaries = [StepsCanary.model_validate(item) for item in _read_list(file)]
     _check_unique([canary.id for canary in canaries])
     return canaries

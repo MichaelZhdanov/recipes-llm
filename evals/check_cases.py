@@ -29,7 +29,7 @@ from pydantic import ValidationError
 from assistant.generation.citations import line_key
 from assistant.indexing.chunks import recipe_text
 from assistant.indexing.dataset import Recipe, read_dataset
-from evals.dataset import Canary, Case, ClarityCanary, RelevanceCanary
+from evals.dataset import Canary, Case, ClarityCanary, RelevanceCanary, StepsCanary
 from evals.retrieval_metrics import fits, unknown_ingredients
 
 
@@ -72,20 +72,28 @@ def _lines_index(recipes: Sequence[Recipe]) -> dict[str, set[int]]:
 def check_canaries(
     recipes: Sequence[Recipe], files: Mapping[str, Sequence[object]]
 ) -> tuple[list[str], int]:
-    """Канарейки судьи: files — содержимое canaries, clarity_canaries и
-    relevance_canaries (по имени файла без .yaml). Строки отчёта и число проблем."""
+    """Канарейки судьи: files — содержимое canaries, clarity_canaries,
+    relevance_canaries и steps_canaries (по имени файла без .yaml).
+    Строки отчёта и число проблем."""
     lines: list[str] = []
     problems = 0
     index = _lines_index(recipes)
     by_name: dict[str, list[set[str]]] = {}
+    # Рецепт целиком как набор строк: канарейка шагов должна его повторять.
+    whole: set[frozenset[str]] = set()
     for recipe in recipes:
         by_name.setdefault(line_key(recipe.name), []).append(
             {i.name.lower() for i in recipe.ingredients}
         )
-    models: dict[str, type[Canary] | type[ClarityCanary] | type[RelevanceCanary]] = {
+        whole.add(frozenset(line_key(line) for line in recipe_text(recipe).split("\n")))
+    models: dict[
+        str,
+        type[Canary] | type[ClarityCanary] | type[RelevanceCanary] | type[StepsCanary],
+    ] = {
         "canaries": Canary,
         "clarity_canaries": ClarityCanary,
         "relevance_canaries": RelevanceCanary,
+        "steps_canaries": StepsCanary,
     }
     for file, items in files.items():
         verdicts: Counter[bool] = Counter()
@@ -102,6 +110,18 @@ def check_canaries(
                 problems += 1
                 lines.append(f"ПОВТОР {file}/{canary.id}")
             seen.add(canary.id)
+            if isinstance(canary, StepsCanary):
+                verdicts[canary.approved] += 1
+                lines_of = frozenset(
+                    line_key(line) for line in canary.recipe.split("\n")
+                )
+                if lines_of not in whole:
+                    problems += 1
+                    lines.append(
+                        f"НЕ РЕЦЕПТ ЦЕЛИКОМ {canary.id}: recipe — не название "
+                        "и все строки одного рецепта"
+                    )
+                continue
             if isinstance(canary, RelevanceCanary):
                 verdicts[canary.relevant] += 1
                 wanted = set(canary.ingredients)
