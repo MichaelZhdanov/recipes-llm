@@ -189,6 +189,8 @@ def make_service(
     answerer: FakeAnswerer,
     steps: FakeSteps | None = None,
     pages: FakePages | None = None,
+    *,
+    ai_steps: bool = True,
 ) -> BotService:
     store = RecordingStore()
     http = httpx2.Client(
@@ -202,7 +204,7 @@ def make_service(
         store,
         PageChecker(http, store),
         recipes=index.get,
-        make_steps=steps or FakeSteps(),
+        make_steps=(steps or FakeSteps()) if ai_steps else None,
         fetch_page=pages or FakePages(),
         fetch_photo=lambda url: PHOTO_BYTES if url == PHOTO else None,
     )
@@ -281,6 +283,22 @@ def test_thumbs_down_asks_what_went_wrong_and_records_the_reason() -> None:
     assert follow is not None and follow.text == WHAT_WRONG_TEXT
     assert follow.buttons[2] == [("Не получилось", f"why:{answer_id}:failed")]
     assert service.vote_reason(7, answer_id, "failed") == THANKS_TEXT
+
+
+def test_without_a_checker_ai_steps_are_neither_offered_nor_written() -> None:
+    """Шаги от ИИ проверяет модель-проверка; без неё у рецепта без страницы
+    кнопки нет, а нажатие старой кнопки — честный отказ, а не шаги наугад."""
+    service = make_service(FakeAnswerer(), ai_steps=False)
+
+    reply = service.ask(7, "блины")
+    assert reply.answer_id is not None
+    old_button = service.steps(7, reply.answer_id, 2)
+
+    assert reply.buttons[1:] == [
+        [("📖 Шаги с фото: Блины на молоке", f"card:{reply.answer_id}:1")]
+    ]
+    assert "страница рецепта на сайте недоступна" in reply.text
+    assert old_button.text.startswith("😔 Не смог надёжно расписать шаги для «Оладьи»")
 
 
 def test_steps_are_written_once_and_shared_through_the_cache() -> None:

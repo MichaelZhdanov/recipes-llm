@@ -134,10 +134,15 @@ def answer_html(
 
 
 def answer_buttons(
-    answer_id: int, answer: Answer, pages: Mapping[str, bool]
+    answer_id: int,
+    answer: Answer,
+    pages: Mapping[str, bool],
+    *,
+    ai_steps: bool = True,
 ) -> Keyboard:
     """👍/👎 под ответом; у рецепта с живой страницей — «📖 Шаги с фото»
-    (фото блюда и число шагов, сами шаги по ссылке), без неё — «🍳 Шаги» от ИИ."""
+    (фото блюда и число шагов, сами шаги по ссылке), без неё — «🍳 Шаги» от ИИ.
+    ai_steps=False — шаги от ИИ некому проверить: у такого рецепта кнопки нет."""
     if answer.status == "chat":
         return []
     rows: Keyboard = [
@@ -149,7 +154,7 @@ def answer_buttons(
             rows.append(
                 [(f"📖 Шаги с фото: {label}", f"card:{answer_id}:{link.recipe_id}")]
             )
-        else:
+        elif ai_steps:
             rows.append([(f"🍳 Шаги: {label}", f"steps:{answer_id}:{link.recipe_id}")])
     return rows
 

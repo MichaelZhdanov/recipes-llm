@@ -73,7 +73,7 @@ class BotService:
         pages: PageChecker,
         *,
         recipes: RecipeLookup,
-        make_steps: StepsMaker,
+        make_steps: StepsMaker | None,
         fetch_page: PageFetcher,
         fetch_photo: PhotoFetcher,
         gigachat_note: bool = False,
@@ -126,7 +126,9 @@ class BotService:
         )
         return Reply(
             answer_html(answer, alive, gigachat_note=self.gigachat_note),
-            answer_buttons(answer_id, answer, alive),
+            answer_buttons(
+                answer_id, answer, alive, ai_steps=self.make_steps is not None
+            ),
             answer_id,
         )
 
@@ -166,6 +168,10 @@ class BotService:
             if recipe is None:
                 return GONE_REPLY
             saved = self.store.steps(recipe_id, STEPS_VERSION)
+            if saved is None and self.make_steps is None:
+                # Без проверки шаги от ИИ не пишутся (кнопка — от прошлых ответов);
+                # проверенные раньше — из кэша, как обычно.
+                return Reply(steps_refused_html(recipe.name))
             if saved is None:
                 saved = self._new_steps(recipe)
         except DEPENDENCY_ERRORS as error:
@@ -209,6 +215,7 @@ class BotService:
         return parts
 
     def _new_steps(self, recipe: Chunk) -> SavedSteps | None:
+        assert self.make_steps is not None
         result = self.make_steps(recipe.text)
         logger.info(
             "шаги рецепта %s: %s за %.1f с",

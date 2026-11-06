@@ -377,13 +377,19 @@ async def run(settings: Settings) -> None:
     pages_http = httpx2.Client()
     steps_http = make_http_client(settings)
     qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
-    writer, reviewer = make_steps_models(settings, steps_http)
+    # Шаги от ИИ проверяет Sonnet, как и ответ (принцип 1): без проверки ответа
+    # (ANSWER_REVIEW=false) их не пишем — у рецепта без страницы нет кнопки.
+    steps_models = (
+        make_steps_models(settings, steps_http) if settings.answer_review else None
+    )
     service = BotService(
         answerer,
         store,
         PageChecker(pages_http, store),
         recipes=recipe_lookup(VectorStore(qdrant)),
-        make_steps=lambda text: make_steps(text, writer, reviewer),
+        make_steps=(
+            (lambda text: make_steps(text, *steps_models)) if steps_models else None
+        ),
         fetch_page=lambda url: fetch_page(pages_http, url),
         fetch_photo=lambda url: fetch_photo(pages_http, url),
         gigachat_note=settings.llm_provider == "gigachat",

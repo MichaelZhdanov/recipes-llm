@@ -93,6 +93,12 @@ def test_buttons_vote_photo_card_for_live_pages_and_steps_for_dead_ones() -> Non
     assert all(len(data.encode()) <= 64 for row in rows for _, data in row)
 
 
+def test_no_ai_steps_button_without_a_checker() -> None:
+    rows = answer_buttons(5, answer(["…"]), {ALIVE: True, DEAD: False}, ai_steps=False)
+
+    assert rows[1:] == [[("📖 Шаги с фото: Блины <тонкие> & нежные", "card:5:1")]]
+
+
 def test_status_phrase_comes_from_the_stage_pool() -> None:
     assert status_text("review", random.Random(1)) in STATUS["review"]
 
