@@ -506,18 +506,42 @@ class Answerer:
 
         - утверждения с «нет» по опоре на рецепт — Haiku правит текст;
         - если не осталось ни одного рецепта по вопросу — поиск заново
-          (`_researched`); это и есть доработка, второй правки после него нет.
+          (`_researched`); это и есть доработка, второй правки после него нет;
+        - Haiku сам сказал «не нашёл», хотя рецепты были, — тоже поиск заново:
+          среди найденных не оказалось ответа («к вину» — а нашлись блюда,
+          тушённые в вине).
         """
         if self._reviewer is None or self._reviser is None:
             return result
+        context = _user_questions(history)
+        trace = result.trace
+        if (
+            result.answer.reason == "model_not_found"
+            and trace.sources
+            and self.mode == "always"
+        ):
+            names = ", ".join(f"«{s.chunk.name}»" for s in trace.sources)
+            note = f"Среди найденных рецептов нет ответа на вопрос: {names}."
+            rejected = [s.chunk.recipe_id for s in trace.sources]
+            return self._researched(
+                question, history, context, trace, progress, note, rejected
+            )
         if result.answer.status != "answer":
             return result
         _notify(progress, "review")
-        context = _user_questions(history)
         review = self._review(question, context, result, self._reviser)
-        trace = dataclasses.replace(result.trace, review=review)
+        trace = dataclasses.replace(trace, review=review)
         if not review.final and review.irrelevant and self.mode == "always":
-            return self._researched(question, history, context, trace, progress)
+            note = "\n".join(dict.fromkeys(review.irrelevant.values()))
+            return self._researched(
+                question,
+                history,
+                context,
+                trace,
+                progress,
+                note,
+                _rejected_recipes(trace),
+            )
         return _with_review(result.answer, trace, review)
 
     def _review(
@@ -547,15 +571,14 @@ class Answerer:
         context: Sequence[str],
         first: Trace,
         progress: Progress | None,
+        note: str,
+        rejected: Sequence[int],
     ) -> AnswerResult:
         """Рецепты ответа не по вопросу («к вину» — а нашлись блюда, тушённые в
-        вине): вопрос разбирается заново с замечанием проверки, отклонённые
-        рецепты в поиск не попадают, новый ответ проверяется ещё раз — уже без
-        правки текста, «нет» удаляется."""
-        assert first.review is not None
+        вине): вопрос разбирается заново с замечанием (note), отклонённые
+        рецепты в поиск не попадают, новый ответ проверяется — уже без правки
+        текста, «нет» удаляется. Нового поиска после нового поиска нет."""
         _notify(progress, "research")
-        rejected = _rejected_recipes(first)
-        note = "\n".join(dict.fromkeys(first.review.irrelevant.values()))
         result = self._answer_always(question, history, None, note=note, skip=rejected)
         if result.answer.status != "answer":
             return AnswerResult(

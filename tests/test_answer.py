@@ -787,3 +787,66 @@ def test_still_not_answering_after_the_new_search_is_not_found(
     assert result.answer.reason == "review_out"
     assert result.trace.first is not None
     assert reviser.calls == 0 and len(haiku.plans) == 2
+
+
+def test_own_not_found_with_recipes_also_searches_once_more(
+    retriever: Retriever,
+) -> None:
+    """Модель сама сказала «не нашёл», хотя рецепты были: среди найденных нет
+    ответа — ищем заново без них; новый ответ проверяется."""
+
+    class RefusingFirst(FakeLlm):
+        """Первый ответ — «не нашёл», второй — о первом рецепте промпта."""
+
+        def chat(self, messages: Sequence[Message], **kwargs: Any) -> Completion:
+            if kwargs.get("functions") is None:
+                if not self.calls:
+                    self.content = json.dumps(
+                        {"status": "not_found", "message": "", "statements": []}
+                    )
+                else:
+                    match = re.search(
+                        r'<recipe id="(\d+)">\n[^\n]*\n([^\n]+)',
+                        messages[-1]["content"],
+                    )
+                    assert match is not None
+                    self.content = json.dumps(
+                        {
+                            "status": "answer",
+                            "message": "",
+                            "statements": [
+                                {
+                                    "text": "Вот рецепт.",
+                                    "citations": [
+                                        {"source": int(match[1]), "quote": match[2]}
+                                    ],
+                                }
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+            return super().chat(messages, **kwargs)
+
+    haiku = RefusingFirst({})
+    reviser = ReviewLlm([])
+    answerer = Answerer(
+        retriever,
+        haiku,
+        model="claude-haiku-5-5",
+        ref="v3.4.2",
+        k=2,
+        reviewer=Reviewer(ReviewLlm([relevance_marks(True)])),
+        reviser=Reviser(reviser, model="claude-haiku-5-5"),
+    )
+
+    result = answerer.answer("что к чаю?")
+
+    assert result.answer.status == "answer"
+    first = result.trace.first
+    assert first is not None and first.review is None
+    assert (
+        "Среди найденных рецептов нет ответа на вопрос" in haiku.plans[1][-1]["content"]
+    )
+    first_ids = {s.chunk.recipe_id for s in first.sources}
+    assert not first_ids & {h.chunk.recipe_id for h in result.trace.hits}
+    assert reviser.calls == 0
