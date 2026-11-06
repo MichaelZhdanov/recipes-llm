@@ -8,33 +8,30 @@
   причиной, подробности — в лог сервиса.
 
 Входа здесь нет: порт сервиса опубликован только на 127.0.0.1, а
-пользователи приходят через Telegram-бота (этап 4), у которого свой вход.
+пользователи приходят через Telegram-бота (`assistant/bot/`).
 """
 
 import logging
-import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Literal, Protocol
+from typing import Literal
 
 import httpx2
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from qdrant_client import QdrantClient
-from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant import __version__
 from assistant.config import Settings
-from assistant.generation.answer import Answer, AnswerResult, make_answerer
+from assistant.generation.answer import Answer
 from assistant.generation.gigachat import LlmError
-from assistant.generation.llm import make_http_client
-from assistant.retrieval.embeddings import EmbeddingError
-from assistant.retrieval.store import IndexMismatchError, IndexMissingError
+from assistant.service import (
+    MAX_QUESTION_CHARS,
+    SEARCH_ERRORS,
+    LazyAnswerer,
+    QuestionAnswerer,
+)
 
 logger = logging.getLogger(__name__)
-
-# Вопрос, а не документ: длиннее 2000 символов вопросы не бывают.
-MAX_QUESTION_CHARS = 2000
 
 
 class HealthResponse(BaseModel):
@@ -52,51 +49,6 @@ class AskRequest(BaseModel):
         if not value.strip():
             raise ValueError("вопрос пустой")
         return value.strip()
-
-
-class QuestionAnswerer(Protocol):
-    def answer(self, question: str) -> AnswerResult: ...
-
-
-# Ошибки зависимостей: сервис жив, но ответить сейчас не может.
-_SEARCH_ERRORS = (
-    EmbeddingError,
-    IndexMissingError,
-    IndexMismatchError,
-    ResponseHandlingException,
-)
-
-
-class LazyAnswerer:
-    """Ассистент создаётся при первом вопросе, а не при старте.
-
-    Так `/health` отвечает, даже когда Qdrant ещё поднимается или ключа нет.
-    Если создать не удалось, следующий вопрос попробует снова.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._lock = threading.Lock()
-        self._answerer: QuestionAnswerer | None = None
-        self._embeddings_http = httpx2.Client(timeout=30)
-        self._llm_http = make_http_client(settings)
-        self._qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
-
-    def answer(self, question: str) -> AnswerResult:
-        with self._lock:
-            if self._answerer is None:
-                self._answerer = make_answerer(
-                    self._settings,
-                    embeddings_http=self._embeddings_http,
-                    llm_http=self._llm_http,
-                    qdrant=self._qdrant,
-                )
-        return self._answerer.answer(question)
-
-    def close(self) -> None:
-        self._embeddings_http.close()
-        self._llm_http.close()
-        self._qdrant.close()
 
 
 def create_app(
@@ -133,7 +85,7 @@ def create_app(
         """Ответ со ссылками на источники или «не нашёл» с подсказками."""
         try:
             return service.answer(request.question).answer
-        except _SEARCH_ERRORS as error:
+        except SEARCH_ERRORS as error:
             logger.error("поиск недоступен: %s", error)
             raise HTTPException(503, "поиск недоступен") from error
         except LlmError as error:

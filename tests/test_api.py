@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
@@ -6,7 +8,7 @@ from assistant import __version__
 from assistant.api import create_app
 from assistant.config import Settings
 from assistant.generation.answer import Answer, AnswerResult, Trace
-from assistant.generation.gigachat import LlmError
+from assistant.generation.gigachat import LlmError, Message
 from assistant.retrieval.embeddings import EmbeddingError
 from assistant.retrieval.store import IndexMissingError
 
@@ -40,7 +42,7 @@ class FakeAnswerer:
         self.error = error
         self.questions: list[str] = []
 
-    def answer(self, question: str) -> AnswerResult:
+    def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
         self.questions.append(question)
         if self.error:
             raise self.error
@@ -121,3 +123,27 @@ def test_chat_pages_and_login_are_gone() -> None:
 
     for path in ("/", "/chat.js", "/login", "/session"):
         assert client.get(path).status_code == 404, path
+
+
+def test_lazy_answerer_passes_dialogue_history() -> None:
+    """Бот передаёт историю диалога: ленивый ассистент отдаёт её дальше."""
+    from assistant.service import LazyAnswerer
+
+    seen: list[Sequence[Message]] = []
+
+    class Inner:
+        def answer(
+            self, question: str, history: Sequence[Message] = ()
+        ) -> AnswerResult:
+            seen.append(history)
+            raise LlmError("нет сети")
+
+    lazy = LazyAnswerer(Settings())
+    lazy._answerer = Inner()
+    history: list[Message] = [{"role": "user", "content": "блины"}]
+
+    with pytest.raises(LlmError):
+        lazy.answer("а во втором?", history)
+    lazy.close()
+
+    assert seen == [history]
