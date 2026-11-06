@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 from chunk_helpers import text_chunk
-from eval_helpers import MANIFEST
+from eval_helpers import MANIFEST, RUN
 from eval_helpers import case as make_case
 
 from assistant.generation.answer import Answer, AnswerStatement, Reason
@@ -32,6 +32,7 @@ from evals.answer_metrics import (
     tool_correctness,
 )
 from evals.dataset import Case
+from evals.judge import Judging, Verdict
 from evals.report import RunMeta, answer_gates, render_answer_report
 
 
@@ -348,3 +349,32 @@ def test_spread_by_run_keeps_cases_that_cannot_be_checked_out() -> None:
     ]
 
     assert per_run(results, false_refusal) == [0.0, 0.0]
+
+
+def test_report_lists_an_unsupported_intro_after_the_statements() -> None:
+    """Судья видит вступление последним: отчёт сопоставляет его вердикт с ним же."""
+    with_intro = dataclasses.replace(
+        RUN, answer=RUN.answer.model_copy(update={"message": "Вот что нашлось:"})
+    )
+    judging = Judging(
+        model="claude-sonnet-5-5",
+        prompt_version="judge_v6",
+        verdicts={
+            ("by_name-001", 0): Verdict(
+                [True, True, False], [], ["", "", "выдумано"], [True, True, False]
+            )
+        },
+        canaries=[],
+        canary_marks=[],
+        stats=LlmStats(),
+        failures=0,
+    )
+
+    report = render_answer_report(
+        [AnswerCase(case("by_name-001"), [with_intro])],
+        meta=meta(LlmStats()),
+        judging=judging,
+        today=date(2026, 11, 6),
+    )
+
+    assert "«(вступление) Вот что нашлось:» — выдумано" in report

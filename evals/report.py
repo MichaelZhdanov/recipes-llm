@@ -42,6 +42,7 @@ from evals.answer_metrics import (
 from evals.judge import (
     Judging,
     canary_scores,
+    claims_of,
     clarity,
     clarity_canary_scores,
     groundedness,
@@ -832,6 +833,11 @@ def _clarity_canary_rows(judging: Judging) -> list[str]:
     ]
 
 
+def _judged_texts(run: AnswerRun) -> list[str]:
+    """Тексты в том порядке, в каком их видел судья: утверждения, затем вступление."""
+    return [f"(вступление) {c.text}" if c.intro else c.text for c in claims_of(run)]
+
+
 def _judge_sections(
     results: Sequence[AnswerCase], judging: Judging | None
 ) -> list[str]:
@@ -843,14 +849,14 @@ def _judge_sections(
             verdict = judging.verdicts.get((r.case.id, number))
             if verdict is None:
                 continue
-            kept = [s for s in run.checked if s.kept]
+            texts = _judged_texts(run)
             for index, mark in enumerate(verdict.supported):
                 if mark is False:
                     comment = (
                         verdict.comments[index] if index < len(verdict.comments) else ""
                     )
                     unsupported.append(
-                        f"- {r.case.id}, прогон {number + 1}: «{kept[index].text}» — {comment}"
+                        f"- {r.case.id}, прогон {number + 1}: «{texts[index]}» — {comment}"
                     )
     missed = [
         f"- canary {c.id} (supported={c.supported}): судья сказал {mark}"
@@ -863,7 +869,7 @@ def _judge_sections(
         for number, run in enumerate(r.runs)
         if (verdict := judging.verdicts.get((r.case.id, number))) is not None
         for text, mark, problems in zip(
-            [s.text for s in run.checked if s.kept],
+            _judged_texts(run),
             verdict.clear,
             verdict.problems or [[]] * len(verdict.clear),
             strict=False,
