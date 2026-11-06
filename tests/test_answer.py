@@ -257,7 +257,7 @@ def test_prompt_has_system_rules_recipes_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="курица с рисом")
 
     system, user = llm.calls[0]
-    assert PROMPT_VERSION == "recipes_v2"
+    assert PROMPT_VERSION == "recipes_v3"
     assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert '<recipe id="1">\nКурица с рисом в духовке\n' in user["content"]
@@ -499,7 +499,7 @@ def test_auto_searches_then_answers_with_checked_citation(retriever: Retriever) 
 
     assert result.answer.status == "answer"
     assert [link.recipe_id for link in result.answer.sources] == [CHICKEN.recipe_id]
-    assert result.answer.prompt_version == "recipes_auto_v2"
+    assert result.answer.prompt_version == "recipes_auto_v3"
     [args] = result.trace.searches
     assert args.query == "курица с рисом"
     assert args.conditions.include == (("курица",),)
