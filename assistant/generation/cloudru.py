@@ -65,6 +65,9 @@ PRICE_RUB_PER_MTOK = {
     # Кандидаты в гейт ответа, хостит cloud.ru (данные в РФ).
     "openai/gpt-oss-120b": (15.86, 61.0),
     "ai-sage/GigaChat3.5-432B-A28B-Reasoning": (96.22, 288.6),
+    "moonshotai/Kimi-K2.6": (175.68, 725.9),
+    "deepseek-ai/DeepSeek-V4-Pro": (183.0, 732.0),
+    "zai-org/GLM-5.1": (198.86, 829.6),
 }
 
 KEY_HELP = (
