@@ -31,6 +31,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from assistant.generation.citations import CheckedStatement, SourceText
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel, LlmStats
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
@@ -45,7 +46,12 @@ from evals.dataset import Canary, ClarityCanary
 JUDGE_MODEL = "claude-sonnet-5-5"
 # Решение автора 2026-11-06: Sonnet на high «достаточно придирчив».
 JUDGE_EFFORT = "high"
-JUDGE_MODELS = {"gigachat": "GigaChat-3-Ultra", "anthropic": JUDGE_MODEL}
+JUDGE_MODELS = {
+    "gigachat": "GigaChat-3-Ultra",
+    "anthropic": JUDGE_MODEL,
+    # Судьи другого семейства из каталога cloud.ru (эксперимент 2026-11-06, evals/loop.py).
+    "cloudru": "deepseek-ai/DeepSeek-V4-Flash",
+}
 # На Paperless в тот же вызов, что и смысл, пробовали добавить грамотность —
 # судья её не оценивал (канарейки 1 из 8), поэтому грамотность — отдельный вызов.
 # v1 — под Paperless (документация, английские фрагменты), v2 — под рецепты,
@@ -171,15 +177,15 @@ def claims_of(run: AnswerRun) -> list[Claim]:
     """Утверждения, которые увидел пользователь, с процитированными рецептами
     целиком: рецепт короткий, а по полному списку ингредиентов судья видит,
     честно ли «без лука»."""
-    by_number = {s.number: s for s in run.sources}
-    claims = []
-    for statement in run.checked:
-        if not statement.kept:
-            continue
-        cited = dict.fromkeys(c.source for c in statement.citations if c.valid)
-        fragments = [f"Рецепт целиком:\n{by_number[n].text}" for n in cited]
-        claims.append(Claim(statement.text, fragments))
-    return claims
+    return [claim_of(s, run.sources) for s in run.checked if s.kept]
+
+
+def claim_of(statement: CheckedStatement, sources: Sequence[SourceText]) -> Claim:
+    """Утверждение и рецепты, на которые ведут его подтверждённые цитаты, целиком."""
+    by_number = {s.number: s for s in sources}
+    cited = dict.fromkeys(c.source for c in statement.citations if c.valid)
+    fragments = [f"Рецепт целиком:\n{by_number[n].text}" for n in cited]
+    return Claim(statement.text, fragments)
 
 
 def _statements(claims: Sequence[Claim]) -> list[str]:

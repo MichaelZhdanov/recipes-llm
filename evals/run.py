@@ -48,12 +48,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx2
 from qdrant_client import QdrantClient
 
-from assistant.config import AnswerMode, LlmProvider, Settings
+from assistant.config import AnswerMode, Settings
+from assistant.generation import cloudru
 from assistant.generation import llm as assistant_llm
 from assistant.generation.answer import Answerer, assemble
 from assistant.generation.citations import SourceText
@@ -144,11 +145,15 @@ ANSWER_CATEGORIES = frozenset(
 REPORTS_DIR = Path(__file__).parent / "reports"
 
 
+# Судья — Claude, GigaChat или модель из каталога cloud.ru (OpenAI-совместимый чат).
+JudgeProvider = Literal["anthropic", "gigachat", "cloudru"]
+
+
 @dataclass(frozen=True)
 class JudgeChoice:
     """Какая модель судит: `--judge-provider`, `--judge-model`, `--judge-effort`."""
 
-    provider: LlmProvider = "anthropic"
+    provider: JudgeProvider = "anthropic"
     model: str = ""
     # Только у Claude. Задан явно, а не «по умолчанию модели»: если вендор сменит
     # умолчание, судья не станет тихо мягче или строже.
@@ -580,6 +585,14 @@ def _judge_llm(settings: Settings, choice: JudgeChoice) -> Iterator[ChatModel]:
     """Свой клиент и свой экземпляр модели: токены судьи считаются отдельно от
     ассистента, а у GigaChat свой TLS-корень. Тот же выбор провайдера, что
     у ассистента, но со своим провайдером и без LLM_EFFORT ассистента."""
+    if choice.provider == "cloudru":
+        with cloudru.make_http_client() as http:
+            yield cloudru.CloudRu(
+                api_key=settings.cloud_ru_api_key,
+                api_url=settings.cloud_ru_api_url,
+                client=http,
+            )
+        return
     effort = choice.effort if choice.provider == "anthropic" else ""
     judge_settings = settings.model_copy(
         update={"llm_provider": choice.provider, "llm_effort": effort}
@@ -855,9 +868,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--judge-provider",
-        choices=("gigachat", "anthropic"),
+        choices=("anthropic", "gigachat", "cloudru"),
         default="anthropic",
-        help="кто судит: anthropic — Claude Sonnet 5.5 (по умолчанию), gigachat — GigaChat-3-Ultra",
+        help="кто судит: anthropic — Claude Sonnet 5.5 (по умолчанию), gigachat — "
+        "GigaChat-3-Ultra, cloudru — модель каталога cloud.ru (--judge-model)",
     )
     parser.add_argument(
         "--judge-effort",
