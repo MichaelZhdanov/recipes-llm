@@ -22,6 +22,7 @@ from assistant.indexing.build import (
     IndexSource,
     build_index,
     estimate,
+    pending,
     pick_sample,
 )
 from assistant.indexing.dataset import (
@@ -109,6 +110,7 @@ def _index(
     seed: int,
     yes: bool,
     quantization: bool,
+    resume: str | None = None,
 ) -> int:
     with httpx2.Client(timeout=60) as http:
         # Эмбеддер первым: без ключа ошибка сразу, ещё до сетевых вызовов.
@@ -142,7 +144,13 @@ def _index(
         recipes = (
             pick_sample(dataset.recipes, sample, seed) if sample else dataset.recipes
         )
-        plan = estimate(recipes, embedder.model, embedder.max_batch_texts)
+        # При продолжении платим только за рецепты, которых в коллекции ещё нет.
+        todo = (
+            pending(recipes, store, resume, settings.dataset_revision)
+            if resume
+            else recipes
+        )
+        plan = estimate(todo, embedder.model, embedder.max_batch_texts)
         _log(f"оценка для {embedder.model}: {plan}")
         if plan.needs_confirmation and not yes:
             _log(
@@ -163,6 +171,7 @@ def _index(
             embedder=embedder,
             log=_log,
             quantization=quantization,
+            resume=resume,
         )
     manifest = report.manifest
     masked = ", ".join(f"{k} {v}" for k, v in sorted(report.masked.items())) or "нет"
@@ -279,6 +288,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="без сжатия int8 в памяти: для замера, сколько оно стоит по качеству",
     )
+    index.add_argument(
+        "--resume",
+        metavar="COLLECTION",
+        help="продолжить прерванную сборку: досылаются только рецепты, которых в коллекции нет",
+    )
     ask = commands.add_parser("ask", help="ответ со ссылками на рецепты")
     ask.add_argument("question")
     ask.add_argument("--json", action="store_true", help="вывод в JSON")
@@ -310,6 +324,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seed=args.seed,
                 yes=args.yes,
                 quantization=not args.no_quantization,
+                resume=args.resume,
             )
         if args.command == "ask":
             return _ask(settings, args.question, args.json)

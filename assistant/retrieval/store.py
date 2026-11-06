@@ -167,6 +167,36 @@ class VectorStore:
         if self._client.collection_exists(name):
             self._client.delete_collection(name)
 
+    def unfinished(self) -> list[str]:
+        """Коллекции этого индекса, на которые не указывает алиас: недособранные."""
+        active = self.active()
+        return sorted(
+            c.name
+            for c in self._client.get_collections().collections
+            if c.name.startswith(f"{self._alias}-") and c.name != active
+        )
+
+    def collection_manifest(self, name: str) -> IndexManifest:
+        """Паспорт любой коллекции индекса, в том числе недособранной."""
+        if not self._client.collection_exists(name):
+            raise IndexMissingError(f"коллекции {name} нет")
+        metadata = self._client.get_collection(name).config.metadata
+        if not metadata:
+            raise IndexMissingError(f"у коллекции {name} нет паспорта")
+        return IndexManifest.model_validate(metadata)
+
+    def point_ids(self, name: str) -> set[str]:
+        """Номера всех точек коллекции — без векторов и payload."""
+        ids: set[str] = set()
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                name, limit=2048, offset=offset, with_payload=False, with_vectors=False
+            )
+            ids.update(str(point.id) for point in points)
+            if offset is None:
+                return ids
+
     def recreate(self, manifest: IndexManifest) -> str:
         """Пустой индекс с паспортом сразу под алиасом: для маленьких индексов и тестов."""
         name = self.create(manifest)

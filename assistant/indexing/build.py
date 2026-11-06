@@ -22,7 +22,7 @@ from assistant import __version__
 from assistant.indexing.chunks import recipe_chunk
 from assistant.indexing.dataset import DATASET_REPO, Recipe
 from assistant.retrieval.embeddings import Embedder
-from assistant.retrieval.store import IndexManifest, VectorStore
+from assistant.retrieval.store import IndexManifest, VectorStore, recipe_point_id
 
 # Цена за 1M входных токенов: сумма и валюта. Только для оценки в отчёте,
 # не для биллинга. Voyage — прайс MongoDB Atlas, cloud.ru — каталог
@@ -119,6 +119,36 @@ def pick_sample(recipes: Sequence[Recipe], size: int, seed: int) -> list[Recipe]
     return sorted(picked, key=lambda r: r.id)
 
 
+def pending(
+    recipes: Sequence[Recipe], store: VectorStore, collection: str, ref: str
+) -> list[Recipe]:
+    """Рецепты, которых ещё нет в недособранной коллекции. Номер точки
+    вычисляется из ревизии и id рецепта, поэтому записанные видны точно."""
+    done = store.point_ids(collection)
+    return [r for r in recipes if recipe_point_id(ref, r.id) not in done]
+
+
+def _check_resume(
+    manifest: IndexManifest, source: IndexSource, recipes: int, model: str
+) -> None:
+    """Продолжать можно только ту же сборку: датасет, выборка и модель те же."""
+    wanted = {
+        "ref": source.ref,
+        "file_sha256": source.file_sha256,
+        "recipes": recipes,
+        "sample": source.sample,
+        "seed": source.seed,
+        "embedding_model": model,
+    }
+    differ = [k for k, v in wanted.items() if getattr(manifest, k) != v]
+    if differ:
+        raise ValueError(
+            "коллекция собиралась с другими настройками ("
+            + ", ".join(differ)
+            + "): продолжить её нельзя, запустите сборку заново"
+        )
+
+
 def build_index(
     recipes: Sequence[Recipe],
     *,
@@ -127,19 +157,32 @@ def build_index(
     embedder: Embedder,
     log: Callable[[str], None],
     quantization: bool = True,
+    resume: str | None = None,
 ) -> BuildReport:
-    """Строит индекс заново; source попадает в паспорт."""
+    """Строит индекс; source попадает в паспорт. resume — недособранная
+    коллекция прошлой сборки: досылаются только рецепты, которых в ней нет.
+
+    При сбое коллекция остаётся (поиск её не видит), а в лог идёт команда
+    продолжения: сборка полного индекса стоит около 200 ₽, и начинать её
+    заново из-за сбоя на середине — платить дважды."""
     if not recipes:
         raise ValueError("нет рецептов для индекса")
     started = time.monotonic()
     log(f"рецептов: {len(recipes)}")
     collection: str | None = None
     manifest: IndexManifest | None = None
+    todo: Sequence[Recipe] = recipes
+    if resume is not None:
+        manifest = store.collection_manifest(resume)
+        _check_resume(manifest, source, len(recipes), embedder.model)
+        collection = resume
+        todo = pending(recipes, store, resume, source.ref)
+        log(
+            f"продолжаю {resume}: уже есть {len(recipes) - len(todo)}, осталось {len(todo)}"
+        )
     try:
-        for start in range(0, len(recipes), BATCH):
-            chunks = [
-                recipe_chunk(r, source.ref) for r in recipes[start : start + BATCH]
-            ]
+        for start in range(0, len(todo), BATCH):
+            chunks = [recipe_chunk(r, source.ref) for r in todo[start : start + BATCH]]
             vectors = embedder.embed_documents([c.embedding_text() for c in chunks])
             if manifest is None:
                 # Размерность известна только после первого ответа API.
@@ -160,18 +203,25 @@ def build_index(
                 collection = store.create(manifest)
             store.upsert(chunks, vectors, collection=collection)
             log(
-                f"эмбеддинги: {start + len(chunks)}/{len(recipes)}, "
-                f"токенов {embedder.stats.tokens}"
+                f"эмбеддинги: {len(recipes) - len(todo) + start + len(chunks)}"
+                f"/{len(recipes)}, токенов {embedder.stats.tokens}"
             )
+        assert collection is not None
         stored = store.verify(collection)
         if stored != len(recipes):
             raise RuntimeError(f"в индексе {stored} точек вместо {len(recipes)}")
     except BaseException:
         if collection is not None:
-            store.drop(collection)
+            log(
+                f"сборка прервалась; недособранная коллекция {collection} сохранена, "
+                f'продолжить: make index YES=1 ARGS="--resume {collection}"'
+            )
         raise
     assert collection is not None and manifest is not None
     store.activate(collection)
+    # Недособранные коллекции прошлых сборок больше не нужны.
+    for leftover in store.unfinished():
+        store.drop(leftover)
 
     return BuildReport(
         manifest=manifest,

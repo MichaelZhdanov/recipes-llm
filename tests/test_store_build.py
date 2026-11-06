@@ -10,6 +10,7 @@ from assistant.indexing.build import (
     build_index,
     estimate,
     estimate_cost,
+    pending,
     pick_sample,
 )
 from assistant.indexing.chunks import Chunk
@@ -194,9 +195,11 @@ class FailsOnSecondBatch:
         return self.inner.embed_query(text)
 
 
-def test_failure_in_the_middle_drops_the_unfinished_collection(
+def test_failure_in_the_middle_keeps_the_old_index_and_the_unfinished_collection(
     fake_embedder: Embedder, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Сбой посередине: поиск остаётся на старом индексе, недособранная
+    коллекция ждёт продолжения, а в логе — команда продолжить."""
     monkeypatch.setattr("assistant.indexing.build.BATCH", 2)
     client = QdrantClient(":memory:")
     store = VectorStore(client)
@@ -208,6 +211,7 @@ def test_failure_in_the_middle_drops_the_unfinished_collection(
         log=print,
     )
     old = store.active()
+    logged: list[str] = []
 
     with pytest.raises(RuntimeError, match="посередине"):
         build_index(
@@ -215,12 +219,74 @@ def test_failure_in_the_middle_drops_the_unfinished_collection(
             source=IndexSource(ref="v2"),
             store=store,
             embedder=FailsOnSecondBatch(fake_embedder),
-            log=print,
+            log=logged.append,
         )
 
-    assert collections(client) == [old]
-    assert store.manifest().ref == "v1"
+    [unfinished] = store.unfinished()
+    assert store.active() == old and store.manifest().ref == "v1"
     assert store.count() == 3
+    assert store.count(unfinished) == 2
+    assert f'ARGS="--resume {unfinished}"' in logged[-1]
+
+
+def test_resume_sends_only_missing_recipes_and_cleans_up(
+    fake_embedder: Embedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("assistant.indexing.build.BATCH", 2)
+    client = QdrantClient(":memory:")
+    store = VectorStore(client)
+    with pytest.raises(RuntimeError):
+        build_index(
+            ROWS,
+            source=IndexSource(ref="v2"),
+            store=store,
+            embedder=FailsOnSecondBatch(fake_embedder),
+            log=print,
+        )
+    [unfinished] = store.unfinished()
+    assert len(pending(ROWS, store, unfinished, "v2")) == 1
+
+    counting = FailsOnSecondBatch(fake_embedder)
+    counting.calls = 10  # больше не падает
+    build_index(
+        ROWS,
+        source=IndexSource(ref="v2"),
+        store=store,
+        embedder=counting,
+        log=print,
+        resume=unfinished,
+    )
+
+    assert counting.calls == 11  # одна пачка: недостающий рецепт
+    assert store.active() == unfinished
+    assert store.count() == 3
+    assert store.unfinished() == []
+
+
+def test_resume_refuses_a_collection_built_with_other_settings(
+    fake_embedder: Embedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("assistant.indexing.build.BATCH", 2)
+    store = VectorStore(QdrantClient(":memory:"))
+    with pytest.raises(RuntimeError):
+        build_index(
+            ROWS,
+            source=IndexSource(ref="v2"),
+            store=store,
+            embedder=FailsOnSecondBatch(fake_embedder),
+            log=print,
+        )
+    [unfinished] = store.unfinished()
+
+    with pytest.raises(ValueError, match="ref"):
+        build_index(
+            ROWS,
+            source=IndexSource(ref="v3"),
+            store=store,
+            embedder=fake_embedder,
+            log=print,
+            resume=unfinished,
+        )
 
 
 def test_vectors_are_on_disk_and_int8_can_be_turned_off(
