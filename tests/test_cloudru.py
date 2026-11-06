@@ -168,3 +168,19 @@ def test_schema_is_spelled_out_for_models_that_ignore_it() -> None:
     assert '"supported"' in deepseek[0]["content"]
     assert len(deepseek) == len(MESSAGES)
     assert glm[0]["content"] == "Ты проверяешь утверждения."
+
+
+def test_effort_goes_as_reasoning_effort_only_when_set() -> None:
+    fake = FakeCloudRu()
+    CloudRu(
+        api_key=SecretStr("secret"),
+        api_url=CLOUD_RU_API_URL,
+        client=httpx2.Client(transport=httpx2.MockTransport(fake)),
+        effort="low",
+    ).chat(MESSAGES, model="z-ai/glm-5.3-flash", temperature=1e-4, max_tokens=10)
+    assert fake.body()["reasoning_effort"] == "low"
+
+    client(fake).chat(
+        MESSAGES, model="z-ai/glm-5.3-flash", temperature=1e-4, max_tokens=10
+    )
+    assert "reasoning_effort" not in fake.body()

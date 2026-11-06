@@ -17,6 +17,11 @@ cloud.ru передаёт запрос вендору за пределы РФ.
 - рассуждения приходят отдельным полем `reasoning_content`, в content —
   только ответ. `max_tokens` считает их вместе с ответом, поэтому адаптер
   добавляет запас REASONING_TOKENS, как у Claude;
+- `effort` → `reasoning_effort`: сколько модель думает. GLM по умолчанию
+  думает на максимуме — до двух минут на вызов судьи; на неверное значение
+  cloud.ru отвечает 422, значит параметр доходит до модели. Пусто — не
+  отправляется (по умолчанию модели). Формат `reasoning: {effort}` cloud.ru
+  молча игнорирует (проверено 2026-11-06);
 - вызов функций не реализован: судьям он не нужен, а генератор ответов —
   Claude Haiku. Передать `functions` — ошибка, а не тихое «без функций».
 
@@ -116,11 +121,13 @@ class CloudRu:
         api_key: SecretStr,
         api_url: str,
         client: httpx2.Client,
+        effort: str = "",
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not api_key.get_secret_value():
             raise LlmError(f"не задан CLOUD_RU_API_KEY: {KEY_HELP}")
         self.stats = LlmStats()
+        self.effort = effort
         self._api_key = api_key
         self._url = f"{api_url.rstrip('/')}/chat/completions"
         self._client = client
@@ -151,6 +158,8 @@ class CloudRu:
         }
         if response_format is not None:
             body["response_format"] = _response_format(response_format)
+        if self.effort:
+            body["reasoning_effort"] = self.effort
         response = request_with_retries(
             lambda: self._client.post(self._url, json=body, headers=self._headers()),
             sleep=self._sleep,

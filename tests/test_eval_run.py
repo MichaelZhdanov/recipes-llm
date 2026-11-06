@@ -258,10 +258,14 @@ def test_default_judge_is_sonnet_and_ultra_is_on_request() -> None:
 
 def test_judge_effort_is_explicit_and_shown_in_the_report() -> None:
     """effort задан явно: если вендор сменит умолчание, судья не изменится тихо."""
-    assert JudgeChoice().effort == "high"
+    assert JudgeChoice().effort_used == "high"
     assert JudgeChoice().label == "claude-sonnet-5-5, effort high"
     # У GigaChat effort нет, в подписи его тоже нет.
-    assert JudgeChoice("gigachat").label == "GigaChat-3-Ultra"
+    assert JudgeChoice("gigachat", effort="low").label == "GigaChat-3-Ultra"
+    # У cloud.ru пусто — по умолчанию модели, иначе — как задан.
+    assert JudgeChoice("cloudru").label == "deepseek-ai/DeepSeek-V4-Flash"
+    glm = JudgeChoice("cloudru", "z-ai/glm-5.3-flash", "low")
+    assert glm.label == "z-ai/glm-5.3-flash, effort low"
 
 
 def test_judge_llm_gets_the_effort_only_for_claude(

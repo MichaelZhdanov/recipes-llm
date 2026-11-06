@@ -155,19 +155,26 @@ class JudgeChoice:
 
     provider: JudgeProvider = "anthropic"
     model: str = ""
-    # Только у Claude. Задан явно, а не «по умолчанию модели»: если вендор сменит
-    # умолчание, судья не станет тихо мягче или строже.
-    effort: str = JUDGE_EFFORT
+    # Пусто: у Claude — JUDGE_EFFORT, задан явно, а не «по умолчанию модели»:
+    # если вендор сменит умолчание, судья не станет тихо мягче или строже;
+    # у cloud.ru — по умолчанию модели (так проверены GLM и DeepSeek); у GigaChat effort нет.
+    effort: str = ""
 
     @property
     def model_name(self) -> str:
         return self.model or JUDGE_MODELS[self.provider]
 
     @property
+    def effort_used(self) -> str:
+        if self.provider == "anthropic":
+            return self.effort or JUDGE_EFFORT
+        return self.effort if self.provider == "cloudru" else ""
+
+    @property
     def label(self) -> str:
-        """Как судья подписан в отчёте: модель и, у Claude, effort."""
-        if self.provider == "anthropic" and self.effort:
-            return f"{self.model_name}, effort {self.effort}"
+        """Как судья подписан в отчёте: модель и effort, если он задан."""
+        if self.effort_used:
+            return f"{self.model_name}, effort {self.effort_used}"
         return self.model_name
 
 
@@ -591,9 +598,10 @@ def _judge_llm(settings: Settings, choice: JudgeChoice) -> Iterator[ChatModel]:
                 api_key=settings.cloud_ru_api_key,
                 api_url=settings.cloud_ru_api_url,
                 client=http,
+                effort=choice.effort_used,
             )
         return
-    effort = choice.effort if choice.provider == "anthropic" else ""
+    effort = choice.effort_used
     judge_settings = settings.model_copy(
         update={"llm_provider": choice.provider, "llm_effort": effort}
     )
@@ -875,9 +883,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--judge-effort",
-        choices=("low", "medium", "high", "xhigh", "max"),
-        default=JUDGE_EFFORT,
-        help=f"сколько думает судья Claude (по умолчанию {JUDGE_EFFORT}); у GigaChat не действует",
+        choices=("", "low", "medium", "high", "xhigh", "max"),
+        default="",
+        help=f"сколько думает судья: пусто — у Claude {JUDGE_EFFORT}, у cloud.ru по "
+        "умолчанию модели; у GigaChat не действует",
     )
     parser.add_argument(
         "--judge-model",
