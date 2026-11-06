@@ -640,3 +640,48 @@ def test_nothing_left_after_review_is_not_found_with_suggestions(
     assert result.answer.reason == "review_out"
     assert result.answer.sources  # что может пригодиться
     assert "подтверждают рецепты" in render_markdown(result.answer)
+
+
+def test_progress_reports_stages_in_order(retriever: Retriever) -> None:
+    """Бот показывает «Ищу…» → «Пишу…» → «Сверяю…»: стадии приходят по порядку."""
+    stages: list[str] = []
+    yes: dict[str, object] = {
+        "statements": [
+            {"number": n, "comment": "ок", "supported": True} for n in (1, 2)
+        ]
+    }
+    probe = ask(
+        retriever, FakeLlm({"status": "not_found", "message": "", "statements": []})
+    )
+    content = {
+        "status": "answer",
+        "message": "🍗 Вот что нашлось:",
+        "statements": [
+            {
+                "text": "🍗 Нужны курица и рис.",
+                "citations": [
+                    {
+                        "source": source_number(probe, CHICKEN.recipe_id),
+                        "quote": CHICKEN_QUOTE,
+                    }
+                ],
+            }
+        ],
+    }
+    answerer = Answerer(
+        retriever,
+        FakeLlm(content),
+        model="claude-haiku-5-5",
+        ref="v3.4.2",
+        k=3,
+        reviewer=Reviewer(ReviewLlm([yes])),
+        reviser=Reviser(ReviewLlm([]), model="claude-haiku-5-5"),
+    )
+
+    answerer.answer("курица рис", progress=stages.append)
+    chat = ask(
+        retriever, FakeLlm({"status": "chat", "message": "Привет!", "statements": []})
+    )
+
+    assert stages == ["search", "answer", "review"]
+    assert chat.answer.status == "chat"  # без progress всё работает как раньше

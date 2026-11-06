@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from assistant import __version__
 from assistant.api import create_app
 from assistant.config import Settings
-from assistant.generation.answer import Answer, AnswerResult, Trace
+from assistant.generation.answer import Answer, AnswerResult, Progress, Trace
 from assistant.generation.gigachat import LlmError, Message
 from assistant.retrieval.embeddings import EmbeddingError
 from assistant.retrieval.store import IndexMissingError
@@ -42,7 +42,12 @@ class FakeAnswerer:
         self.error = error
         self.questions: list[str] = []
 
-    def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
+    def answer(
+        self,
+        question: str,
+        history: Sequence[Message] = (),
+        progress: Progress | None = None,
+    ) -> AnswerResult:
         self.questions.append(question)
         if self.error:
             raise self.error
@@ -133,7 +138,10 @@ def test_lazy_answerer_passes_dialogue_history() -> None:
 
     class Inner:
         def answer(
-            self, question: str, history: Sequence[Message] = ()
+            self,
+            question: str,
+            history: Sequence[Message] = (),
+            progress: Progress | None = None,
         ) -> AnswerResult:
             seen.append(history)
             raise LlmError("нет сети")

@@ -14,7 +14,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
-from assistant.generation.answer import AnswerResult, make_answerer
+from assistant.generation.answer import AnswerResult, Progress, make_answerer
 from assistant.generation.gigachat import LlmError, Message
 from assistant.generation.llm import make_http_client
 from assistant.retrieval.embeddings import EmbeddingError
@@ -36,7 +36,10 @@ DEPENDENCY_ERRORS = (*SEARCH_ERRORS, LlmError, httpx2.TransportError)
 
 class QuestionAnswerer(Protocol):
     def answer(
-        self, question: str, history: Sequence[Message] = ()
+        self,
+        question: str,
+        history: Sequence[Message] = (),
+        progress: Progress | None = None,
     ) -> AnswerResult: ...
 
 
@@ -55,7 +58,12 @@ class LazyAnswerer:
         self._llm_http = make_http_client(settings)
         self._qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
 
-    def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
+    def answer(
+        self,
+        question: str,
+        history: Sequence[Message] = (),
+        progress: Progress | None = None,
+    ) -> AnswerResult:
         with self._lock:
             if self._answerer is None:
                 self._answerer = make_answerer(
@@ -64,7 +72,7 @@ class LazyAnswerer:
                     llm_http=self._llm_http,
                     qdrant=self._qdrant,
                 )
-        return self._answerer.answer(question, history)
+        return self._answerer.answer(question, history, progress)
 
     def close(self) -> None:
         self._embeddings_http.close()

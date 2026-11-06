@@ -389,6 +389,17 @@ def assemble(
     return AnswerResult(answer=answer, trace=trace)
 
 
+# Стадии ответа для канала (бот показывает «Ищу рецепты…», «Сверяю…»):
+# search — разбор вопроса и поиск, answer — модель пишет ответ, review — проверка.
+Stage = Literal["search", "answer", "review"]
+Progress = Callable[[Stage], None]
+
+
+def _notify(progress: Progress | None, stage: Stage) -> None:
+    if progress is not None:
+        progress(stage)
+
+
 class Answerer:
     def __init__(
         self,
@@ -421,19 +432,31 @@ class Answerer:
         self._reviewer = reviewer
         self._reviser = reviser
 
-    def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
-        """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога."""
+    def answer(
+        self,
+        question: str,
+        history: Sequence[Message] = (),
+        progress: Progress | None = None,
+    ) -> AnswerResult:
+        """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога.
+
+        progress — для канала: вызывается в начале каждой стадии."""
         history = list(history)[-HISTORY_LIMIT:]
         if self.mode == "auto":
-            return self._reviewed(question, self._answer_auto(question, history))
-        return self._reviewed(question, self._answer_always(question, history))
+            result = self._answer_auto(question, history, progress)
+        else:
+            result = self._answer_always(question, history, progress)
+        return self._reviewed(question, result, progress)
 
-    def _reviewed(self, question: str, result: AnswerResult) -> AnswerResult:
+    def _reviewed(
+        self, question: str, result: AnswerResult, progress: Progress | None = None
+    ) -> AnswerResult:
         """Sonnet проверяет ответ; «нет» — один раз Haiku на доработку (review.py)."""
         if self._reviewer is None or self._reviser is None:
             return result
         if result.answer.status != "answer":
             return result
+        _notify(progress, "review")
         trace = result.trace
         review = review_answer(
             question,
@@ -466,7 +489,10 @@ class Answerer:
         )
         return AnswerResult(answer=answer, trace=trace)
 
-    def _answer_always(self, question: str, history: list[Message]) -> AnswerResult:
+    def _answer_always(
+        self, question: str, history: list[Message], progress: Progress | None
+    ) -> AnswerResult:
+        _notify(progress, "search")
         started = self._clock()
         args = self._planner.plan(question, history)
         hits = self._retriever.search(args.query, k=self._k, conditions=args.conditions)
@@ -475,6 +501,7 @@ class Answerer:
         sources = prepare_sources(hits, earlier)
         completion = None
         if sources:
+            _notify(progress, "answer")
             completion = self._llm.chat(
                 [
                     {"role": "system", "content": load_prompt(self.prompt_version)},
@@ -501,8 +528,11 @@ class Answerer:
             args=args,
         )
 
-    def _answer_auto(self, question: str, history: list[Message]) -> AnswerResult:
+    def _answer_auto(
+        self, question: str, history: list[Message], progress: Progress | None
+    ) -> AnswerResult:
         """«Модель решает»: модель ⇄ search_recipes, до MAX_SEARCHES поисков."""
+        _notify(progress, "answer")
         started = self._clock()
         sources, earlier = add_sources(
             [], self._retriever.recipes(earlier_recipe_ids(history))
@@ -541,6 +571,7 @@ class Answerer:
                 call["arguments"], self._vocabulary, question=question
             )
             searches.append(args)
+            _notify(progress, "search")
             before = self._clock()
             found = self._retriever.search(
                 args.query, k=self._k, conditions=args.conditions
