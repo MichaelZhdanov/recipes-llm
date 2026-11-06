@@ -91,13 +91,21 @@ def fix(number: int, text: str, quote: str = "Творог — 250 г") -> dict[
 
 
 def test_review_rubric_is_the_judge_rubric_without_facts() -> None:
-    """Проверка в пути ответа и судья eval судят по одним правилам."""
+    """Проверка в пути ответа и судья eval судят опору на рецепт по одним
+    правилам. У проверки сверх того — раздел «отвечает ли рецепт на вопрос»:
+    судья eval меряет это отдельно (судья релевантности)."""
     judge = (Path("evals/prompts") / f"{JUDGE_PROMPT}.md").read_text(encoding="utf-8")
     facts = judge[
         judge.index("Если дан список фактов") : judge.index("Отвечай только JSON")
     ]
+    review = load_prompt(PROMPT_VERSION)
+    relevance = review[
+        review.index("Отвечает ли рецепт на вопрос") : review.index(
+            "Отвечай только JSON"
+        )
+    ]
 
-    assert load_prompt(PROMPT_VERSION) == judge.replace(facts, "")
+    assert review.replace(relevance, "") == judge.replace(facts, "")
 
 
 def test_all_yes_goes_to_the_user_without_revision() -> None:
@@ -190,3 +198,54 @@ def test_unparsable_review_means_unverified_and_revision() -> None:
         review.review_usage.prompt_tokens == 200
         and review.revise_usage.prompt_tokens == 100
     )
+
+
+def relevance(*marks: tuple[bool, bool]) -> dict[str, object]:
+    """(supported, answers_question) по утверждениям."""
+    return {
+        "statements": [
+            {
+                "number": n,
+                "comment": "ок"
+                if fits
+                else "блюдо с вином в составе, а спросили к вину",
+                "supported": ok,
+                "answers_question": fits,
+            }
+            for n, (ok, fits) in enumerate(marks, start=1)
+        ]
+    }
+
+
+def test_recipe_not_answering_the_question_is_dropped_without_revision() -> None:
+    """Верно описанный, но не тот рецепт текстом не исправить: рецепты те же."""
+    sonnet = Scripted([relevance((True, False), (True, True))])
+    haiku = Scripted([])
+
+    review = review_answer(
+        "к красному вину что подать",
+        SOURCES,
+        [EGG, SUGAR],
+        "",
+        Reviewer(sonnet),
+        Reviser(haiku, model="h"),
+        context=["посоветуй ужин", "а <что> к вину?"],
+    )
+
+    assert [s.text for s in review.final] == [SUGAR.text]
+    assert review.irrelevant == {1: "блюдо с вином в составе, а спросили к вину"}
+    assert review.flagged == [] and haiku.calls == []
+    message = sonnet.calls[0][1]["content"]
+    assert message.startswith(
+        "Ранее в диалоге пользователь спрашивал:\n- посоветуй ужин\n- а &lt;что> к вину?"
+    )
+
+
+def test_without_reviser_no_is_removed_at_once() -> None:
+    """После нового поиска доработка уже была: второй правки нет."""
+    sonnet = Scripted([verdicts(False, True)])
+
+    review = review_answer("Сырники", SOURCES, [EGG, SUGAR], "", Reviewer(sonnet), None)
+
+    assert [s.text for s in review.final] == [SUGAR.text]
+    assert review.revised == {} and len(sonnet.calls) == 1
