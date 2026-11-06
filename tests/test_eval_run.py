@@ -19,6 +19,7 @@ from evals.answer_metrics import AnswerCase, AnswerRun
 from evals.dataset import Case
 from evals.report import RunMeta
 from evals.run import (
+    JudgeChoice,
     _categories,
     answer_records,
     load_answer_run,
@@ -245,3 +246,10 @@ def test_follow_ups_are_marked_by_whether_their_recipes_are_in_the_index() -> No
     )
 
     assert [r.available for r in marked] == [True, False]
+
+
+def test_default_judge_is_sonnet_and_ultra_is_on_request() -> None:
+    """Судья по умолчанию — Sonnet (ручная разметка расхождений, 2026-11-06)."""
+    assert JudgeChoice().provider == "anthropic"
+    assert JudgeChoice().model_name == "claude-sonnet-5-5"
+    assert JudgeChoice("gigachat").model_name == "GigaChat-3-Ultra"

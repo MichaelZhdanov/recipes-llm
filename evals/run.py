@@ -148,7 +148,7 @@ REPORTS_DIR = Path(__file__).parent / "reports"
 class JudgeChoice:
     """Какая модель судит: `--judge-provider` и `--judge-model`."""
 
-    provider: LlmProvider = "gigachat"
+    provider: LlmProvider = "anthropic"
     model: str = ""
 
     @property
@@ -841,8 +841,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--judge-provider",
         choices=("gigachat", "anthropic"),
-        default="gigachat",
-        help="кто судит: gigachat — GigaChat-3-Ultra (по умолчанию), anthropic — Claude",
+        default="anthropic",
+        help="кто судит: anthropic — Claude Sonnet 5.5 (по умолчанию), gigachat — GigaChat-3-Ultra",
     )
     parser.add_argument(
         "--judge-model",

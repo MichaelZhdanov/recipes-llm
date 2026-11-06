@@ -3,8 +3,7 @@
 Код проверяет, что цитата — строка рецепта и что числа утверждения есть
 в процитированных строках (`citations.py`). Но смысл он проверить не может:
 не выдуман ли шаг или время, честно ли «постное» и «без лука». Это делает
-судья — модель другого семейства, чем та, что отвечает (GigaChat-3-Ultra),
-двумя отдельными вызовами на каждый ответ:
+судья — Claude Sonnet 5.5, двумя отдельными вызовами на каждый ответ:
 1. Смысл, рубрика `evals/prompts/judge_v3.md`:
    - подтверждают ли рецепты каждое утверждение (groundedness, порог 0.85).
      Судья видит процитированный рецепт целиком: по полному списку
@@ -36,11 +35,15 @@ from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, ChatModel, 
 from evals.answer_metrics import AnswerCase, AnswerRun, Rate
 from evals.dataset import Canary, ClarityCanary
 
-JUDGE_MODEL = "GigaChat-3-Ultra"
-# Судья на выбор (`--judge-provider`): по умолчанию GigaChat-3-Ultra — модель
-# другого семейства, чем Claude, который отвечает. Claude Sonnet — для
-# сравнения судей на одних и тех же ответах (`evals/compare_judges.py`).
-JUDGE_MODELS = {"gigachat": JUDGE_MODEL, "anthropic": "claude-sonnet-5-5"}
+# Судья — Claude Sonnet 5.5 (решение автора 2026-11-06). До этого судил
+# GigaChat-3-Ultra — модель другого семейства, чем отвечающий Claude. Слепая
+# ручная разметка расхождений показала: «не подтверждено» только у Sonnet
+# верно в 13 из 16, только у Ultra — в 1 из 14 (evals/reports/2026-11-06-judges-manual.md).
+# Судья одного семейства с моделью ответа — известное ограничение: модели
+# склонны узнавать и предпочитать свои тексты. Поэтому в промптах нет имён
+# моделей, а оценки сверяются с ручной разметкой. Ultra — по `--judge-provider gigachat`.
+JUDGE_MODEL = "claude-sonnet-5-5"
+JUDGE_MODELS = {"gigachat": "GigaChat-3-Ultra", "anthropic": JUDGE_MODEL}
 # На Paperless в тот же вызов, что и смысл, пробовали добавить грамотность —
 # судья её не оценивал (канарейки 1 из 8), поэтому грамотность — отдельный вызов.
 # v1 — под Paperless (документация, английские фрагменты), v2 — под рецепты,
