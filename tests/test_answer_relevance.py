@@ -53,6 +53,8 @@ def test_only_meaning_questions_and_follow_ups_without_conditions() -> None:
         case("follow_up-001", "follow_up", expected_exclude=["лук репчатый"])
     )
     assert not in_scope(case("include-001", "include", expected_include=[["курица"]]))
+    # «Сколько муки во втором?» — про рецепт прошлого ответа.
+    assert not in_scope(case("follow_up-003", "follow_up", must_include=["200 г"]))
 
 
 class FakeJudge:

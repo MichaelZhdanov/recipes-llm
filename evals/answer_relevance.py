@@ -7,9 +7,9 @@
 релевантности (`relevance.py`, Sonnet) — по сырым данным одного или
 нескольких прогонов `make eval`, рядом: «до» и «после».
 
-Кейсы — вопросы «по смыслу» (semantic) и уточнения без условий (follow_up
-без include, exclude и названия: иначе вопрос «а без лука?» без диалога
-не понять). Судится первый прогон кейса. Судье тоже нельзя верить на
+Кейсы — вопросы «по смыслу» (semantic) и уточнения, понятные без диалога
+(follow_up без условий и не про рецепт прошлого ответа: «а без лука?» или
+«сколько муки во втором?» судья без диалога не поймёт). Судится первый прогон кейса. Судье тоже нельзя верить на
 слово: канарейки релевантности (`judge/relevance_canaries.yaml`) идут в тот
 же отчёт.
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from assistant.config import Settings
-from evals.answer_metrics import Rate
+from evals.answer_metrics import Rate, needs_earlier_recipes
 from evals.dataset import Case, load_cases, load_relevance_canaries
 from evals.relevance import RelevanceJudge, judge_relevance, relevance_canary_scores
 from evals.retrieval_metrics import Found
@@ -32,10 +32,14 @@ from evals.run import DEFAULT_JUDGE, REPORTS_DIR, _judge_llm
 
 
 def in_scope(case: Case) -> bool:
+    """semantic и уточнения, понятные без диалога: без условий и не про
+    рецепт прошлого ответа («сколько муки во втором?» судья без диалога не поймёт)."""
     if case.category == "semantic":
         return True
-    return case.category == "follow_up" and not (
-        case.expected_include or case.expected_exclude or case.expected_name
+    return (
+        case.category == "follow_up"
+        and not needs_earlier_recipes(case)
+        and not (case.expected_include or case.expected_exclude or case.expected_name)
     )
 
 
