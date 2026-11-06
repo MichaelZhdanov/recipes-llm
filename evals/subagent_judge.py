@@ -69,7 +69,9 @@ def _case_item(record: dict[str, Any], case: Case) -> dict[str, Any]:
     }
 
 
-def export(raw: Path, out: Path, parts: int = PARTS) -> list[Path]:
+def export(
+    raw: Path, out: Path, parts: int = PARTS, canaries: bool = True
+) -> list[Path]:
     data = json.loads(raw.read_text(encoding="utf-8"))
     cases = {c.id: c for c in load_cases()}
     items: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -82,7 +84,7 @@ def export(raw: Path, out: Path, parts: int = PARTS) -> list[Path]:
             items.append(
                 (item, {"kind": "case", "id": case.id, "category": case.category})
             )
-    for c in load_canaries():
+    for c in load_canaries() if canaries else []:
         item = {
             "question": "",
             "dialog": [],
@@ -92,7 +94,7 @@ def export(raw: Path, out: Path, parts: int = PARTS) -> list[Path]:
             "recipes": [],
         }
         items.append((item, {"kind": "grounding", "id": c.id, "expected": c.supported}))
-    for r in load_relevance_canaries():
+    for r in load_relevance_canaries() if canaries else []:
         item = {
             "question": r.question,
             "dialog": [],
@@ -192,12 +194,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     exp.add_argument("raw", type=Path)
     exp.add_argument("out", type=Path)
     exp.add_argument("--parts", type=int, default=PARTS)
+    exp.add_argument(
+        "--no-canaries",
+        action="store_true",
+        help="без канареек: судья уже проверен на них в другом прогоне",
+    )
     sco = commands.add_parser("score", help="вердикты против ключа → отчёт")
     sco.add_argument("out", type=Path)
     sco.add_argument("--name", required=True)
     args = parser.parse_args(argv)
     if args.command == "export":
-        for path in export(args.raw, args.out, args.parts):
+        for path in export(args.raw, args.out, args.parts, not args.no_canaries):
             print(path)
         return 0
     text = score(args.out, args.name)

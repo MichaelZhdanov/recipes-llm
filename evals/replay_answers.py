@@ -33,7 +33,13 @@ from assistant.retrieval.store import VectorStore
 from assistant.tools.search_recipes import SearchArgs
 from evals.dataset import load_cases
 from evals.report import RunMeta
-from evals.run import _finish, load_answer_run, mark_answerable, run_answers
+from evals.run import (
+    _finish,
+    load_answer_run,
+    mark_answerable,
+    pick_cases,
+    run_answers,
+)
 
 
 class SavedPlanner:
@@ -74,12 +80,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--k", type=int, default=8, help="сколько рецептов найти для ответа"
     )
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--sample",
+        type=int,
+        help="только N кейсов поровну из категорий (сид как в make eval)",
+    )
     parser.add_argument("--label", required=True, help="суффикс имени отчёта")
     args = parser.parse_args(argv)
 
     raw = json.loads(args.raw.read_text(encoding="utf-8"))
     plans = saved_plans(raw)
     cases = [c for c in load_cases() if c.question in plans]
+    if args.sample:
+        cases = pick_cases(cases, args.sample)
     settings = Settings().model_copy(
         update={
             "llm_provider": args.provider,
