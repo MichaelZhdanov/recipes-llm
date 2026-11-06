@@ -1,8 +1,8 @@
-"""Логика бота без aiogram: что ответить на вопрос и на /new.
+"""Логика бота без aiogram: что ответить на вопрос, /new и оценку.
 
 Синхронная, как и весь ассистент: обработчики aiogram (`app.py`) вызывают её
 через `asyncio.to_thread`. Здесь всё, что стоит проверить тестами: история
-диалога, ссылки на живые страницы, сохранение ответа, ошибки.
+диалога, ссылки на живые страницы, сохранение ответа и оценки, ошибки.
 """
 
 import logging
@@ -12,13 +12,17 @@ from dataclasses import dataclass, field
 
 from assistant.bot.format import (
     ERROR_TEXT,
+    GONE_TEXT,
     NEW_TEXT,
+    THANKS_TEXT,
+    WHAT_WRONG_TEXT,
     Keyboard,
     answer_buttons,
     answer_html,
+    reason_buttons,
 )
 from assistant.bot.pages import PageChecker
-from assistant.bot.store import Store
+from assistant.bot.store import Store, Vote, VoteReason
 from assistant.generation.answer import Progress, render_markdown
 from assistant.service import DEPENDENCY_ERRORS, QuestionAnswerer
 
@@ -95,3 +99,21 @@ class BotService:
     def reset(self, chat_id: int) -> str:
         self.store.reset(chat_id)
         return NEW_TEXT
+
+    def vote(
+        self, chat_id: int, answer_id: int, vote: Vote
+    ) -> tuple[str, Reply | None]:
+        """Подсказка на кнопке и, после 👎, вопрос «что не так?»."""
+        if not self.store.vote(answer_id, chat_id, vote):
+            return GONE_TEXT, None
+        logger.info("оценка ответа %s: %s", answer_id, vote)
+        if vote == "down":
+            return THANKS_TEXT, Reply(WHAT_WRONG_TEXT, reason_buttons(answer_id))
+        return THANKS_TEXT, None
+
+    def vote_reason(self, chat_id: int, answer_id: int, reason: VoteReason) -> str:
+        """Причина 👎; повод передать человеку — на этапе 5."""
+        if not self.store.vote_reason(answer_id, chat_id, reason):
+            return GONE_TEXT
+        logger.info("причина 👎 ответа %s: %s", answer_id, reason)
+        return THANKS_TEXT

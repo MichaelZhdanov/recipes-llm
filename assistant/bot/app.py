@@ -8,6 +8,8 @@
   «секунду, ещё отвечаю». Разные чаты отвечаются параллельно.
 - Сообщения старше STALE_AFTER пропускаются: после простоя бота отвечать на
   вчерашнее странно.
+- 👍/👎 под ответом: после оценки они исчезают, после 👎 бот спрашивает
+  «что не так?» тремя кнопками.
 """
 
 import asyncio
@@ -26,6 +28,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     LinkPreviewOptions,
@@ -44,7 +47,7 @@ from assistant.bot.format import (
 )
 from assistant.bot.pages import PageChecker
 from assistant.bot.service import ERROR_REPLY, BotService, Reply
-from assistant.bot.store import Store
+from assistant.bot.store import Store, Vote, VoteReason
 from assistant.config import Settings
 from assistant.generation.answer import Stage
 from assistant.service import MAX_QUESTION_CHARS, LazyAnswerer
@@ -55,6 +58,12 @@ DATABASE = Path("data/bot/bot.sqlite3")
 STALE_AFTER = 10 * 60
 # Сколько поток ассистента ждёт правку статуса.
 STATUS_TIMEOUT = 5.0
+VOTES: dict[str, Vote] = {"up": "up", "down": "down"}
+REASONS: dict[str, VoteReason] = {
+    "unclear": "unclear",
+    "wrong": "wrong",
+    "failed": "failed",
+}
 
 
 def keyboard(rows: Keyboard) -> InlineKeyboardMarkup | None:
@@ -66,6 +75,26 @@ def keyboard(rows: Keyboard) -> InlineKeyboardMarkup | None:
             for row in rows
         ]
     )
+
+
+def without_votes(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    """Клавиатура ответа после оценки: 👍/👎 убираются, кнопки шагов остаются."""
+    if markup is None:
+        return None
+    rows = [
+        row
+        for row in markup.inline_keyboard
+        if not any((button.callback_data or "").startswith("vote:") for button in row)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def parse_callback(data: str | None, prefix: str) -> tuple[int, str] | None:
+    """«prefix:<id ответа>:<значение>» → (id, значение); чужое — None."""
+    parts = (data or "").split(":")
+    if len(parts) != 3 or parts[0] != prefix or not parts[1].isdigit():
+        return None
+    return int(parts[1]), parts[2]
 
 
 class Handlers:
@@ -151,15 +180,52 @@ class Handlers:
         with contextlib.suppress(TelegramBadRequest):
             await status.edit_text(status_text(stage))
 
+    async def vote(self, callback: CallbackQuery) -> None:
+        parsed = parse_callback(callback.data, "vote")
+        message = callback.message
+        if parsed is None or parsed[1] not in VOTES or message is None:
+            await callback.answer()
+            return
+        answer_id, value = parsed
+        toast, follow = await asyncio.to_thread(
+            self.service.vote, message.chat.id, answer_id, VOTES[value]
+        )
+        await callback.answer(toast)
+        # Сообщение старше 48 часов Telegram отдаёт без текста и кнопок.
+        if not isinstance(message, Message):
+            return
+        await message.edit_reply_markup(
+            reply_markup=without_votes(message.reply_markup)
+        )
+        if follow is not None:
+            await message.answer(follow.text, reply_markup=keyboard(follow.buttons))
+
+    async def why(self, callback: CallbackQuery) -> None:
+        parsed = parse_callback(callback.data, "why")
+        message = callback.message
+        if parsed is None or parsed[1] not in REASONS or message is None:
+            await callback.answer()
+            return
+        answer_id, value = parsed
+        text = await asyncio.to_thread(
+            self.service.vote_reason, message.chat.id, answer_id, REASONS[value]
+        )
+        await callback.answer(text)
+        if isinstance(message, Message):
+            await message.edit_text(text)
+
 
 def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router = Router()
     router.message.filter(F.chat.type == ChatType.PRIVATE)
+    router.callback_query.filter(F.message.chat.type == ChatType.PRIVATE)
     router.message.register(handlers.start, CommandStart())
     router.message.register(handlers.help, Command("help"))
     router.message.register(handlers.new, Command("new"))
     router.message.register(handlers.question, F.text)
     router.message.register(handlers.other)
+    router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
+    router.callback_query.register(handlers.why, F.data.startswith("why:"))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     return dispatcher

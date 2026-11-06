@@ -18,7 +18,14 @@ import httpx2
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import EditMessageText, SendChatAction, SendMessage, TelegramMethod
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    EditMessageReplyMarkup,
+    EditMessageText,
+    SendChatAction,
+    SendMessage,
+    TelegramMethod,
+)
 from aiogram.methods.base import TelegramType
 from pydantic import SecretStr
 
@@ -26,12 +33,15 @@ from assistant.bot.app import Handlers, build_dispatcher, make_bot
 from assistant.bot.format import (
     BUSY_TEXT,
     ERROR_TEXT,
+    GONE_TEXT,
     HELP_TEXT,
     NEW_TEXT,
     NOT_TEXT,
     START_TEXT,
     STATUS,
+    THANKS_TEXT,
     TOO_LONG_TEXT,
+    WHAT_WRONG_TEXT,
 )
 from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
@@ -175,6 +185,22 @@ def test_reset_forgets_the_conversation() -> None:
 
     assert service.reset(7) == NEW_TEXT
     assert service.store.history(7) == []
+
+
+def test_thumbs_down_asks_what_went_wrong_and_records_the_reason() -> None:
+    service = make_service(FakeAnswerer())
+    answer_id = service.ask(7, "блины").answer_id
+    assert answer_id is not None
+
+    assert service.vote(8, answer_id, "down") == (GONE_TEXT, None)  # чужой чат
+    assert service.vote_reason(7, answer_id, "failed") == GONE_TEXT  # ещё не 👎
+    assert service.vote(7, answer_id, "up") == (THANKS_TEXT, None)
+    toast, follow = service.vote(7, answer_id, "down")
+
+    assert toast == THANKS_TEXT
+    assert follow is not None and follow.text == WHAT_WRONG_TEXT
+    assert follow.buttons[2] == [("Не получилось", f"why:{answer_id}:failed")]
+    assert service.vote_reason(7, answer_id, "failed") == THANKS_TEXT
 
 
 # --- Обработчики aiogram на фейковом Bot API ---
@@ -382,3 +408,77 @@ def test_formatter_masks_secrets_in_message_and_traceback() -> None:
     assert sorted(secrets) == sorted([TOKEN, "sk-test"])
     assert TOKEN not in text and "sk-test" not in text
     assert f"bot{MASK}/getUpdates" in text and f"ключ {MASK}" in text
+
+
+# --- Кнопки под ответом ---
+
+
+def press(
+    data: str, *, message_id: int, markup: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "message_id": message_id,
+        "date": int(time.time()),
+        "chat": {"id": 7, "type": "private"},
+        "text": "ответ",
+    }
+    if markup is not None:
+        message["reply_markup"] = markup
+    return {
+        "update_id": 100 + message_id,
+        "callback_query": {
+            "id": f"cb{message_id}",
+            "from": {"id": 7, "is_bot": False, "first_name": "Тест"},
+            "chat_instance": "ci",
+            "data": data,
+            "message": message,
+        },
+    }
+
+
+def test_vote_buttons_disappear_and_thumbs_down_asks_why() -> None:
+    service = make_service(FakeAnswerer())
+    answered = feed(service, update("блины"))
+    final = answered.edits()[-1]
+    assert final.reply_markup is not None
+    markup = final.reply_markup.model_dump(exclude_none=True)
+
+    telegram = feed(
+        service,
+        press("vote:1:down", message_id=101, markup=markup),
+        press("why:1:unclear", message_id=102),
+    )
+
+    toast, *_ = [m for m in telegram.calls if isinstance(m, AnswerCallbackQuery)]
+    assert toast.text == THANKS_TEXT
+    (keyboard_edit,) = [
+        m for m in telegram.calls if isinstance(m, EditMessageReplyMarkup)
+    ]
+    assert keyboard_edit.message_id == 101
+    # Остались только шаги для рецепта без живой страницы.
+    assert keyboard_edit.reply_markup is not None
+    assert [
+        [b.callback_data for b in row]
+        for row in keyboard_edit.reply_markup.inline_keyboard
+    ] == [["steps:1:2"]]
+    (question,) = [m for m in telegram.calls if isinstance(m, SendMessage)]
+    assert question.text == WHAT_WRONG_TEXT
+    assert [m.text for m in telegram.edits()] == [THANKS_TEXT]
+    # 👎 записан в хранилище: причину к нему можно сохранить.
+    assert service.store.vote_reason(1, 7, "wrong")
+
+
+def test_foreign_or_broken_callbacks_change_nothing() -> None:
+    service = make_service(FakeAnswerer())
+    service.ask(8, "блины")  # ответ 1 — в чате 8
+
+    telegram = feed(
+        service,
+        press("vote:1:up", message_id=101),
+        press("vote:x:up", message_id=102),
+        press("vote:1:maybe", message_id=103),
+    )
+
+    toasts = [m.text for m in telegram.calls if isinstance(m, AnswerCallbackQuery)]
+    assert toasts == [GONE_TEXT, None, None]
+    assert not any(isinstance(m, SendMessage) for m in telegram.calls)
