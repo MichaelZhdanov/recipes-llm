@@ -25,6 +25,7 @@
 с ручной разметкой автора.
 """
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -249,6 +250,8 @@ class Judge:
         )
         # Ответы, которые не разобрались: в отчёт, чтобы видеть, что судья ломается.
         self.failures = 0
+        # Чем закончились ответы (stop, length…): у сбоя разбора видна причина.
+        self.finish_reasons: Counter[str] = Counter()
 
     def judge(
         self,
@@ -268,7 +271,7 @@ class Judge:
         return Verdict(supported, present, comments, clear, problems)
 
     def _ask(self, prompt: str, message: str, schema: dict[str, object]) -> str:
-        return self.llm.chat(
+        completion = self.llm.chat(
             [
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": message},
@@ -277,7 +280,9 @@ class Judge:
             temperature=DETERMINISTIC_TEMPERATURE,
             max_tokens=MAX_TOKENS,
             response_format={"type": "json_schema", "schema": schema, "strict": True},
-        ).content
+        )
+        self.finish_reasons[completion.finish_reason] += 1
+        return completion.content
 
     def _support(
         self, question: str, claims: Sequence[Claim], facts: Sequence[str]
