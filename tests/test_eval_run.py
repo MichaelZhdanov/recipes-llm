@@ -8,6 +8,7 @@ import pytest
 from eval_helpers import CHUNK, MANIFEST, SOURCES, answered, case, found, result
 
 from assistant.config import Settings
+from assistant.generation import llm as assistant_llm
 from assistant.generation.answer import Answer
 from assistant.generation.citations import CheckedCitation, CheckedStatement, SourceText
 from assistant.generation.gigachat import LlmStats
@@ -253,3 +254,30 @@ def test_default_judge_is_sonnet_and_ultra_is_on_request() -> None:
     assert JudgeChoice().provider == "anthropic"
     assert JudgeChoice().model_name == "claude-sonnet-5-5"
     assert JudgeChoice("gigachat").model_name == "GigaChat-3-Ultra"
+
+
+def test_judge_effort_is_explicit_and_shown_in_the_report() -> None:
+    """effort задан явно: если вендор сменит умолчание, судья не изменится тихо."""
+    assert JudgeChoice().effort == "high"
+    assert JudgeChoice().label == "claude-sonnet-5-5, effort high"
+    # У GigaChat effort нет, в подписи его тоже нет.
+    assert JudgeChoice("gigachat").label == "GigaChat-3-Ultra"
+
+
+def test_judge_llm_gets_the_effort_only_for_claude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.run as run
+
+    seen: list[tuple[str, str]] = []
+
+    def fake_model(settings: Settings, http: object) -> object:
+        seen.append((settings.llm_provider, settings.llm_effort))
+        return object()
+
+    monkeypatch.setattr(assistant_llm, "make_chat_model", fake_model)
+    for choice in (JudgeChoice(), JudgeChoice("gigachat")):
+        with run._judge_llm(Settings(llm_effort="low"), choice):
+            pass
+
+    assert seen == [("anthropic", "high"), ("gigachat", "")]

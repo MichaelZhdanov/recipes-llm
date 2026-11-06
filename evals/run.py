@@ -93,7 +93,7 @@ from evals.dataset import (
     load_clarity_canaries,
     load_relevance_canaries,
 )
-from evals.judge import JUDGE_MODELS, Judge, Judging, run_judge
+from evals.judge import JUDGE_EFFORT, JUDGE_MODELS, Judge, Judging, run_judge
 from evals.progress import add_embedding_stats, add_llm_stats, journal_path
 from evals.relevance import Relevance, RelevanceJudge, judge_relevance
 from evals.report import (
@@ -146,14 +146,24 @@ REPORTS_DIR = Path(__file__).parent / "reports"
 
 @dataclass(frozen=True)
 class JudgeChoice:
-    """Какая модель судит: `--judge-provider` и `--judge-model`."""
+    """Какая модель судит: `--judge-provider`, `--judge-model`, `--judge-effort`."""
 
     provider: LlmProvider = "anthropic"
     model: str = ""
+    # Только у Claude. Задан явно, а не «по умолчанию модели»: если вендор сменит
+    # умолчание, судья не станет тихо мягче или строже.
+    effort: str = JUDGE_EFFORT
 
     @property
     def model_name(self) -> str:
         return self.model or JUDGE_MODELS[self.provider]
+
+    @property
+    def label(self) -> str:
+        """Как судья подписан в отчёте: модель и, у Claude, effort."""
+        if self.provider == "anthropic" and self.effort:
+            return f"{self.model_name}, effort {self.effort}"
+        return self.model_name
 
 
 DEFAULT_JUDGE = JudgeChoice()
@@ -570,8 +580,9 @@ def _judge_llm(settings: Settings, choice: JudgeChoice) -> Iterator[ChatModel]:
     """Свой клиент и свой экземпляр модели: токены судьи считаются отдельно от
     ассистента, а у GigaChat свой TLS-корень. Тот же выбор провайдера, что
     у ассистента, но со своим провайдером и без LLM_EFFORT ассистента."""
+    effort = choice.effort if choice.provider == "anthropic" else ""
     judge_settings = settings.model_copy(
-        update={"llm_provider": choice.provider, "llm_effort": ""}
+        update={"llm_provider": choice.provider, "llm_effort": effort}
     )
     with assistant_llm.make_http_client(judge_settings) as http:
         yield assistant_llm.make_chat_model(judge_settings, http)
@@ -585,7 +596,9 @@ def _judge_relevance(
     with _judge_llm(settings, choice) as llm:
         judge = RelevanceJudge(llm, model=choice.model_name)
         _log(f"судья {judge.model}: выдача по смыслу и {len(canaries)} канареек")
-        return judge_relevance(results, judge, canaries)
+        return dataclasses.replace(
+            judge_relevance(results, judge, canaries), model=choice.label
+        )
 
 
 def _judge(
@@ -599,7 +612,9 @@ def _judge(
         # Канарейки пишутся вместе с промптом судьи: пока их нет, судья работает без них.
         canaries = load_canaries() if CANARIES_FILE.exists() else []
         clarity = load_clarity_canaries() if CLARITY_CANARIES_FILE.exists() else []
-        return run_judge(results, judge, canaries, clarity)
+        return dataclasses.replace(
+            run_judge(results, judge, canaries, clarity), model=choice.label
+        )
 
 
 def _finish(
@@ -845,6 +860,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="кто судит: anthropic — Claude Sonnet 5.5 (по умолчанию), gigachat — GigaChat-3-Ultra",
     )
     parser.add_argument(
+        "--judge-effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        default=JUDGE_EFFORT,
+        help=f"сколько думает судья Claude (по умолчанию {JUDGE_EFFORT}); у GigaChat не действует",
+    )
+    parser.add_argument(
         "--judge-model",
         default="",
         help="модель судьи; пусто — по умолчанию провайдера",
@@ -874,7 +895,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = Settings()
-    judge_choice = JudgeChoice(args.judge_provider, args.judge_model)
+    judge_choice = JudgeChoice(args.judge_provider, args.judge_model, args.judge_effort)
     if args.rescore:
         return _rescore(
             settings, args.rescore, args.label, not args.no_judge, judge_choice
