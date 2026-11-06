@@ -92,3 +92,16 @@ def test_anthropic_key_is_accepted_on_deploy() -> None:
     values = parse_values("ANTHROPIC_API_KEY=sk-ant-test\n")
 
     assert set_values("A=1\n", values) == "A=1\nANTHROPIC_API_KEY='sk-ant-test'\n"
+
+
+def test_deploy_sets_the_assistant_model() -> None:
+    """Модель на сервере задаёт deploy.sh: старый .env сервера сам не обновится."""
+    values = parse_values(
+        "LLM_PROVIDER=cloudru\nLLM_MODEL=zai-org/GLM-5.1\n"
+        "LLM_EFFORT=low\nANSWER_REVIEW=false\n"
+    )
+
+    assert set_values("LLM_PROVIDER=anthropic\nLOG_LEVEL=INFO\n", values) == (
+        "LLM_PROVIDER='cloudru'\nLOG_LEVEL=INFO\nLLM_MODEL='zai-org/GLM-5.1'\n"
+        "LLM_EFFORT='low'\nANSWER_REVIEW='false'\n"
+    )
