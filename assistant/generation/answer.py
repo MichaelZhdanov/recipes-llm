@@ -34,7 +34,7 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 import httpx2
 from pydantic import BaseModel, ValidationError
@@ -399,6 +399,12 @@ Stage = Literal["search", "answer", "review", "research"]
 Progress = Callable[[Stage], None]
 
 
+class Planner(Protocol):
+    def plan(
+        self, question: str, history: Sequence[Message] = (), note: str = ""
+    ) -> SearchArgs: ...
+
+
 def _notify(progress: Progress | None, stage: Stage) -> None:
     if progress is not None:
         progress(stage)
@@ -461,6 +467,7 @@ class Answerer:
         clock: Callable[[], float] = time.perf_counter,
         reviewer: Reviewer | None = None,
         reviser: Reviser | None = None,
+        planner: Planner | None = None,
     ) -> None:
         self.model = model
         self.mode = mode
@@ -474,7 +481,11 @@ class Answerer:
         self._clock = clock
         # Словарь ингредиентов индекса: им разбирают вопрос в обоих режимах.
         self._vocabulary = retriever.vocabulary()
-        self._planner = SearchPlanner(llm, model=model, vocabulary=self._vocabulary)
+        # Разбор вопроса в аргументы поиска; другой — в eval: повтор ответа по
+        # сохранённому разбору (evals/replay_answers.py).
+        self._planner: Planner = planner or SearchPlanner(
+            llm, model=model, vocabulary=self._vocabulary
+        )
         # Проверка перед отправкой: оба или ни одного.
         self._reviewer = reviewer
         self._reviser = reviser

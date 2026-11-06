@@ -876,3 +876,31 @@ def test_asking_for_other_recipes_skips_the_ones_already_shown(
     assert result.trace.args is not None and result.trace.args.other
     ids = {s.chunk.recipe_id for s in result.trace.sources}
     assert CHICKEN.recipe_id not in ids and ids
+
+
+def test_saved_planner_replays_the_stored_parse_without_calling_the_model(
+    retriever: Retriever,
+) -> None:
+    """Повтор ответа в eval: разбор — сохранённый, модель только отвечает."""
+    from assistant.retrieval.filters import IngredientFilter
+    from assistant.tools.search_recipes import SearchArgs
+    from evals.replay_answers import SavedPlanner
+
+    saved = SearchArgs(
+        "овсяное печенье", IngredientFilter(), queries=("овсяное печенье",)
+    )
+    llm = FakeLlm({"status": "not_found", "message": "", "statements": []})
+    answerer = Answerer(
+        retriever,
+        llm,
+        model="m",
+        ref="v3.4.2",
+        k=1,
+        planner=SavedPlanner({"что к чаю?": saved}),
+    )
+
+    result = answerer.answer("что к чаю?")
+
+    assert llm.plans == []
+    assert result.trace.args == saved
+    assert [h.chunk.recipe_id for h in result.trace.hits] == [COOKIES.recipe_id]
