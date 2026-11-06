@@ -85,7 +85,9 @@ class BotService:
                 question, self.store.history(chat_id), progress
             )
         except DEPENDENCY_ERRORS as error:
-            logger.error("ассистент не ответил: %s", type(error).__name__)
+            # Текст ошибки — код HTTP и ответ API, без вопроса пользователя;
+            # секреты из лога вычищает форматтер (logs.py).
+            logger.error("ассистент не ответил: %s: %s", type(error).__name__, error)
             return ERROR_REPLY
         answer = result.answer
         alive = self.pages.alive_many([link.url for link in answer.sources])
@@ -153,7 +155,7 @@ class BotService:
             if saved is None:
                 saved = self._new_steps(recipe)
         except DEPENDENCY_ERRORS as error:
-            logger.error("шаги не написаны: %s", type(error).__name__)
+            logger.error("шаги не написаны: %s: %s", type(error).__name__, error)
             return ERROR_REPLY
         if saved is None:
             return ERROR_REPLY

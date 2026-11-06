@@ -201,11 +201,18 @@ def test_answer_links_live_pages_and_offers_steps_for_dead_ones() -> None:
     assert reply.buttons[1] == [("🍳 Шаги: Оладьи", f"steps:{reply.answer_id}:2")]
 
 
-def test_failure_of_a_dependency_leaves_history_untouched() -> None:
-    answerer = FakeAnswerer(error=EmbeddingError("cloud.ru не ответил"))
+def test_failure_of_a_dependency_leaves_history_untouched(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    answerer = FakeAnswerer(error=EmbeddingError("cloud.ru ответил HTTP 402"))
     service = make_service(answerer)
 
-    reply = service.ask(7, "блины")
+    with caplog.at_level(logging.ERROR):
+        reply = service.ask(7, "блины")
+
+    # Причина — в логе: без неё сбой на сервере не разобрать.
+    assert "EmbeddingError: cloud.ru ответил HTTP 402" in caplog.text
+    assert "блины" not in caplog.text
 
     assert reply.text == ERROR_TEXT
     assert reply.buttons == [] and reply.answer_id is None
