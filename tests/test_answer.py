@@ -260,7 +260,7 @@ def test_prompt_has_system_rules_recipes_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="курица с рисом")
 
     system, user = llm.calls[0]
-    assert PROMPT_VERSION == "recipes_v3"
+    assert PROMPT_VERSION == "recipes_v4"
     assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert '<recipe id="1">\nКурица с рисом в духовке\n' in user["content"]
