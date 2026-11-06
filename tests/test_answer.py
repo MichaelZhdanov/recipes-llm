@@ -1,9 +1,10 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
-from chunk_helpers import CHICKEN, COOKIES, RECIPES, make_chunk
+from chunk_helpers import CHICKEN, COCKTAIL, COOKIES, RECIPES, make_chunk
 from eval_helpers import MANIFEST
 
 from assistant.generation.answer import (
@@ -685,3 +686,104 @@ def test_progress_reports_stages_in_order(retriever: Retriever) -> None:
 
     assert stages == ["search", "answer", "review"]
     assert chat.answer.status == "chat"  # без progress всё работает как раньше
+
+
+class CitingLlm(FakeLlm):
+    """Отвечает утверждением о рецепте с заданным названием: номер берёт из
+    промпта — после нового поиска номера рецептов другие."""
+
+    def __init__(self, *targets: tuple[str, str]) -> None:
+        super().__init__({})
+        self.targets = list(targets)
+
+    def chat(self, messages: Sequence[Message], **kwargs: Any) -> Completion:
+        if kwargs.get("functions") is not None:
+            return super().chat(messages, **kwargs)
+        name, quote = self.targets.pop(0)
+        prompt = messages[-1]["content"]
+        number = int(re.search(rf'<recipe id="(\d+)">\n{re.escape(name)}', prompt)[1])  # type: ignore[index]
+        self.content = json.dumps(
+            {
+                "status": "answer",
+                "message": "",
+                "statements": [
+                    {
+                        "text": f"Есть «{name}».",
+                        "citations": [{"source": number, "quote": quote}],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        return super().chat(messages, **kwargs)
+
+
+def relevance_marks(fits: bool) -> dict[str, object]:
+    return {
+        "statements": [
+            {
+                "number": 1,
+                "comment": "ок" if fits else "блюдо с курицей, а просили к чаю",
+                "supported": True,
+                "answers_question": fits,
+            }
+        ]
+    }
+
+
+def researching(
+    retriever: Retriever, haiku: CitingLlm, sonnet: list[dict[str, object]]
+) -> tuple[Answerer, ReviewLlm]:
+    reviser_llm = ReviewLlm([])
+    answerer = Answerer(
+        retriever,
+        haiku,
+        model="claude-haiku-5-5",
+        ref="v3.4.2",
+        k=5,
+        reviewer=Reviewer(ReviewLlm(sonnet)),
+        reviser=Reviser(reviser_llm, model="claude-haiku-5-5"),
+    )
+    return answerer, reviser_llm
+
+
+def test_recipes_not_answering_the_question_trigger_one_new_search(
+    retriever: Retriever,
+) -> None:
+    """«к чаю» — а нашлась курица: вопрос разбирается заново с замечанием
+    проверки, отклонённый рецепт в поиск не попадает, новый ответ проверяется."""
+    haiku = CitingLlm((CHICKEN.name, CHICKEN_QUOTE), (COOKIES.name, "Сахар — 100 г"))
+    answerer, reviser = researching(
+        retriever, haiku, [relevance_marks(False), relevance_marks(True)]
+    )
+    stages: list[str] = []
+
+    result = answerer.answer("что к чаю?", progress=stages.append)
+
+    assert result.answer.status == "answer"
+    assert [s.name for s in result.answer.sources] == [COOKIES.name]
+    first = result.trace.first
+    assert first is not None and first.review is not None
+    assert first.review.irrelevant == {1: "блюдо с курицей, а просили к чаю"}
+    assert CHICKEN.recipe_id not in [h.chunk.recipe_id for h in result.trace.hits]
+    second_plan = haiku.plans[1][-1]["content"]
+    assert "<review>\nблюдо с курицей, а просили к чаю\n</review>" in second_plan
+    # Доработка — это новый поиск: правки текста не было.
+    assert reviser.calls == 0
+    assert stages == ["search", "answer", "review", "research"]
+
+
+def test_still_not_answering_after_the_new_search_is_not_found(
+    retriever: Retriever,
+) -> None:
+    haiku = CitingLlm((CHICKEN.name, CHICKEN_QUOTE), (COCKTAIL.name, "Молоко — 250 мл"))
+    answerer, reviser = researching(
+        retriever, haiku, [relevance_marks(False), relevance_marks(False)]
+    )
+
+    result = answerer.answer("что к чаю?")
+
+    assert result.answer.status == "not_found"
+    assert result.answer.reason == "review_out"
+    assert result.trace.first is not None
+    assert reviser.calls == 0 and len(haiku.plans) == 2

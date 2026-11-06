@@ -164,6 +164,9 @@ class Trace:
     searches: tuple[SearchArgs, ...] = ()
     # Проверка ответа перед отправкой (review.py); None — проверки не было.
     review: Review | None = None
+    # Первая попытка, если её рецепты оказались не по вопросу и ассистент искал
+    # заново (Answerer._researched); None — нового поиска не было.
+    first: Trace | None = None
 
 
 @dataclass(frozen=True)
@@ -390,14 +393,58 @@ def assemble(
 
 
 # Стадии ответа для канала (бот показывает «Ищу рецепты…», «Сверяю…»):
-# search — разбор вопроса и поиск, answer — модель пишет ответ, review — проверка.
-Stage = Literal["search", "answer", "review"]
+# search — разбор вопроса и поиск, answer — модель пишет ответ, review — проверка,
+# research — рецепты оказались не по вопросу, ищем заново.
+Stage = Literal["search", "answer", "review", "research"]
 Progress = Callable[[Stage], None]
 
 
 def _notify(progress: Progress | None, stage: Stage) -> None:
     if progress is not None:
         progress(stage)
+
+
+def _user_questions(history: Sequence[Message]) -> list[str]:
+    """Прошлые вопросы пользователя: проверке — чтобы понять уточнение."""
+    return [m["content"] for m in history if m["role"] == "user"]
+
+
+def _rejected_recipes(trace: Trace) -> list[int]:
+    """id рецептов, на которые опирались утверждения «не по вопросу»."""
+    assert trace.review is not None
+    kept = dict(enumerate((s for s in trace.checked if s.kept), start=1))
+    by_number = {s.number: s.chunk.recipe_id for s in trace.sources}
+    ids = (
+        by_number[citation.source]
+        for n in trace.review.irrelevant
+        for citation in kept[n].citations
+        if citation.valid and citation.source in by_number
+    )
+    return list(dict.fromkeys(ids))
+
+
+def _with_review(answer: Answer, trace: Trace, review: Review) -> AnswerResult:
+    """Ответ после проверки: только одобренные утверждения; ничего — «не нашёл»."""
+    if not review.final:
+        refused = answer.model_copy(
+            update={
+                "status": "not_found",
+                "reason": "review_out",
+                "message": "",
+                "statements": [],
+                "sources": suggestions(trace.hits),
+            }
+        )
+        return AnswerResult(answer=refused, trace=trace)
+    statements, links = build_statements(review.final, trace.sources)
+    reviewed = answer.model_copy(
+        update={
+            "statements": statements,
+            "sources": links,
+            "message": answer.message if review.intro_kept else "",
+        }
+    )
+    return AnswerResult(answer=reviewed, trace=trace)
 
 
 class Answerer:
@@ -446,57 +493,100 @@ class Answerer:
             result = self._answer_auto(question, history, progress)
         else:
             result = self._answer_always(question, history, progress)
-        return self._reviewed(question, result, progress)
+        return self._reviewed(question, history, result, progress)
 
     def _reviewed(
-        self, question: str, result: AnswerResult, progress: Progress | None = None
+        self,
+        question: str,
+        history: list[Message],
+        result: AnswerResult,
+        progress: Progress | None = None,
     ) -> AnswerResult:
-        """Sonnet проверяет ответ; «нет» — один раз Haiku на доработку (review.py)."""
+        """Sonnet проверяет ответ; доработка — одна (review.py):
+
+        - утверждения с «нет» по опоре на рецепт — Haiku правит текст;
+        - если не осталось ни одного рецепта по вопросу — поиск заново
+          (`_researched`); это и есть доработка, второй правки после него нет.
+        """
         if self._reviewer is None or self._reviser is None:
             return result
         if result.answer.status != "answer":
             return result
         _notify(progress, "review")
+        context = _user_questions(history)
+        review = self._review(question, context, result, self._reviser)
+        trace = dataclasses.replace(result.trace, review=review)
+        if not review.final and review.irrelevant and self.mode == "always":
+            return self._researched(question, history, context, trace, progress)
+        return _with_review(result.answer, trace, review)
+
+    def _review(
+        self,
+        question: str,
+        context: Sequence[str],
+        result: AnswerResult,
+        reviser: Reviser | None,
+    ) -> Review:
+        assert self._reviewer is not None
         trace = result.trace
-        review = review_answer(
+        return review_answer(
             question,
             trace.sources,
             [s for s in trace.checked if s.kept],
             result.answer.message,
             self._reviewer,
-            self._reviser,
+            reviser,
             self._clock,
+            context=context,
         )
-        trace = dataclasses.replace(trace, review=review)
-        if not review.final:
-            answer = result.answer.model_copy(
-                update={
-                    "status": "not_found",
-                    "reason": "review_out",
-                    "message": "",
-                    "statements": [],
-                    "sources": suggestions(trace.hits),
-                }
+
+    def _researched(
+        self,
+        question: str,
+        history: list[Message],
+        context: Sequence[str],
+        first: Trace,
+        progress: Progress | None,
+    ) -> AnswerResult:
+        """Рецепты ответа не по вопросу («к вину» — а нашлись блюда, тушённые в
+        вине): вопрос разбирается заново с замечанием проверки, отклонённые
+        рецепты в поиск не попадают, новый ответ проверяется ещё раз — уже без
+        правки текста, «нет» удаляется."""
+        assert first.review is not None
+        _notify(progress, "research")
+        rejected = _rejected_recipes(first)
+        note = "\n".join(dict.fromkeys(first.review.irrelevant.values()))
+        result = self._answer_always(question, history, None, note=note, skip=rejected)
+        if result.answer.status != "answer":
+            return AnswerResult(
+                answer=result.answer,
+                trace=dataclasses.replace(result.trace, first=first),
             )
-            return AnswerResult(answer=answer, trace=trace)
-        statements, links = build_statements(review.final, trace.sources)
-        answer = result.answer.model_copy(
-            update={
-                "statements": statements,
-                "sources": links,
-                "message": result.answer.message if review.intro_kept else "",
-            }
-        )
-        return AnswerResult(answer=answer, trace=trace)
+        review = self._review(question, context, result, None)
+        trace = dataclasses.replace(result.trace, review=review, first=first)
+        return _with_review(result.answer, trace, review)
 
     def _answer_always(
-        self, question: str, history: list[Message], progress: Progress | None
+        self,
+        question: str,
+        history: list[Message],
+        progress: Progress | None,
+        *,
+        note: str = "",
+        skip: Sequence[int] = (),
     ) -> AnswerResult:
+        """note и skip — для нового поиска после проверки (`_researched`)."""
         _notify(progress, "search")
         started = self._clock()
-        args = self._planner.plan(question, history)
-        hits = self._retriever.search(args.query, k=self._k, conditions=args.conditions)
-        earlier = self._retriever.recipes(earlier_recipe_ids(history))
+        args = self._planner.plan(question, history, note)
+        hits = self._retriever.search(
+            args.query, k=self._k, conditions=args.conditions, skip=skip
+        )
+        earlier = [
+            chunk
+            for chunk in self._retriever.recipes(earlier_recipe_ids(history))
+            if chunk.recipe_id not in skip
+        ]
         retrieved = self._clock()
         sources = prepare_sources(hits, earlier)
         completion = None
