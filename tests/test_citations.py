@@ -158,3 +158,23 @@ def test_json_schema_for_the_model_matches_the_pydantic_model() -> None:
     statement = ANSWER_SCHEMA["properties"]["statements"]["items"]  # type: ignore[index]
     same(statement, Statement)
     same(statement["properties"]["citations"]["items"], Citation)
+
+
+def test_number_from_the_cited_recipe_title_is_not_made_up() -> None:
+    """«Шарлотка за 30 минут»: 30 — из названия, показанного пользователю."""
+    title = SourceText(
+        1,
+        SOURCES[0].chunk,
+        "Шарлотка с яблоками за 30 минут\nСахар — 100 г\nЯйцо куриное — 3 шт",
+    )
+    statement = Statement(
+        text="В шарлотке за 30 минут сахара 100 г.",
+        citations=[cite(1, "Сахар — 100 г")],
+    )
+    made_up = Statement(
+        text="В шарлотке за 30 минут сахара 100 г и 4 яйца.",
+        citations=[cite(1, "Сахар — 100 г")],
+    )
+
+    assert check_statement(statement, [title]).kept
+    assert check_statement(made_up, [title]).unknown_numbers == ["4"]

@@ -230,7 +230,14 @@ def check_statement(
         for c in citations
         if c.valid and c.start_line is not None
     ]
-    known = set(numbers_in("\n".join(cited_lines)))
+    # Название процитированного рецепта тоже источник чисел: «Шарлотка за 30
+    # минут» — «30» не выдумано, название показано пользователю со ссылкой.
+    titles = [
+        by_number[c.source].text.split("\n")[0]
+        for c in citations
+        if c.valid and c.source in by_number
+    ]
+    known = set(numbers_in("\n".join([*cited_lines, *titles])))
     unknown = [n for n in numbers_in(statement.text) if n not in known]
     return CheckedStatement(statement.text, citations, unknown)
 
