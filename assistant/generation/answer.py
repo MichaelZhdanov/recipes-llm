@@ -596,7 +596,7 @@ class Answerer:
         )
 
 
-_REASON_TEXT: dict[Reason, str] = {
+REASON_TEXT: dict[Reason, str] = {
     "model_not_found": "Не нашёл ответа в найденных источниках",
     "filtered_out": "Не нашёл ответа, который подтверждают источники",
     "no_sources": "Не нашёл ничего по вопросу",
@@ -616,7 +616,7 @@ def render_markdown(answer: Answer) -> str:
     if answer.status == "chat":
         return answer.message
     if answer.reason is not None:
-        lines = [f"{_REASON_TEXT[answer.reason]}."]
+        lines = [f"{REASON_TEXT[answer.reason]}."]
         if answer.message:
             lines.append(answer.message)
         if answer.sources:
