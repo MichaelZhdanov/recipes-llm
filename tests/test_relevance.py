@@ -17,6 +17,7 @@ from evals.answer_metrics import Rate
 from evals.dataset import RelevanceCanary, load_relevance_canaries
 from evals.judge import JUDGE_MODEL
 from evals.relevance import (
+    RELEVANCE_PROMPT,
     RelevanceJudge,
     judge_relevance,
     relevance_canary_scores,
@@ -131,7 +132,7 @@ def test_report_shows_relevance_and_canaries() -> None:
         relevance=relevance,
     )
 
-    assert f"| Судья | {JUDGE_MODEL}, рубрика `relevance_v1` |" in report
+    assert f"| Судья | {JUDGE_MODEL}, рубрика `{RELEVANCE_PROMPT}` |" in report
     assert "(semantic, судья) | 0.50 (1/2," in report
     assert "✅ 1. Шарлотка с яблоками" in report
     assert "❌ 2. Борщ" in report

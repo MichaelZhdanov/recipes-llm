@@ -3,7 +3,7 @@
 У вопросов вроде «что-нибудь к чаю» или «постное на ужин» нет условий,
 которые проверил бы код: ни слова в названии, ни ингредиентов. Поэтому
 выдачу поиска оценивает модель-судья (тот же, что у ответов, `JUDGE_MODEL`; рубрика
-`evals/prompts/relevance_v1.md`): про каждый рецепт из топ-5 она отвечает,
+`evals/prompts/relevance_v2.md`): про каждый рецепт из топ-5 она отвечает,
 подходит ли он к вопросу. Метрика `semantic_relevance@5` — доля подходящих.
 
 Судье тоже нельзя верить на слово: канарейки (`judge/relevance_canaries.yaml`)
@@ -24,7 +24,7 @@ from evals.dataset import RelevanceCanary
 from evals.judge import JUDGE_MODEL, MAX_TOKENS, PROMPTS_DIR
 from evals.retrieval_metrics import CaseResult, Found, K
 
-RELEVANCE_PROMPT = "relevance_v1"
+RELEVANCE_PROMPT = "relevance_v2"
 
 RELEVANCE_SCHEMA: dict[str, object] = {
     "type": "object",
