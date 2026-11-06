@@ -51,6 +51,14 @@ REASON_BUTTONS: list[Button] = [
     ("Не получилось", "failed"),
 ]
 
+STEPS_STATUS_TEXT = (
+    "🍳 Расписываю шаги и сверяю их с рецептом — это займёт около 20 секунд…"
+)
+STEPS_NOTE = (
+    "⚠️ Шаги написал ИИ: страницы рецепта на сайте нет. "
+    "Ориентируйтесь на вид и готовность продуктов."
+)
+
 # Статусы, пока бот думает: фраза по стадии ответа выбирается случайно.
 STATUS: dict[Stage, list[str]] = {
     "search": [
@@ -138,3 +146,18 @@ def answer_buttons(
 
 def reason_buttons(answer_id: int) -> Keyboard:
     return [[(text, f"why:{answer_id}:{code}")] for text, code in REASON_BUTTONS]
+
+
+def steps_html(name: str, steps: Sequence[str]) -> str:
+    """Шаги для рецепта без живой страницы — с пометкой, что их написал ИИ."""
+    lines = [f"🍳 <b>{html.escape(name)}</b> — как приготовить", ""]
+    lines += [f"{n}. {html.escape(step)}" for n, step in enumerate(steps, start=1)]
+    return "\n".join([*lines, "", html.escape(STEPS_NOTE)])[:MAX_CHARS]
+
+
+def steps_refused_html(name: str) -> str:
+    return (
+        f"😔 Не смог надёжно расписать шаги для «{html.escape(name)}» — "
+        "не хочу советовать наугад. Напишите, что хочется приготовить, "
+        "и я поищу похожий рецепт."
+    )

@@ -27,6 +27,7 @@ from aiogram.methods import (
     TelegramMethod,
 )
 from aiogram.methods.base import TelegramType
+from chunk_helpers import make_chunk
 from pydantic import SecretStr
 
 from assistant.bot.app import Handlers, build_dispatcher, make_bot
@@ -39,13 +40,14 @@ from assistant.bot.format import (
     NOT_TEXT,
     START_TEXT,
     STATUS,
+    STEPS_STATUS_TEXT,
     THANKS_TEXT,
     TOO_LONG_TEXT,
     WHAT_WRONG_TEXT,
 )
 from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
-from assistant.bot.service import BotService
+from assistant.bot.service import STEPS_VERSION, BotService
 from assistant.bot.store import Store
 from assistant.config import Settings
 from assistant.generation.answer import (
@@ -57,6 +59,8 @@ from assistant.generation.answer import (
     Trace,
 )
 from assistant.generation.gigachat import Message
+from assistant.generation.steps import Status, Steps
+from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import EmbeddingError
 
 TOKEN = "42:TEST-secret-token"
@@ -128,14 +132,41 @@ class RecordingStore(Store):
         super().set_message_id(answer_id, message_id)
 
 
-def make_service(answerer: FakeAnswerer) -> BotService:
+PANCAKES = make_chunk(
+    "Оладьи", {"Кефир": "500 мл", "Мука пшеничная": "2 стак."}, recipe_id=2
+)
+
+
+class FakeSteps:
+    """Вместо Haiku и Sonnet: заданный итог и счётчик вызовов."""
+
+    def __init__(self, status: Status = "approved") -> None:
+        self.status = status
+        self.texts: list[str] = []
+
+    def __call__(self, recipe: str) -> Steps:
+        self.texts.append(recipe)
+        steps = ["Смешайте кефир с мукой <сразу>.", "Жарьте до румяности."]
+        return Steps(
+            self.status, 12.0, steps=steps if self.status == "approved" else []
+        )
+
+
+def make_service(answerer: FakeAnswerer, steps: FakeSteps | None = None) -> BotService:
     store = RecordingStore()
     pages = httpx2.Client(
         transport=httpx2.MockTransport(
             lambda request: httpx2.Response(200 if str(request.url) == ALIVE else 404)
         )
     )
-    return BotService(answerer, store, PageChecker(pages, store))
+    index: dict[int, Chunk] = {PANCAKES.recipe_id: PANCAKES}
+    return BotService(
+        answerer,
+        store,
+        PageChecker(pages, store),
+        recipes=index.get,
+        make_steps=steps or FakeSteps(),
+    )
 
 
 # --- BotService ---
@@ -201,6 +232,50 @@ def test_thumbs_down_asks_what_went_wrong_and_records_the_reason() -> None:
     assert follow is not None and follow.text == WHAT_WRONG_TEXT
     assert follow.buttons[2] == [("Не получилось", f"why:{answer_id}:failed")]
     assert service.vote_reason(7, answer_id, "failed") == THANKS_TEXT
+
+
+def test_steps_are_written_once_and_shared_through_the_cache() -> None:
+    steps = FakeSteps()
+    service = make_service(FakeAnswerer(), steps)
+    first = service.ask(7, "оладьи").answer_id
+    second = service.ask(8, "оладьи").answer_id
+    assert first is not None and second is not None
+
+    reply = service.steps(7, first, 2)
+    again = service.steps(8, second, 2)
+
+    assert reply.text.startswith("🍳 <b>Оладьи</b> — как приготовить")
+    assert "1. Смешайте кефир с мукой &lt;сразу&gt;." in reply.text
+    assert "Шаги написал ИИ" in reply.text
+    assert again == reply
+    assert steps.texts == [PANCAKES.text]
+    # Чужой ответ и рецепт не из ответа — «уже не найти».
+    assert service.steps(8, first, 2).text == GONE_TEXT
+    assert service.steps(7, first, 1).text == GONE_TEXT
+
+
+def test_refusal_is_cached_and_a_broken_answer_is_retried() -> None:
+    rejected = FakeSteps("rejected")
+    service = make_service(FakeAnswerer(), rejected)
+    answer_id = service.ask(7, "оладьи").answer_id
+    assert answer_id is not None
+
+    assert (
+        "Не смог надёжно расписать шаги для «Оладьи»"
+        in service.steps(7, answer_id, 2).text
+    )
+    service.steps(7, answer_id, 2)
+    assert len(rejected.texts) == 1
+    saved = service.store.steps(2, STEPS_VERSION)
+    assert saved is not None and not saved.approved
+
+    failed = FakeSteps("failed")
+    service = make_service(FakeAnswerer(), failed)
+    answer_id = service.ask(7, "оладьи").answer_id
+    assert answer_id is not None
+    assert service.steps(7, answer_id, 2).text == ERROR_TEXT
+    service.steps(7, answer_id, 2)
+    assert len(failed.texts) == 2
 
 
 # --- Обработчики aiogram на фейковом Bot API ---
@@ -482,3 +557,18 @@ def test_foreign_or_broken_callbacks_change_nothing() -> None:
     toasts = [m.text for m in telegram.calls if isinstance(m, AnswerCallbackQuery)]
     assert toasts == [GONE_TEXT, None, None]
     assert not any(isinstance(m, SendMessage) for m in telegram.calls)
+
+
+def test_steps_button_sends_status_then_steps() -> None:
+    service = make_service(FakeAnswerer())
+    feed(service, update("оладьи"))
+
+    telegram = feed(service, press("steps:1:2", message_id=101))
+
+    (status,) = [m for m in telegram.calls if isinstance(m, SendMessage)]
+    assert status.text == STEPS_STATUS_TEXT
+    (steps,) = telegram.edits()
+    # Шаги встают на место статуса: первое сообщение нового фейка — 101.
+    assert steps.message_id == 101
+    assert (steps.text or "").startswith("🍳 <b>Оладьи</b>")
+    assert any(isinstance(m, AnswerCallbackQuery) for m in telegram.calls)

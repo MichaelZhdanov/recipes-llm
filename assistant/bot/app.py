@@ -10,6 +10,8 @@
   вчерашнее странно.
 - 👍/👎 под ответом: после оценки они исчезают, после 👎 бот спрашивает
   «что не так?» тремя кнопками.
+- «🍳 Шаги» — только у рецептов без живой страницы: шаги пишет и проверяет
+  `generation/steps.py` (~20 с), бот присылает их отдельным сообщением.
 """
 
 import asyncio
@@ -35,21 +37,27 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.chat_action import ChatActionSender
+from qdrant_client import QdrantClient
 
 from assistant.bot.format import (
     BUSY_TEXT,
     HELP_TEXT,
     NOT_TEXT,
     START_TEXT,
+    STEPS_STATUS_TEXT,
     TOO_LONG_TEXT,
     Keyboard,
     status_text,
 )
 from assistant.bot.pages import PageChecker
-from assistant.bot.service import ERROR_REPLY, BotService, Reply
+from assistant.bot.service import ERROR_REPLY, BotService, RecipeLookup, Reply
 from assistant.bot.store import Store, Vote, VoteReason
 from assistant.config import Settings
 from assistant.generation.answer import Stage
+from assistant.generation.llm import make_http_client
+from assistant.generation.steps import make_steps, make_steps_models
+from assistant.indexing.chunks import Chunk
+from assistant.retrieval.store import VectorStore
 from assistant.service import MAX_QUESTION_CHARS, LazyAnswerer
 
 logger = logging.getLogger(__name__)
@@ -214,6 +222,32 @@ class Handlers:
         if isinstance(message, Message):
             await message.edit_text(text)
 
+    async def steps(self, callback: CallbackQuery, bot: Bot) -> None:
+        parsed = parse_callback(callback.data, "steps")
+        message = callback.message
+        if parsed is None or not parsed[1].isdigit() or message is None:
+            await callback.answer()
+            return
+        chat_id = message.chat.id
+        if chat_id in self.busy:
+            await callback.answer(BUSY_TEXT)
+            return
+        self.busy.add(chat_id)
+        try:
+            await callback.answer()
+            status = await bot.send_message(chat_id, STEPS_STATUS_TEXT)
+            async with ChatActionSender.typing(chat_id=chat_id, bot=bot):
+                try:
+                    reply = await asyncio.to_thread(
+                        self.service.steps, chat_id, parsed[0], int(parsed[1])
+                    )
+                except Exception:
+                    logger.exception("шаги не собраны")
+                    reply = ERROR_REPLY
+            await status.edit_text(reply.text, reply_markup=keyboard(reply.buttons))
+        finally:
+            self.busy.discard(chat_id)
+
 
 def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router = Router()
@@ -226,6 +260,7 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.message.register(handlers.other)
     router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
     router.callback_query.register(handlers.why, F.data.startswith("why:"))
+    router.callback_query.register(handlers.steps, F.data.startswith("steps:"))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     return dispatcher
@@ -250,6 +285,14 @@ COMMANDS = [
 ]
 
 
+def recipe_lookup(store: VectorStore) -> RecipeLookup:
+    def lookup(recipe_id: int) -> Chunk | None:
+        found = store.recipes([recipe_id])
+        return found[0] if found else None
+
+    return lookup
+
+
 async def run(settings: Settings) -> None:
     token = settings.telegram_bot_token.get_secret_value()
     if not token:
@@ -257,10 +300,15 @@ async def run(settings: Settings) -> None:
     store = Store(DATABASE)
     answerer = LazyAnswerer(settings)
     pages_http = httpx2.Client()
+    steps_http = make_http_client(settings)
+    qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
+    writer, reviewer = make_steps_models(settings, steps_http)
     service = BotService(
         answerer,
         store,
         PageChecker(pages_http, store),
+        recipes=recipe_lookup(VectorStore(qdrant)),
+        make_steps=lambda text: make_steps(text, writer, reviewer),
         gigachat_note=settings.llm_provider == "gigachat",
     )
     bot = make_bot(token)
@@ -274,4 +322,6 @@ async def run(settings: Settings) -> None:
         await bot.session.close()
         answerer.close()
         pages_http.close()
+        steps_http.close()
+        qdrant.close()
         store.close()
