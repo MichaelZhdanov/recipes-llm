@@ -22,8 +22,10 @@ import random
 import sys
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
@@ -121,8 +123,12 @@ def judge_round(
     claims = [claim_of(statements[n], sources) for n in numbers]
     supported: dict[str, dict[int, bool | None]] = {}
     comments: dict[str, dict[int, str]] = {}
-    for judge in judges:
-        verdict = judge.judge(question, claims, [], clarity=False)
+    # Судьи независимы и ходят в API своими клиентами — параллельно вдвое быстрее.
+    with ThreadPoolExecutor(max_workers=len(judges)) as pool:
+        results = list(
+            pool.map(lambda j: j.judge(question, claims, [], clarity=False), judges)
+        )
+    for judge, verdict in zip(judges, results, strict=True):
         supported[judge.model] = dict(zip(numbers, verdict.supported, strict=True))
         texts = verdict.comments or [""] * len(numbers)
         comments[judge.model] = dict(zip(numbers, texts, strict=True))
@@ -272,6 +278,19 @@ def sonnet_check(marks: Sequence[dict[str, Any]]) -> JudgeCheck:
     )
 
 
+def _reused_checks(raw: Path, models: Sequence[str]) -> dict[str, JudgeCheck]:
+    """Проверки судей из прошлого прогона цикла: только названные модели."""
+    found = {}
+    for c in json.loads(raw.read_text(encoding="utf-8"))["checks"]:
+        if c["model"] in models:
+            pairs = {k: tuple(c[k]) for k in ("with_author", "author_no", "author_yes")}
+            found[c["model"]] = JudgeCheck(**{**c, **pairs})
+    missing = set(models) - set(found)
+    if missing:
+        raise SystemExit(f"в {raw} нет проверки судей: {', '.join(sorted(missing))}")
+    return found
+
+
 # --- Выбор вопросов ---
 
 
@@ -323,6 +342,7 @@ def render(
     costs: Mapping[str, str],
     seconds: float,
     today: date,
+    notes: Sequence[str] = (),
 ) -> str:
     original = sum(len(c.original) for c in loops)
     baseline = original - sum(len(c.flagged_first) for c in loops)
@@ -350,6 +370,7 @@ def render(
         "Разметка автора — 30 утверждений, где расходились Ultra и Sonnet v3; правила "
         "`judge_v4` выведены из неё, поэтому для Sonnet v4 это не независимая проверка, "
         "а для DeepSeek и GLM — независимая (они её не видели).",
+        *[f"\n{note}" for note in notes],
         "",
         "## Цикл",
         "",
@@ -420,7 +441,24 @@ def _record(loop: CaseLoop) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.loop", description=__doc__)
     parser.add_argument("--cases", type=int, default=CASES)
+    parser.add_argument(
+        "--reuse-check",
+        action="append",
+        default=[],
+        metavar="MODEL",
+        help="взять проверку судьи из прошлого прогона (--reuse-from): его вход не менялся",
+    )
+    parser.add_argument(
+        "--reuse-from",
+        type=Path,
+        default=RAW / "2026-11-06-loop-before-schema-fix.json",
+        help="сырые данные прошлого прогона цикла",
+    )
+    parser.add_argument("--label", default="", help="суффикс имени отчёта")
     args = parser.parse_args(argv)
+    reused = (
+        _reused_checks(args.reuse_from, args.reuse_check) if args.reuse_check else {}
+    )
 
     settings = Settings()
     questions = dataset_questions()
@@ -438,13 +476,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         judges = [Judge(first, model=JUDGES[0]), Judge(second, model=JUDGES[1])]
         haiku = assistant_llm.make_chat_model(settings, http)
         reviser = Reviser(haiku, model=assistant_llm.llm_model(settings))
-        checks = []
-        for judge in judges:
+
+        def check(judge: Judge) -> JudgeCheck:
+            if judge.model in reused:
+                print(
+                    f"проверка судьи {judge.model}: из {args.reuse_from.name}",
+                    flush=True,
+                )
+                return reused[judge.model]
             print(
                 f"проверка судьи {judge.model}: канарейки и разметка автора", flush=True
             )
-            checks.append(check_judge(judge, marks, answers, questions))
-        checks.append(sonnet_check(marks))
+            return check_judge(judge, marks, answers, questions)
+
+        with ThreadPoolExecutor(max_workers=len(judges)) as pool:
+            checks = [*pool.map(check, judges), sonnet_check(marks)]
         loops = []
         for record in pick_records(answers["auto"], sonnet_auto, args.cases, SEED):
             print(f"цикл: {record['id']}", flush=True)
@@ -472,7 +518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     seconds = time.monotonic() - started
     today = date.today()
-    raw_path = RAW / f"{today}-loop.json"
+    name = f"{today}-loop" + (f"-{args.label}" if args.label else "")
+    raw_path = RAW / f"{name}.json"
     raw_path.write_text(
         json.dumps(
             {
@@ -484,8 +531,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         encoding="utf-8",
     )
-    report = REPORTS_DIR / f"{today}-loop.md"
-    report.write_text(render(checks, loops, costs, seconds, today), encoding="utf-8")
+    report = REPORTS_DIR / f"{name}.md"
+    notes = [
+        f"Проверка {model} взята из `{args.reuse_from.name}`: вход судьи не менялся."
+        for model in reused
+    ]
+    report.write_text(
+        render(checks, loops, costs, seconds, today, notes), encoding="utf-8"
+    )
     print(f"отчёт: {report}")
     return 0
 
