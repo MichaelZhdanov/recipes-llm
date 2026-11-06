@@ -31,7 +31,6 @@ Anthropic и обратно. Почему свой адаптер, а не SDK �
 Маскирование ПДн — здесь, как у GigaChat (`mask_message`).
 """
 
-import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -40,6 +39,7 @@ import httpx2
 from pydantic import SecretStr
 
 from assistant import __version__
+from assistant.generation.functions import describe
 from assistant.generation.gigachat import (
     Completion,
     FunctionCall,
@@ -74,18 +74,9 @@ _FINISH = {
 
 
 def _tool(function: Mapping[str, object]) -> dict[str, object]:
-    description = str(function.get("description", ""))
-    examples = function.get("few_shot_examples")
-    if isinstance(examples, list) and examples:
-        lines = [
-            f"- «{e['request']}» → {json.dumps(e['params'], ensure_ascii=False)}"
-            for e in examples
-            if isinstance(e, dict)
-        ]
-        description += "\n\nПримеры вопросов и аргументов:\n" + "\n".join(lines)
     return {
         "name": function["name"],
-        "description": description,
+        "description": describe(function),
         "input_schema": function["parameters"],
     }
 

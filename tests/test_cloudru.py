@@ -104,19 +104,6 @@ def test_personal_data_is_masked_before_the_request() -> None:
     assert llm.stats.masked["EMAIL"] == 1
 
 
-def test_functions_are_refused_not_silently_dropped() -> None:
-    llm = client(FakeCloudRu())
-
-    with pytest.raises(LlmError, match="не реализован"):
-        llm.chat(
-            MESSAGES,
-            model="z-ai/glm-5.3-flash",
-            temperature=1e-4,
-            max_tokens=100,
-            functions=[{"name": "search_recipes"}],
-        )
-
-
 def test_no_money_error_explains_the_balance() -> None:
     llm = client(FakeCloudRu(status=402))
 

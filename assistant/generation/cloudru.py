@@ -22,8 +22,12 @@ cloud.ru передаёт запрос вендору за пределы РФ.
   cloud.ru отвечает 422, значит параметр доходит до модели. Пусто — не
   отправляется (по умолчанию модели). Формат `reasoning: {effort}` cloud.ru
   молча игнорирует (проверено 2026-11-06);
-- вызов функций не реализован: судьям он не нужен, а генератор ответов —
-  Claude Haiku. Передать `functions` — ошибка, а не тихое «без функций».
+- вызов функций (для разбора вопроса в search_recipes): `functions` →
+  `tools` формата OpenAI (примеры few_shot_examples — текстом в описании),
+  `function_call` → `tool_choice` (имя функции — принудительный вызов),
+  ответ `tool_calls[0]` → `function_call`, аргументы — JSON строкой. Только
+  режим «всегда ищем»: истории с вызовами функций (режим «модель решает»)
+  адаптер не переводит — это ошибка, а не тихая потеря вызовов.
 
 Маскирование ПДн — здесь, как у GigaChat и Claude (`mask_message`).
 """
@@ -37,8 +41,10 @@ import httpx2
 from pydantic import SecretStr
 
 from assistant import __version__
+from assistant.generation.functions import describe
 from assistant.generation.gigachat import (
     Completion,
+    FunctionCall,
     FunctionCallMode,
     LlmError,
     LlmStats,
@@ -56,6 +62,9 @@ REASONING_TOKENS = 8000
 PRICE_RUB_PER_MTOK = {
     "deepseek-ai/DeepSeek-V4-Flash": (43.30, 86.58),
     "z-ai/glm-5.3-flash": (26.71, 89.0),
+    # Кандидаты в гейт ответа, хостит cloud.ru (данные в РФ).
+    "openai/gpt-oss-120b": (15.86, 61.0),
+    "ai-sage/GigaChat3.5-432B-A28B-Reasoning": (96.22, 288.6),
 }
 
 KEY_HELP = (
@@ -96,6 +105,7 @@ def _completion(data: Mapping[str, Any], model: str) -> Completion:
         raise LlmError(f"cloud.ru вернул ответ без choices для {model}")
     choice = choices[0]
     message = choice.get("message") or {}
+    call = _function_call(message.get("tool_calls"), model)
     raw = data.get("usage") or {}
     details = raw.get("prompt_tokens_details") or {}
     prompt = int(raw.get("prompt_tokens") or 0)
@@ -111,7 +121,45 @@ def _completion(data: Mapping[str, Any], model: str) -> Completion:
             int(details.get("cached_tokens") or 0),
             prompt + completion_tokens,
         ),
+        function_call=call,
     )
+
+
+def _function_call(calls: object, model: str) -> FunctionCall | None:
+    """Первый вызов функции из ответа; аргументы у OpenAI — JSON строкой."""
+    if not isinstance(calls, list) or not calls:
+        return None
+    function = (calls[0] or {}).get("function") or {}
+    raw = function.get("arguments") or "{}"
+    try:
+        arguments = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError as error:
+        raise LlmError(
+            f"{model} вернул аргументы функции не JSON: {raw[:200]}"
+        ) from error
+    if not isinstance(arguments, dict):
+        raise LlmError(f"{model} вернул аргументы функции не объектом: {raw!r:.200}")
+    return {"name": str(function.get("name", "")), "arguments": arguments}
+
+
+def _tools(functions: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": f["name"],
+                "description": describe(f),
+                "parameters": f["parameters"],
+            },
+        }
+        for f in functions
+    ]
+
+
+def _tool_choice(mode: FunctionCallMode) -> object:
+    if isinstance(mode, dict):
+        return {"type": "function", "function": {"name": mode["name"]}}
+    return mode  # "auto" или "none" — так же, как у OpenAI
 
 
 class CloudRu:
@@ -144,8 +192,10 @@ class CloudRu:
         functions: Sequence[Mapping[str, object]] | None = None,
         function_call: FunctionCallMode | None = None,
     ) -> Completion:
-        if functions or function_call:
-            raise LlmError("вызов функций в адаптере cloud.ru не реализован")
+        if any(m["role"] == "function" or "function_call" in m for m in messages):
+            raise LlmError(
+                "история с вызовами функций (режим auto) в адаптере cloud.ru не поддерживается"
+            )
         masked = [mask_message(m, self.stats.masked) for m in messages]
         converted = [{"role": m["role"], "content": m["content"]} for m in masked]
         if response_format is not None and model in SCHEMA_IN_PROMPT:
@@ -158,6 +208,10 @@ class CloudRu:
         }
         if response_format is not None:
             body["response_format"] = _response_format(response_format)
+        if functions:
+            body["tools"] = _tools(functions)
+            if function_call is not None:
+                body["tool_choice"] = _tool_choice(function_call)
         if self.effort:
             body["reasoning_effort"] = self.effort
         response = request_with_retries(

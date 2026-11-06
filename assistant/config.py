@@ -12,7 +12,7 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # LLM ассистента: GigaChat (данные в РФ) или Claude через API Anthropic.
-LlmProvider = Literal["gigachat", "anthropic"]
+LlmProvider = Literal["gigachat", "anthropic", "cloudru"]
 # Сколько думает Claude; пусто — по умолчанию модели. У GigaChat не используется.
 LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 # Режим ответа (решение 7): always — сначала поиск, потом ответ;
