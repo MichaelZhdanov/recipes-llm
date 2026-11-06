@@ -4,13 +4,13 @@
 в процитированных строках (`citations.py`). Но смысл он проверить не может:
 не выдуман ли шаг или время, честно ли «постное» и «без лука». Это делает
 судья — Claude Sonnet 5.5, двумя отдельными вызовами на каждый ответ:
-1. Смысл, рубрика `evals/prompts/judge_v5.md`:
+1. Смысл, рубрика `evals/prompts/judge_v6.md`:
    - подтверждают ли рецепты каждое утверждение (groundedness, порог 0.85).
      Судья видит процитированный рецепт целиком: по полному списку
      ингредиентов видно, честно ли «без лука»;
    - есть ли в ответе факты must_include у semantic. Там факты записаны своими
      словами, подстрокой их не проверить.
-2. Грамотность, рубрика `evals/prompts/clarity_v3.md`, по одному тексту
+2. Грамотность, рубрика `evals/prompts/clarity_v4.md`, по одному тексту
    утверждений, без рецептов. Модель выписывает конкретные проблемы текста:
    ошибка, английское слово, обрывок разметки, обрыв. Утверждение грамотно,
    если проблем нет: вердикт выводит код.
@@ -69,8 +69,13 @@ JUDGE_MODELS = {
 # «простой» — ярлык, не ошибка; ошибка — свойство блюда не из данных («потоньше»),
 # составная часть блюда, которой нет в данных («соус из сметаны и чеснока»), «только X и Y»
 # при других ингредиентах.
-JUDGE_PROMPT = "judge_v5"
-CLARITY_PROMPT = "clarity_v3"
+# v6 (решения автора 2026-11-06): стиль свободный, факты — только из рецептов:
+# эпитеты, впечатления («получится сытно»), синонимы, вид блюда в двух словах и
+# роль готового ингредиента — не ошибка; «вместо X» и состав части блюда — ошибка;
+# вступление к ответу (kind="intro") проверяется по всем рецептам ответа.
+JUDGE_PROMPT = "judge_v6"
+# v4: обращение на «ты» и лишние эмодзи — проблема, живой тон и эмодзи в начале — нет.
+CLARITY_PROMPT = "clarity_v4"
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_TOKENS = 2000
 
@@ -164,6 +169,8 @@ class Claim:
 
     text: str
     fragments: list[str]
+    # Вступление к ответу: общая фраза без своих цитат, судье — все рецепты ответа.
+    intro: bool = False
 
 
 @dataclass(frozen=True)
@@ -182,7 +189,11 @@ def claims_of(run: AnswerRun) -> list[Claim]:
     """Утверждения, которые увидел пользователь, с процитированными рецептами
     целиком: рецепт короткий, а по полному списку ингредиентов судья видит,
     честно ли «без лука»."""
-    return [claim_of(s, run.sources) for s in run.checked if s.kept]
+    claims = [claim_of(s, run.sources) for s in run.checked if s.kept]
+    if run.answer.status == "answer" and run.answer.message:
+        recipes = dict.fromkeys(f for c in claims for f in c.fragments)
+        claims.append(Claim(run.answer.message, list(recipes), intro=True))
+    return claims
 
 
 def claim_of(statement: CheckedStatement, sources: Sequence[SourceText]) -> Claim:
@@ -196,7 +207,12 @@ def claim_of(statement: CheckedStatement, sources: Sequence[SourceText]) -> Clai
 def _statements(claims: Sequence[Claim]) -> list[str]:
     parts = []
     for number, claim in enumerate(claims, start=1):
-        parts += ["", f'<statement number="{number}">', f"<text>{claim.text}</text>"]
+        kind = ' kind="intro"' if claim.intro else ""
+        parts += [
+            "",
+            f'<statement number="{number}"{kind}>',
+            f"<text>{claim.text}</text>",
+        ]
         parts += [
             f"<fragment>\n{fragment}\n</fragment>" for fragment in claim.fragments
         ]

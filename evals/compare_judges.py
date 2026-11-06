@@ -51,6 +51,9 @@ def _statements(raw: dict[str, Any]) -> dict[tuple[str, int, int], tuple[str, st
     for record in raw["records"]:
         judge = record.get("judge") or {}
         kept = [s["text"] for s in record["checked"] if _kept(s)]
+        answer = record.get("answer") or {}
+        if answer.get("status") == "answer" and answer.get("message"):
+            kept.append(answer["message"])  # вступление идёт последним, как у судьи
         comments = judge.get("comments", [])
         for number, text in enumerate(kept):
             comment = comments[number] if number < len(comments) else ""

@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -102,6 +103,21 @@ def test_claims_are_kept_statements_with_whole_cited_recipes() -> None:
     ]
     assert claims[0].fragments == [f"Рецепт целиком:\n{TEXT}"]
     assert claims[1].fragments == [f"Рецепт целиком:\n{TEXT}"]
+
+
+def test_intro_is_judged_last_against_all_recipes_of_the_answer() -> None:
+    """Вступление без своих цитат: судья проверяет, что в нём нет выдуманных фактов."""
+    run = dataclasses.replace(
+        RUN, answer=RUN.answer.model_copy(update={"message": "Вот что нашлось:"})
+    )
+
+    claims = claims_of(run)
+
+    assert [c.intro for c in claims] == [False, False, True]
+    assert claims[-1].text == "Вот что нашлось:"
+    assert claims[-1].fragments == [f"Рецепт целиком:\n{TEXT}"]
+    assert '<statement number="3" kind="intro">' in judge_message("?", claims, [])
+    assert "intro" not in clarity_message(claims)
 
 
 def test_judge_message_numbers_statements_and_facts() -> None:
