@@ -298,3 +298,35 @@ def test_review_note_goes_after_the_question_as_data() -> None:
     assert isinstance(plain_messages, list)
     assert plain_messages[-1]["content"] == "борщ"
     assert "<review>" in str(messages[0]["content"])
+
+
+def test_several_queries_and_other_are_parsed_old_query_still_reads() -> None:
+    args = parse_arguments(
+        {
+            "queries": [
+                " гречка с говядиной ",
+                "куриная грудка",
+                "гречка с говядиной",
+                "а",
+                "б",
+                "в",
+            ],
+            "include": [],
+            "exclude": [],
+            "other": True,
+        },
+        VOCABULARY,
+        question="что поесть после тренировки",
+    )
+    old = parse_arguments(
+        {"query": "борщ", "include": [], "exclude": []}, VOCABULARY, question="борщ?"
+    )
+    empty = parse_arguments(
+        {"queries": [], "include": [], "exclude": []}, VOCABULARY, question="борщ?"
+    )
+
+    # Без повторов и не больше четырёх; первый — query для отчётов.
+    assert args.all_queries == ("гречка с говядиной", "куриная грудка", "а", "б")
+    assert args.query == "гречка с говядиной" and args.other
+    assert old.all_queries == ("борщ",) and not old.other
+    assert empty.all_queries == ("борщ?",)

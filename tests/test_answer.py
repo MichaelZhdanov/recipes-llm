@@ -850,3 +850,29 @@ def test_own_not_found_with_recipes_also_searches_once_more(
     first_ids = {s.chunk.recipe_id for s in first.sources}
     assert not first_ids & {h.chunk.recipe_id for h in result.trace.hits}
     assert reviser.calls == 0
+
+
+def test_asking_for_other_recipes_skips_the_ones_already_shown(
+    retriever: Retriever,
+) -> None:
+    """«А ещё?» — рецепты прошлого ответа не ищутся и не подмешиваются."""
+
+    class OtherPlanner(FakeLlm):
+        def chat(self, messages: Sequence[Message], **kwargs: Any) -> Completion:
+            completion = super().chat(messages, **kwargs)
+            if kwargs.get("functions") is not None and completion.function_call:
+                completion.function_call["arguments"]["other"] = True
+                completion.function_call["arguments"]["queries"] = ["курица рис"]
+            return completion
+
+    history: list[Message] = [
+        {"role": "user", "content": "что из курицы?"},
+        {"role": "assistant", "content": f"«{CHICKEN.name}» — {CHICKEN.url}"},
+    ]
+    llm = OtherPlanner({"status": "not_found", "message": "", "statements": []})
+
+    result = ask(retriever, llm, "а ещё?", history)
+
+    assert result.trace.args is not None and result.trace.args.other
+    ids = {s.chunk.recipe_id for s in result.trace.sources}
+    assert CHICKEN.recipe_id not in ids and ids

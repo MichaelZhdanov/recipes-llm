@@ -191,7 +191,7 @@ def test_report_shows_how_questions_were_parsed() -> None:
         " | 9000 / 8000 / 0 | — |" in report
     )
     assert (
-        "- exclude-001 «плов, молоко нельзя» → запрос «плов без молока» · с: рис"
+        "- exclude-001 «плов, молоко нельзя» → запросы «плов без молока» · с: рис"
         " · без: молоко · нет в словаре: рис басмати"
     ) in report
     assert (

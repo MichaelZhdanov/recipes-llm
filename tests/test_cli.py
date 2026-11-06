@@ -114,12 +114,12 @@ def test_format_plan_shows_query_conditions_and_dropped_names() -> None:
     )
 
     assert format_plan(args) == (
-        "запрос: курица без лука\n"
+        "запросы: курица без лука\n"
         "с: курица или филе куриное; рис\n"
         "без: лук репчатый\n"
         "нет в словаре, отброшено: куриное мясо"
     )
-    assert format_plan(SearchArgs("борщ", IngredientFilter())) == "запрос: борщ"
+    assert format_plan(SearchArgs("борщ", IngredientFilter())) == "запросы: борщ"
 
 
 def test_index_check_builds_nothing_and_says_whether_a_build_is_needed(

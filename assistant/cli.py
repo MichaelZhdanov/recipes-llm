@@ -234,7 +234,9 @@ def format_hits(hits: Sequence[Hit]) -> str:
 
 def format_plan(args: SearchArgs) -> str:
     """Во что LLM разобрала вопрос: запрос для векторов и условия фильтра."""
-    lines = [f"запрос: {args.query}"]
+    lines = [f"запросы: {' · '.join(args.all_queries)}"]
+    if args.other:
+        lines.append("другие рецепты: уже показанные не ищутся")
     if args.conditions.include:
         groups = (" или ".join(group) for group in args.conditions.include)
         lines.append(f"с: {'; '.join(groups)}")
@@ -261,10 +263,12 @@ def _search(
                 llm, model=llm_model(settings), vocabulary=store.vocabulary()
             )
             args = planner.plan(question)
-        hits = retriever.search(args.query, k=k, conditions=args.conditions)
+        hits = retriever.search_all(args.all_queries, k=k, conditions=args.conditions)
     if as_json:
         payload = {
             "query": args.query,
+            "queries": list(args.all_queries),
+            "other": args.other,
             "include": [list(group) for group in args.conditions.include],
             "exclude": list(args.conditions.exclude),
             "dropped": list(args.dropped),

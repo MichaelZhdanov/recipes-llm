@@ -33,7 +33,9 @@ from assistant.retrieval.filters import IngredientFilter
 NAME = "search_recipes"
 # v1 — только имена; v2 — имена с частотами, альтернативы одного продукта
 # в одной группе, query без опечаток (evals/reports/2026-11-05-stage2.md).
-PROMPT_VERSION = "search_v3"
+PROMPT_VERSION = "search_v4"
+# Сколько запросов модель может дать на один вопрос.
+MAX_QUERIES = 4
 # Число рецептов, которое модель может скопировать вместе с именем из словаря.
 _COUNT_SUFFIX = re.compile(r"\s*[—-]\s*\d+$")
 # Сколько последних реплик диалога видит разбор (решение 30).
@@ -56,9 +58,13 @@ SEARCH_RECIPES: dict[str, object] = {
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "что ищет пользователь, одной фразой, с учётом диалога",
+            "queries": {
+                "type": "array",
+                "description": (
+                    "что искать: 1 запрос — блюдо по названию или ингредиентам; "
+                    "2–4 конкретных блюда — для вопроса по смыслу"
+                ),
+                "items": {"type": "string"},
             },
             "include": {
                 "type": "array",
@@ -72,8 +78,12 @@ SEARCH_RECIPES: dict[str, object] = {
                 "description": "имена из словаря, которых в рецепте быть не должно",
                 "items": {"type": "string"},
             },
+            "other": {
+                "type": "boolean",
+                "description": "пользователь просит другие рецепты, не те, что уже были",
+            },
         },
-        "required": ["query", "include", "exclude"],
+        "required": ["queries", "include", "exclude", "other"],
     },
     # Примеры для GigaChat (поле её API). Без них модель не заполняла include
     # вовсе — проверено на своих вопросах, не из эталонного набора. Продукты
@@ -82,7 +92,8 @@ SEARCH_RECIPES: dict[str, object] = {
         {
             "request": "что-нибудь из нута и болгарского перца, только без кинзы",
             "params": {
-                "query": "блюдо из нута с болгарским перцем без кинзы",
+                "queries": ["блюдо из нута с болгарским перцем без кинзы"],
+                "other": False,
                 "include": [
                     ["нут"],
                     [
@@ -99,7 +110,8 @@ SEARCH_RECIPES: dict[str, object] = {
         {
             "request": "сладкое, но ваниль не переношу",
             "params": {
-                "query": "десерт без ванили",
+                "queries": ["десерт без ванили"],
+                "other": False,
                 "include": [],
                 "exclude": [
                     "ваниль",
@@ -113,7 +125,8 @@ SEARCH_RECIPES: dict[str, object] = {
         {
             "request": "что-нибудь с вишней, только без алкоголя",
             "params": {
-                "query": "блюдо с вишней без алкоголя",
+                "queries": ["блюдо с вишней без алкоголя"],
+                "other": False,
                 "include": [["вишня"]],
                 "exclude": [
                     "вино белое сухое",
@@ -131,7 +144,12 @@ SEARCH_RECIPES: dict[str, object] = {
         },
         {
             "request": "хочу рататуй",
-            "params": {"query": "рататуй", "include": [], "exclude": []},
+            "params": {
+                "queries": ["рататуй"],
+                "include": [],
+                "exclude": [],
+                "other": False,
+            },
         },
     ],
 }
@@ -139,10 +157,19 @@ SEARCH_RECIPES: dict[str, object] = {
 
 @dataclass(frozen=True)
 class SearchArgs:
+    # Первый запрос: для отчётов и сырых данных прошлых версий (до search_v4).
     query: str
     conditions: IngredientFilter
     # Имена из аргументов модели, которых нет в словаре: в фильтр не попали.
     dropped: tuple[str, ...] = ()
+    # Все запросы (search_v4): по вопросу по смыслу — несколько блюд.
+    queries: tuple[str, ...] = ()
+    # Просит другие рецепты: уже показанные в поиск не попадают.
+    other: bool = False
+
+    @property
+    def all_queries(self) -> tuple[str, ...]:
+        return self.queries or (self.query,)
 
 
 def _strings(value: object) -> list[str]:
@@ -175,11 +202,16 @@ def parse_arguments(
     groups = raw_include if isinstance(raw_include, list) else []
     include = [known(_strings(group)) for group in groups]
     exclude = known(_strings(arguments.get("exclude")))
-    query = arguments.get("query")
+    # До search_v4 запрос был один — поле query.
+    raw = _strings(arguments.get("queries")) or _strings(arguments.get("query"))
+    queries = tuple(dict.fromkeys(q.strip() for q in raw if q.strip()))[:MAX_QUERIES]
+    queries = queries or (question,)
     return SearchArgs(
-        query=query.strip() if isinstance(query, str) and query.strip() else question,
+        query=queries[0],
         conditions=IngredientFilter.of(include, exclude),
         dropped=tuple(dict.fromkeys(dropped)),
+        queries=queries,
+        other=arguments.get("other") is True,
     )
 
 

@@ -602,14 +602,17 @@ class Answerer:
         _notify(progress, "search")
         started = self._clock()
         args = self._planner.plan(question, history, note)
-        hits = self._retriever.search(
-            args.query, k=self._k, conditions=args.conditions, skip=skip
+        shown = earlier_recipe_ids(history)
+        # «А ещё?» — уже показанные рецепты не ищутся и не подмешиваются.
+        skip = [*skip, *shown] if args.other else list(skip)
+        hits = self._retriever.search_all(
+            args.all_queries, k=self._k, conditions=args.conditions, skip=skip
         )
-        earlier = [
-            chunk
-            for chunk in self._retriever.recipes(earlier_recipe_ids(history))
-            if chunk.recipe_id not in skip
-        ]
+        earlier = (
+            []
+            if args.other
+            else [c for c in self._retriever.recipes(shown) if c.recipe_id not in skip]
+        )
         retrieved = self._clock()
         sources = prepare_sources(hits, earlier)
         completion = None
@@ -686,8 +689,8 @@ class Answerer:
             searches.append(args)
             _notify(progress, "search")
             before = self._clock()
-            found = self._retriever.search(
-                args.query, k=self._k, conditions=args.conditions
+            found = self._retriever.search_all(
+                args.all_queries, k=self._k, conditions=args.conditions
             )
             searching += self._clock() - before
             for hit in found:

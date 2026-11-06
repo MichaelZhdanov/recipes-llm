@@ -240,11 +240,12 @@ def history(case: Case) -> list[Message]:
 
 
 def filtered_search(planner: SearchPlanner, retriever: Retriever) -> Search:
-    """Поиск этапа 2: разбор вопроса с историей диалога, фильтр и векторы по query."""
+    """Поиск этапа 2: разбор вопроса с историей диалога, фильтр и векторы по запросам."""
 
     def search(case: Case) -> tuple[SearchArgs | None, list[Hit]]:
         args = planner.plan(case.question, history(case))
-        return args, retriever.search(args.query, k=K, conditions=args.conditions)
+        hits = retriever.search_all(args.all_queries, k=K, conditions=args.conditions)
+        return args, hits
 
     return search
 

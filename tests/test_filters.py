@@ -147,3 +147,22 @@ def test_skip_drops_recipes_already_rejected_by_the_review(
     assert CHICKEN.name not in [h.chunk.name for h in skipped] and len(skipped) == 2
     assert [h.chunk.name for h in with_sugar] == [COOKIES.name]
     assert [h.chunk.name for h in no_cookies] == [COCKTAIL.name]
+
+
+def test_several_queries_take_turns_without_repeats(
+    indexed: VectorStore, fake_embedder: Embedder
+) -> None:
+    """«После тренировки» — курица и печенье: в выдаче оба вида блюд по очереди."""
+    from assistant.retrieval.search import Retriever
+
+    retriever = Retriever(indexed, fake_embedder, ref=MANIFEST.ref)
+
+    hits = retriever.search_all(["курица рис", "овсяное печенье"], k=3)
+    single = retriever.search_all(["курица рис"], k=3)
+
+    names = [h.chunk.name for h in hits]
+    assert names[:2] == [CHICKEN.name, COOKIES.name]
+    assert len(set(names)) == len(names) == 3
+    assert [h.chunk.name for h in single] == [
+        h.chunk.name for h in retriever.search("курица рис", k=3)
+    ]

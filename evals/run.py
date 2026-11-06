@@ -448,6 +448,9 @@ def load_answer_run(record: dict[str, Any]) -> AnswerRun:
                 exclude=tuple(args["conditions"]["exclude"]),
             ),
             dropped=tuple(args["dropped"]),
+            # До search_v4 запрос был один.
+            queries=tuple(args.get("queries", ())),
+            other=bool(args.get("other", False)),
         )
         for args in record.get("searches", [])
     ]

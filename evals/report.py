@@ -210,7 +210,9 @@ def _plan_line(run: RetrievalRun) -> str:
         return f"сбой разбора: {run.error}"
     if run.args is None:
         return "без разбора"
-    parts = [f"запрос «{run.args.query}»"]
+    parts = ["запросы «" + "» · «".join(run.args.all_queries) + "»"]
+    if run.args.other:
+        parts.append("другие рецепты")
     if run.args.conditions.include:
         groups = (" или ".join(g) for g in run.args.conditions.include)
         parts.append(f"с: {'; '.join(groups)}")
