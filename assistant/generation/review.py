@@ -1,7 +1,7 @@
 """Проверка ответа перед отправкой пользователю (решение автора 2026-11-06).
 
 Haiku ответил, код проверил цитаты. Дальше Sonnet по той же рубрике, что
-судья eval (`review_v2` — это `evals/prompts/judge_v9.md` без пункта о фактах
+судья eval (`review_v3` — это `evals/prompts/judge_v10.md` без пункта о фактах
 must_include; тест сверяет, чтобы они не разошлись), решает, подтверждают ли
 рецепты каждое утверждение и вступление:
 
@@ -27,7 +27,7 @@ from assistant.generation.gigachat import ChatModel, LlmStats, Usage
 from assistant.generation.prompt import load_prompt
 from assistant.generation.revise import Remark, Reviser
 
-PROMPT_VERSION = "review_v2"
+PROMPT_VERSION = "review_v3"
 MODEL = "claude-sonnet-5-5"
 EFFORT = "high"
 MAX_TOKENS = 2000

@@ -70,3 +70,15 @@ def test_report_shows_misses_finish_reasons_and_tokens() -> None:
     assert "| токенов ответа (с рассуждениями) на вызов | 40 |" in report
     assert "| canary-001 | да | нет ❌ |" in report
     assert isinstance(results[0], CanaryResult)
+
+
+def test_retired_canary_is_skipped_but_stays_in_the_file() -> None:
+    """YAML субагента не правится: устаревшую канарейку пропускает загрузка."""
+    from evals.dataset import RETIRED_CANARIES
+
+    active = {c.id for c in load_canaries()}
+    everything = {c.id for c in load_canaries(retired=True)}
+
+    assert set(RETIRED_CANARIES) <= everything
+    assert not set(RETIRED_CANARIES) & active
+    assert everything - active == set(RETIRED_CANARIES)

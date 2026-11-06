@@ -193,10 +193,19 @@ def load_cases(directory: Path = DATASET_DIR) -> list[Case]:
     return cases
 
 
-def load_canaries(file: Path = CANARIES_FILE) -> list[Canary]:
+# Канарейки, которые устарели по решению автора. YAML субагента вручную не
+# правится, поэтому они не удаляются из файла, а пропускаются при загрузке.
+RETIRED_CANARIES = {
+    "canary-043": "2026-11-06, автор: зачем нужен общеизвестный продукт "
+    "(«желатин — чтобы застыло») — не ошибка, а общеизвестное о продукте",
+}
+
+
+def load_canaries(file: Path = CANARIES_FILE, *, retired: bool = False) -> list[Canary]:
+    """Канарейки опоры на рецепт; устаревшие (RETIRED_CANARIES) — только с retired=True."""
     canaries = [Canary.model_validate(item) for item in _read_list(file)]
     _check_unique([canary.id for canary in canaries])
-    return canaries
+    return [c for c in canaries if retired or c.id not in RETIRED_CANARIES]
 
 
 def load_clarity_canaries(file: Path = CLARITY_CANARIES_FILE) -> list[ClarityCanary]:
