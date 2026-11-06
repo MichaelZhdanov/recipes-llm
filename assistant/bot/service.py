@@ -9,6 +9,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from assistant.bot.format import (
@@ -20,13 +21,14 @@ from assistant.bot.format import (
     Keyboard,
     answer_buttons,
     answer_html,
-    card_caption,
+    page_steps_header,
     reason_buttons,
+    step_caption,
     steps_html,
     steps_refused_html,
 )
-from assistant.bot.pages import PAGE_TTL, PageChecker
-from assistant.bot.recipe_page import RecipeCard
+from assistant.bot.pages import PageChecker
+from assistant.bot.recipe_page import RecipePage
 from assistant.bot.store import SavedSteps, Store, Vote, VoteReason
 from assistant.generation import steps as steps_module
 from assistant.generation.answer import Progress, render_markdown
@@ -44,8 +46,6 @@ class Reply:
     text: str
     buttons: Keyboard = field(default_factory=list)
     answer_id: int | None = None
-    # Фото к сообщению — сама картинка (скачана с povarenok.ru); текст — подпись.
-    photo: bytes | None = None
 
 
 ERROR_REPLY = Reply(ERROR_TEXT)
@@ -55,10 +55,12 @@ GONE_REPLY = Reply(GONE_TEXT)
 RecipeLookup = Callable[[int], Chunk | None]
 # Шаги по тексту рецепта: steps.make_steps с моделями бота.
 StepsMaker = Callable[[str], Steps]
-# Карточка страницы рецепта по адресу: recipe_page.fetch_card; None — не вышло.
-CardFetcher = Callable[[str], RecipeCard | None]
+# Шаги страницы рецепта по адресу: recipe_page.fetch_page; None — не вышло.
+PageFetcher = Callable[[str], RecipePage | None]
 # Фото по адресу: recipe_page.fetch_photo; None — не вышло.
 PhotoFetcher = Callable[[str], bytes | None]
+# Что отправить: текст или фото с подписью.
+Part = str | tuple[bytes, str]
 # Кэш шагов сбрасывается, когда меняется любой из двух промптов.
 STEPS_VERSION = f"{steps_module.PROMPT_VERSION}+{steps_module.REVIEW_PROMPT_VERSION}"
 
@@ -72,7 +74,7 @@ class BotService:
         *,
         recipes: RecipeLookup,
         make_steps: StepsMaker,
-        fetch_card: CardFetcher,
+        fetch_page: PageFetcher,
         fetch_photo: PhotoFetcher,
         gigachat_note: bool = False,
         clock: Callable[[], float] = time.monotonic,
@@ -82,7 +84,7 @@ class BotService:
         self.pages = pages
         self.recipes = recipes
         self.make_steps = make_steps
-        self.fetch_card = fetch_card
+        self.fetch_page = fetch_page
         self.fetch_photo = fetch_photo
         self.gigachat_note = gigachat_note
         self._clock = clock
@@ -175,34 +177,36 @@ class BotService:
             return Reply(steps_html(recipe.name, json.loads(saved.text)))
         return Reply(steps_refused_html(recipe.name))
 
-    def card(self, chat_id: int, answer_id: int, recipe_id: int) -> Reply:
-        """Фото блюда и сколько шагов на странице; сами шаги — по ссылке.
+    def page_steps(self, chat_id: int, answer_id: int, recipe_id: int) -> list[Part]:
+        """Шаги со страницы рецепта по порядку: заголовок с источником, затем
+        по сообщению на шаг — фото с текстом шага в подписи (решение автора:
+        фото и шаг — одно сообщение); шаг без фото — текстом.
 
-        Карточка кэшируется на неделю, как проверка страницы; если разобрать
-        страницу не вышло — просто ссылка, без кэша.
+        Фото скачивается здесь, параллельно; не скачалось — шаг идёт текстом.
+        Страница не разобралась — заголовок со ссылкой, шагов нет.
         """
         ids = self.store.recipe_ids(answer_id, chat_id)
         if ids is None or recipe_id not in ids:
-            return GONE_REPLY
+            return [GONE_TEXT]
         try:
             recipe = self.recipes(recipe_id)
         except DEPENDENCY_ERRORS as error:
             logger.error("рецепт не найден: %s: %s", type(error).__name__, error)
-            return ERROR_REPLY
+            return [ERROR_TEXT]
         if recipe is None:
-            return GONE_REPLY
-        card = self.store.card(recipe.url, PAGE_TTL)
-        if card is None:
-            card = self.fetch_card(recipe.url)
-            if card is not None:
-                self.store.save_card(recipe.url, card)
-        if card is None:
-            return Reply(card_caption(recipe.name, recipe.url, 0, 0))
-        # Фото не кэшируется: оно около 100 КБ, а нажимают кнопку редко.
-        return Reply(
-            card_caption(recipe.name, recipe.url, card.steps, card.step_photos),
-            photo=self.fetch_photo(card.photo) if card.photo else None,
-        )
+            return [GONE_TEXT]
+        page = self.fetch_page(recipe.url)
+        steps = page.steps if page else []
+        urls = [s.photo for s in steps if s.photo]
+        with ThreadPoolExecutor(max_workers=max(1, min(len(urls), 10))) as pool:
+            photos = dict(zip(urls, pool.map(self.fetch_photo, urls), strict=True))
+        parts: list[Part] = [page_steps_header(recipe.name, recipe.url, len(steps))]
+        for number, step in enumerate(steps, start=1):
+            caption = step_caption(number, step.text)
+            data = photos.get(step.photo) if step.photo else None
+            parts.append((data, caption) if data is not None else caption)
+        logger.info("шаги со страницы рецепта %s: %s", recipe.recipe_id, len(steps))
+        return parts
 
     def _new_steps(self, recipe: Chunk) -> SavedSteps | None:
         result = self.make_steps(recipe.text)

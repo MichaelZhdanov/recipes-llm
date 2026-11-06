@@ -12,8 +12,8 @@
   «что не так?» тремя кнопками.
 - «🍳 Шаги» — только у рецептов без живой страницы: шаги пишет и проверяет
   `generation/steps.py` (~20 с), бот присылает их отдельным сообщением.
-- «📖 Шаги с фото» — у рецептов с живой страницей: фото блюда и сколько на
-  странице шагов, сами шаги — по ссылке (`recipe_page.py`).
+- «📖 Шаги с фото» — у рецептов с живой страницей: шаги со страницы по
+  порядку, по сообщению на шаг — фото с текстом шага (`recipe_page.py`).
 - Здоровье для Docker — файл-сердцебиение (`health.py`): раз в минуту бот
   спрашивает Telegram getMe и при успехе обновляет файл.
 """
@@ -30,7 +30,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ChatType, ParseMode
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand,
@@ -56,8 +56,8 @@ from assistant.bot.format import (
 )
 from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
 from assistant.bot.pages import PageChecker
-from assistant.bot.recipe_page import fetch_card, fetch_photo
-from assistant.bot.service import ERROR_REPLY, BotService, RecipeLookup, Reply
+from assistant.bot.recipe_page import fetch_page, fetch_photo
+from assistant.bot.service import ERROR_REPLY, BotService, Part, RecipeLookup, Reply
 from assistant.bot.store import Store, Vote, VoteReason
 from assistant.config import Settings
 from assistant.generation.answer import Stage
@@ -73,6 +73,8 @@ DATABASE = Path("data/bot/bot.sqlite3")
 STALE_AFTER = 10 * 60
 # Сколько поток ассистента ждёт правку статуса.
 STATUS_TIMEOUT = 5.0
+# Пауза между сообщениями шагов со страницы рецепта, с.
+STEP_PAUSE = 0.5
 VOTES: dict[str, Vote] = {"up": "up", "down": "down"}
 REASONS: dict[str, VoteReason] = {
     "unclear": "unclear",
@@ -229,30 +231,34 @@ class Handlers:
         if isinstance(message, Message):
             await message.edit_text(text)
 
-    async def card(self, callback: CallbackQuery, bot: Bot) -> None:
+    async def page_steps(self, callback: CallbackQuery, bot: Bot) -> None:
         parsed = parse_callback(callback.data, "card")
         message = callback.message
         if parsed is None or not parsed[1].isdigit() or message is None:
             await callback.answer()
             return
-        await callback.answer()
         chat_id = message.chat.id
+        if chat_id in self.busy:
+            await callback.answer(BUSY_TEXT)
+            return
+        self.busy.add(chat_id)
         try:
-            reply = await asyncio.to_thread(
-                self.service.card, chat_id, parsed[0], int(parsed[1])
-            )
-        except Exception:
-            logger.exception("карточка рецепта не собрана")
-            reply = ERROR_REPLY
-        if reply.photo is not None:
-            try:
-                photo = BufferedInputFile(reply.photo, filename="recipe.jpg")
-                await bot.send_photo(chat_id, photo, caption=reply.text)
-                return
-            except TelegramBadRequest:
-                # Telegram не принял картинку — тогда без фото.
-                logger.warning("фото рецепта не отправилось", exc_info=True)
-        await bot.send_message(chat_id, reply.text)
+            await callback.answer()
+            async with ChatActionSender.upload_photo(chat_id=chat_id, bot=bot):
+                try:
+                    parts = await asyncio.to_thread(
+                        self.service.page_steps, chat_id, parsed[0], int(parsed[1])
+                    )
+                except Exception:
+                    logger.exception("шаги со страницы не собраны")
+                    parts = [ERROR_REPLY.text]
+                for number, part in enumerate(parts):
+                    if number:
+                        # Telegram ограничивает частоту сообщений в один чат.
+                        await asyncio.sleep(STEP_PAUSE)
+                    await _send_part(bot, chat_id, part)
+        finally:
+            self.busy.discard(chat_id)
 
     async def steps(self, callback: CallbackQuery, bot: Bot) -> None:
         parsed = parse_callback(callback.data, "steps")
@@ -281,6 +287,28 @@ class Handlers:
             self.busy.discard(chat_id)
 
 
+async def _send_part(bot: Bot, chat_id: int, part: Part) -> None:
+    """Текст — сообщением, шаг с фото — фото с подписью. Telegram не принял
+    фото — подпись текстом; «слишком часто» — ждём, сколько он сказал."""
+    for attempt in range(2):
+        try:
+            if isinstance(part, str):
+                await bot.send_message(chat_id, part)
+            else:
+                data, caption = part
+                photo = BufferedInputFile(data, filename="step.jpg")
+                try:
+                    await bot.send_photo(chat_id, photo, caption=caption)
+                except TelegramBadRequest:
+                    logger.warning("фото шага не отправилось", exc_info=True)
+                    await bot.send_message(chat_id, caption)
+            return
+        except TelegramRetryAfter as error:
+            if attempt:
+                raise
+            await asyncio.sleep(error.retry_after)
+
+
 def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router = Router()
     router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -293,7 +321,8 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
     router.callback_query.register(handlers.why, F.data.startswith("why:"))
     router.callback_query.register(handlers.steps, F.data.startswith("steps:"))
-    router.callback_query.register(handlers.card, F.data.startswith("card:"))
+    # «card:» — с прошлой версии кнопки: старые сообщения тоже работают.
+    router.callback_query.register(handlers.page_steps, F.data.startswith("card:"))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     return dispatcher
@@ -355,7 +384,7 @@ async def run(settings: Settings) -> None:
         PageChecker(pages_http, store),
         recipes=recipe_lookup(VectorStore(qdrant)),
         make_steps=lambda text: make_steps(text, writer, reviewer),
-        fetch_card=lambda url: fetch_card(pages_http, url),
+        fetch_page=lambda url: fetch_page(pages_http, url),
         fetch_photo=lambda url: fetch_photo(pages_http, url),
         gigachat_note=settings.llm_provider == "gigachat",
     )

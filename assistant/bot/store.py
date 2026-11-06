@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from assistant.bot.recipe_page import RecipeCard
 from assistant.generation.gigachat import Message
 from assistant.security.pii import mask_pii
 
@@ -76,14 +75,6 @@ CREATE TABLE IF NOT EXISTS steps (
     approved INTEGER NOT NULL,
     prompt_version TEXT NOT NULL,
     created_at REAL NOT NULL
-);
--- Карточка страницы рецепта: главное фото и сколько шагов (recipe_page.py).
-CREATE TABLE IF NOT EXISTS cards (
-    url TEXT PRIMARY KEY,
-    photo TEXT,
-    steps INTEGER NOT NULL,
-    step_photos INTEGER NOT NULL,
-    checked_at REAL NOT NULL
 );
 """
 
@@ -252,27 +243,6 @@ class Store:
                 "INSERT INTO pages (url, ok, checked_at) VALUES (?, ?, ?) "
                 "ON CONFLICT (url) DO UPDATE SET ok = excluded.ok, checked_at = excluded.checked_at",
                 (url, int(ok), self._clock()),
-            )
-
-    def card(self, url: str, max_age: float) -> RecipeCard | None:
-        """Карточка страницы из кэша; None — не разбирали или разбор устарел."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT photo, steps, step_photos, checked_at FROM cards WHERE url = ?",
-                (url,),
-            ).fetchone()
-        if row is None or self._clock() - row[3] > max_age:
-            return None
-        return RecipeCard(row[0], int(row[1]), int(row[2]))
-
-    def save_card(self, url: str, card: RecipeCard) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO cards (url, photo, steps, step_photos, checked_at) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (url) DO UPDATE SET "
-                "photo = excluded.photo, steps = excluded.steps, "
-                "step_photos = excluded.step_photos, checked_at = excluded.checked_at",
-                (url, card.photo, card.steps, card.step_photos, self._clock()),
             )
 
     def steps(self, recipe_id: int, prompt_version: str) -> SavedSteps | None:

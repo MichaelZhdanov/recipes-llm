@@ -1,14 +1,15 @@
-"""Карточка страницы рецепта: главное фото и шаги по разметке schema.org."""
+"""Шаги со страницы рецепта: главное фото и шаги по разметке schema.org."""
 
 import httpx2
 
 from assistant.bot.recipe_page import (
     MAX_BYTES,
     MAX_PHOTO_BYTES,
-    RecipeCard,
-    fetch_card,
+    RecipePage,
+    Step,
+    fetch_page,
     fetch_photo,
-    parse_card,
+    parse_page,
 )
 
 URL = "https://www.povarenok.ru/recipes/show/1/"
@@ -21,7 +22,7 @@ PAGE = """
 <h2>Рецепт «Блины»:</h2>
 <ul itemprop="recipeInstructions">
   <li class="cooking-bl">
-    <span class="cook-img"><img itemprop="image" src="https://www.povarenok.ru/data/1.jpg"></span>
+    <span class="cook-img"><a href="https://www.povarenok.ru/data/1-640x480.jpg"><img itemprop="image" src="https://www.povarenok.ru/data/1-300x0.jpg"></a></span>
     <div><p>Смешайте муку с молоком.</p></div>
   </li>
   <li class="cooking-bl"><div><p>Дайте тесту постоять.</p></div></li>
@@ -34,21 +35,24 @@ PAGE = """
 """
 
 
-def test_main_photo_and_steps_with_their_photos_are_counted() -> None:
-    assert parse_card(PAGE) == RecipeCard(
-        photo="https://www.povarenok.ru/data/main.jpg", steps=3, step_photos=2
-    )
+def test_steps_come_in_order_with_their_largest_photo() -> None:
+    page = parse_page(PAGE)
+
+    assert page.photo == "https://www.povarenok.ru/data/main.jpg"
+    assert page.steps == [
+        Step("Смешайте муку с молоком.", "https://www.povarenok.ru/data/1-640x480.jpg"),
+        Step("Дайте тесту постоять.", None),
+        Step("Жарьте на сковороде.", "https://www.povarenok.ru/data/3.jpg"),
+    ]
 
 
 def test_photo_from_another_site_is_not_taken_and_no_markup_means_no_steps() -> None:
     foreign = PAGE.replace(
-        "https://www.povarenok.ru/data/main.jpg", "https://evil.example/x.jpg"
+        "https://www.povarenok.ru/data/3.jpg", "https://evil.example/3.jpg"
     )
 
-    assert parse_card(foreign).photo == "https://www.povarenok.ru/data/other.jpg"
-    assert parse_card("<html><p>Страница без разметки</p></html>") == RecipeCard(
-        None, 0, 0
-    )
+    assert parse_page(foreign).steps[2] == Step("Жарьте на сковороде.", None)
+    assert parse_page("<html><p>Страница без разметки</p></html>") == RecipePage(None)
 
 
 def client(status: int, body: bytes, charset: str = "windows-1251") -> httpx2.Client:
@@ -66,9 +70,9 @@ def client(status: int, body: bytes, charset: str = "windows-1251") -> httpx2.Cl
 def test_page_in_windows_1251_is_decoded_and_bad_answers_give_no_card() -> None:
     page = client(200, PAGE.encode("cp1251"))
 
-    assert fetch_card(page, URL) == parse_card(PAGE)
-    assert fetch_card(client(404, b""), URL) is None
-    assert fetch_card(client(200, b"x" * (MAX_BYTES + 1)), URL) is None
+    assert fetch_page(page, URL) == parse_page(PAGE)
+    assert fetch_page(client(404, b""), URL) is None
+    assert fetch_page(client(200, b"x" * (MAX_BYTES + 1)), URL) is None
 
 
 def image(status: int, body: bytes, content_type: str = "image/jpeg") -> httpx2.Client:

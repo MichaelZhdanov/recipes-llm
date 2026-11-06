@@ -9,9 +9,10 @@ from assistant.bot.format import (
     STATUS,
     answer_buttons,
     answer_html,
-    card_caption,
+    page_steps_header,
     reason_buttons,
     status_text,
+    step_caption,
 )
 from assistant.bot.pages import PageChecker
 from assistant.bot.store import Store
@@ -141,16 +142,15 @@ def test_redirect_is_not_followed_and_means_no_link() -> None:
     assert len(seen) == 1
 
 
-def test_card_caption_counts_steps_and_links_to_the_page() -> None:
-    caption = card_caption("Блины <тонкие>", ALIVE, 6, 5)
-    one = card_caption("Блины", ALIVE, 1, 0)
-    none = card_caption("Блины", ALIVE, 0, 0)
+def test_page_steps_header_names_the_source_and_captions_are_escaped() -> None:
+    header = page_steps_header("Блины <тонкие>", ALIVE, 6)
 
-    assert caption.startswith(
-        "📖 <b>Блины &lt;тонкие&gt;</b>\nНа странице — 6 шагов, из них с фото — 5."
+    assert header.startswith(
+        "📖 <b>Блины &lt;тонкие&gt;</b> — 6 шагов со страницы рецепта."
     )
-    assert f'<a href="{ALIVE}">Смотреть пошагово на povarenok.ru</a>' in caption
-    assert "— 1 шаг." in one and "с фото" not in one
-    assert "шаг" not in none and "Страница рецепта на povarenok.ru" in none
-    assert "— 3 шага." in card_caption("Блины", ALIVE, 3, 0)
-    assert "— 12 шагов." in card_caption("Блины", ALIVE, 12, 0)
+    assert f'Источник: <a href="{ALIVE}">povarenok.ru</a>' in header
+    assert "— 1 шаг " in page_steps_header("Блины", ALIVE, 1)
+    assert "— 3 шага " in page_steps_header("Блины", ALIVE, 2 + 1)
+    assert "не нашлось" in page_steps_header("Блины", ALIVE, 0)
+    assert step_caption(2, "Жарьте <долго>") == "2. Жарьте &lt;долго&gt;"
+    assert len(step_caption(1, "а" * 2000)) == 1000

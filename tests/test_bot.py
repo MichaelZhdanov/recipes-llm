@@ -51,7 +51,7 @@ from assistant.bot.format import (
 from assistant.bot.health import fresh
 from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
-from assistant.bot.recipe_page import RecipeCard
+from assistant.bot.recipe_page import RecipePage, Step
 from assistant.bot.service import STEPS_VERSION, BotService
 from assistant.bot.store import Store
 from assistant.config import Settings
@@ -163,28 +163,35 @@ class FakeSteps:
         )
 
 
-CARD = RecipeCard(PHOTO, 6, 5)
+PAGE = RecipePage(
+    PHOTO,
+    [
+        Step("Смешайте муку с молоком.", PHOTO),
+        Step("Дайте тесту постоять.", None),
+        Step("Жарьте <тонко>.", "https://www.povarenok.ru/data/broken.jpg"),
+    ],
+)
 
 
-class FakeCards:
-    """Вместо страницы povarenok: заданная карточка и счётчик запросов."""
+class FakePages:
+    """Вместо страницы povarenok: заданные шаги и счётчик запросов."""
 
-    def __init__(self, card: RecipeCard | None = CARD) -> None:
-        self.card = card
+    def __init__(self, page: RecipePage | None = PAGE) -> None:
+        self.page = page
         self.urls: list[str] = []
 
-    def __call__(self, url: str) -> RecipeCard | None:
+    def __call__(self, url: str) -> RecipePage | None:
         self.urls.append(url)
-        return self.card
+        return self.page
 
 
 def make_service(
     answerer: FakeAnswerer,
     steps: FakeSteps | None = None,
-    cards: FakeCards | None = None,
+    pages: FakePages | None = None,
 ) -> BotService:
     store = RecordingStore()
-    pages = httpx2.Client(
+    http = httpx2.Client(
         transport=httpx2.MockTransport(
             lambda request: httpx2.Response(200 if str(request.url) == ALIVE else 404)
         )
@@ -193,10 +200,10 @@ def make_service(
     return BotService(
         answerer,
         store,
-        PageChecker(pages, store),
+        PageChecker(http, store),
         recipes=index.get,
         make_steps=steps or FakeSteps(),
-        fetch_card=cards or FakeCards(),
+        fetch_page=pages or FakePages(),
         fetch_photo=lambda url: PHOTO_BYTES if url == PHOTO else None,
     )
 
@@ -633,45 +640,58 @@ def test_heartbeat_is_fresh_only_for_three_minutes(tmp_path: Path) -> None:
     assert not fresh(beat, now=now + 181)
 
 
-# --- Фото блюда и число шагов ---
+# --- Шаги со страницы рецепта ---
 
 
-def test_card_is_fetched_once_and_shown_with_the_dish_photo() -> None:
-    cards = FakeCards()
-    service = make_service(FakeAnswerer(), cards=cards)
+def test_page_steps_come_one_message_per_step_with_photo_and_text() -> None:
+    pages = FakePages()
+    service = make_service(FakeAnswerer(), pages=pages)
     answer_id = service.ask(7, "блины").answer_id
     assert answer_id is not None
 
-    reply = service.card(7, answer_id, 1)
-    again = service.card(7, answer_id, 1)
+    parts = service.page_steps(7, answer_id, 1)
 
-    assert reply.photo == PHOTO_BYTES
-    assert "На странице — 6 шагов, из них с фото — 5." in reply.text
-    assert again == reply and cards.urls == [ALIVE]
-    assert service.card(8, answer_id, 1).text == GONE_TEXT
+    header, first, second, third = parts
+    assert isinstance(header, str) and "3 шага со страницы рецепта" in header
+    assert first == (PHOTO_BYTES, "1. Смешайте муку с молоком.")
+    # Без фото и с фото, которое не скачалось, — шаг текстом.
+    assert second == "2. Дайте тесту постоять."
+    assert third == "3. Жарьте &lt;тонко&gt;."
+    assert service.page_steps(8, answer_id, 1) == [GONE_TEXT]
 
 
-def test_unparsed_page_gives_a_plain_link_and_is_not_cached() -> None:
-    cards = FakeCards(card=None)
-    service = make_service(FakeAnswerer(), cards=cards)
+def test_unparsed_page_gives_a_link_to_the_recipe() -> None:
+    service = make_service(FakeAnswerer(), pages=FakePages(page=None))
     answer_id = service.ask(7, "блины").answer_id
     assert answer_id is not None
 
-    reply = service.card(7, answer_id, 1)
-    service.card(7, answer_id, 1)
+    [only] = service.page_steps(7, answer_id, 1)
 
-    assert reply.photo is None and "Страница рецепта на povarenok.ru" in reply.text
-    assert len(cards.urls) == 2
+    assert isinstance(only, str) and "Шагов на странице не нашлось" in only
 
 
-def test_card_button_sends_the_photo_with_a_caption() -> None:
+def test_steps_button_sends_photo_with_caption_for_each_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("assistant.bot.app.STEP_PAUSE", 0)
     service = make_service(FakeAnswerer())
     feed(service, update("блины"))
 
     telegram = feed(service, press("card:1:1", message_id=101))
 
+    sent = [
+        (type(m).__name__, getattr(m, "caption", None) or getattr(m, "text", None))
+        for m in telegram.calls
+        if isinstance(m, SendPhoto | SendMessage)
+    ]
+    assert [name for name, _ in sent] == [
+        "SendMessage",
+        "SendPhoto",
+        "SendMessage",
+        "SendMessage",
+    ]
+    assert sent[1][1] == "1. Смешайте муку с молоком."
     (photo,) = [m for m in telegram.calls if isinstance(m, SendPhoto)]
     # Картинку скачал бот и отдал файлом: по ссылке Telegram её не всегда забирает.
     assert isinstance(photo.photo, BufferedInputFile)
     assert photo.photo.data == PHOTO_BYTES
-    assert "Смотреть пошагово на povarenok.ru" in (photo.caption or "")

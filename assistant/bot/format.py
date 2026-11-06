@@ -162,18 +162,26 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
-def card_caption(name: str, url: str, steps: int, step_photos: int) -> str:
-    """Подпись к фото блюда: сколько шагов на странице — сами шаги по ссылке."""
-    link = f'<a href="{html.escape(url, quote=True)}">'
+# Подпись к фото в Telegram — до 1024 символов.
+MAX_CAPTION = 1000
+
+
+def page_steps_header(name: str, url: str, steps: int) -> str:
+    """Первое сообщение шагов со страницы: что за рецепт и откуда шаги."""
+    link = f'<a href="{html.escape(url, quote=True)}">povarenok.ru</a>'
     head = f"📖 <b>{html.escape(name)}</b>"
     if not steps:
-        return f"{head}\n{link}Страница рецепта на povarenok.ru</a>"
+        return f"{head}\nШагов на странице не нашлось — рецепт на {link}"
     count = f"{steps} {_plural(steps, 'шаг', 'шага', 'шагов')}"
-    if step_photos:
-        count += f", из них с фото — {step_photos}"
-    return (
-        f"{head}\nНа странице — {count}.\n{link}Смотреть пошагово на povarenok.ru</a>"
-    )
+    return f"{head} — {count} со страницы рецепта.\nИсточник: {link}"
+
+
+def step_caption(number: int, text: str) -> str:
+    """Текст шага под его фото; длинный — обрезается до лимита подписи."""
+    caption = f"{number}. {html.escape(text)}"
+    if len(caption) <= MAX_CAPTION:
+        return caption
+    return caption[: MAX_CAPTION - 1] + "…"
 
 
 def reason_buttons(answer_id: int) -> Keyboard:
