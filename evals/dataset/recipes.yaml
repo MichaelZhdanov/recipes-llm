@@ -1250,3 +1250,127 @@
   must_include: []
   must_not_include: []
   notes: "«Такие» — котлеты, мясо меняется на индейку. Говядину исключать не требуется: человек спрашивает про индейку, а не запрещает говядину. Подходит рецептов: 87."
+
+# ---------------------------------------------------------------- semantic: к чему подать
+# Вопрос, что подать к напитку, а не что приготовить из него: блюда, где этот
+# напиток — ингредиент, не подходят.
+- id: semantic-011
+  category: semantic
+  question: "Какие блюда подать к красному сухому вину?"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Нужно блюдо, которое ставят рядом с бокалом красного: стейки и запечённое мясо, баранина, твёрдые и выдержанные сыры, сырные тарелки, мясная нарезка, закуски «к вину» (например, «Закуска к вину \"Сырная плата\"», https://www.povarenok.ru/recipes/show/54926/). Не подходят блюда, где красное вино — ингредиент (маринад, соус, тушение), даже если само блюдо мясное: «Петух в красном вине» (https://www.povarenok.ru/recipes/show/135087/), «Баранина в красном вине с овощами» (https://www.povarenok.ru/recipes/show/43383/). Не подходят и напитки на вине (глинтвейн, сангрия)."
+
+- id: semantic-012
+  category: semantic
+  question: "купили бутылку белого к вечеру, что бы такого к нему сделать?"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "«Белое» — белое вино; нужно блюдо к нему: рыба и морепродукты (запечённая рыба, креветки, мидии), курица, мягкие и козьи сыры, лёгкие закуски, фрукты. Не подходят блюда, где белое вино — ингредиент, даже рыба, которая сама по себе хорошая пара: «Рыба в вине» (https://www.povarenok.ru/recipes/show/37618/, вино белое сухое в составе), «Голени с овощами, тушенные в белом вине» (https://www.povarenok.ru/recipes/show/99434/). Не подходят и напитки на белом вине (пунш, сангрия)."
+
+- id: semantic-013
+  category: semantic
+  question: "что к шампанскаму на новый год на стол пставить"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Нужны закуски и сладкое к шампанскому: канапе и тарталетки с икрой, морепродукты, сыры, фрукты, клубника, лёгкие десерты. Не подходят блюда, десерты и коктейли с шампанским в составе: «Желе из шампанского» (https://www.povarenok.ru/recipes/show/136576/), «Семга в шампанском с икорным бешамелем» (https://www.povarenok.ru/recipes/show/104457/) — сёмга с икрой подошла бы, но здесь шампанское — ингредиент."
+
+- id: semantic-014
+  category: semantic
+  question: "Вечером с соседом по пивку, чё бы к нему сообразить?"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Нужны закуски к пиву: гренки, сухарики, куриные крылышки, колбаски, рёбрышки, сырные палочки, креветки, вяленое мясо. Не подходят блюда, где пиво — ингредиент (маринад, кляр, тесто, соус): «Свиные ребра в пивном маринаде» (https://www.povarenok.ru/recipes/show/140893/), «Курица на пивной банке» (https://www.povarenok.ru/recipes/show/119985/); не подходят и пивные коктейли."
+
+- id: semantic-015
+  category: semantic
+  question: "Что подать к коньяку?"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Нужна закуска к коньяку: лимон с сахаром, твёрдые сыры, тёмный шоколад, фрукты, орехи, мясная нарезка, канапе (например, «Закуска лимонная к коньяку», https://www.povarenok.ru/recipes/show/37440/). Не подходят блюда, где коньяк — ингредиент: «Шашлык на коньяке» (https://www.povarenok.ru/recipes/show/90021/), «Брауни с коньяком» (https://www.povarenok.ru/recipes/show/98323/); не подходят и настойки и коктейли на коньяке."
+
+- id: semantic-016
+  category: semantic
+  question: "чтобы испеч к кофе, подружки забегут"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Нужна выпечка к кофе, в первую очередь сладкая: кексы, печенье, пироги, булочки, пирожные (например, «Американский сметанный пирог к кофе», https://www.povarenok.ru/recipes/show/60766/, кофе в составе нет). Не подходят выпечка и десерты, где кофе — ингредиент: «Кофейные пряники с глазурью» (https://www.povarenok.ru/recipes/show/127849/), «Печенье кофейно-шоколадное» (https://www.povarenok.ru/recipes/show/129223/), тирамису на кофе; не подходят и кофейные напитки."
+
+# ---------------------------------------------------------------- follow_up: к чему подать
+- id: follow_up-009
+  category: follow_up
+  question: "это ж всё с вином внутри. мне надо, что к бокалу поставить, а не что в вине сварить"
+  style: colloquial
+  turns:
+    - role: user
+      text: "Посоветуй что-нибудь к вину, вечером сидим с подругой"
+    - role: assistant
+      text: "Вот что нашёл:\n1. Курица в вине — https://www.povarenok.ru/recipes/show/75107/\n2. Шампиньоны в вине — https://www.povarenok.ru/recipes/show/6158/\n3. Груша в вине — https://www.povarenok.ru/recipes/show/70514/"
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Первый ответ неверен: во всех трёх рецептах вино — ингредиент (75107 и 6158 — вино красное сухое, 70514 — вино красное полусухое). Пользователь поясняет, что нужно блюдо к вину, а не из вина. Нужны другие рецепты: сыры и сырные тарелки, мясная нарезка, закуски «к вину», мясо без вина в составе. Не подходят ни эти три, ни любые другие рецепты с вином в составе."
+
+- id: follow_up-010
+  category: follow_up
+  question: "нене, мне закусь под пивко нужна, а не то што на пиве готовят"
+  style: typo
+  turns:
+    - role: user
+      text: "чего бы к пиву приготовить, друзья на дачу приедут"
+    - role: assistant
+      text: "Вот что нашёл:\n1. Голени в пивном маринаде — https://www.povarenok.ru/recipes/show/1285/\n2. Мясо, тушенное в пивном бульоне — https://www.povarenok.ru/recipes/show/116368/\n3. Тефтели в пивном соусе — https://www.povarenok.ru/recipes/show/45766/"
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Первый ответ неверен: во всех трёх рецептах светлое пиво — ингредиент (маринад, бульон, соус). Пользователь поясняет, что нужна закуска, которую подают к пиву. Нужны другие рецепты: гренки, сухарики, куриные крылышки, колбаски, сырные палочки, креветки — без пива в составе. Не подходят ни эти три, ни другие рецепты с пивом в маринаде, кляре, тесте или соусе."
