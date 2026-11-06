@@ -9,7 +9,11 @@ cloud.ru передаёт запрос вендору за пределы РФ.
 Перевод из формата GigaChat (проверено живым вызовом 2026-11-06):
 - сообщения system / user / assistant — как есть, `POST /chat/completions`;
 - `response_format` (JSON по схеме) → `{type: json_schema, json_schema:
-  {name, schema, strict}}`. Обе модели его соблюдают, content не пустой;
+  {name, schema, strict}}`. GLM схему соблюдает. DeepSeek V4 Flash запрос
+  принимает, но схему не соблюдает: возвращает свои ключи («evaluations»
+  вместо «statements»; 40 сбоев разбора из 70 в evals/reports/2026-11-06-loop-before-schema-fix.md).
+  Таким моделям (SCHEMA_IN_PROMPT) схема дописывается текстом в системное
+  сообщение, а ответ, как и у всех, проверяет pydantic;
 - рассуждения приходят отдельным полем `reasoning_content`, в content —
   только ответ. `max_tokens` считает их вместе с ответом, поэтому адаптер
   добавляет запас REASONING_TOKENS, как у Claude;
@@ -19,6 +23,7 @@ cloud.ru передаёт запрос вендору за пределы РФ.
 Маскирование ПДн — здесь, как у GigaChat и Claude (`mask_message`).
 """
 
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -39,6 +44,8 @@ from assistant.generation.gigachat import (
 from assistant.http import request_with_retries
 
 TIMEOUT = 180.0
+# Модели, которые принимают json_schema, но не соблюдают её (проверено 2026-11-06).
+SCHEMA_IN_PROMPT = frozenset({"deepseek-ai/DeepSeek-V4-Flash"})
 REASONING_TOKENS = 8000
 # ₽ за 1M токенов (вход, выход), каталог cloud.ru `GET /v1/models`, 2026-11-06.
 PRICE_RUB_PER_MTOK = {
@@ -64,6 +71,18 @@ def _response_format(response_format: Mapping[str, object]) -> dict[str, object]
             "strict": bool(response_format.get("strict", True)),
         },
     }
+
+
+def _with_schema(
+    messages: list[dict[str, str]], response_format: Mapping[str, object]
+) -> list[dict[str, str]]:
+    """Схема ответа текстом в системном сообщении — для моделей из SCHEMA_IN_PROMPT."""
+    schema = json.dumps(response_format["schema"], ensure_ascii=False)
+    note = f"JSON-схема ответа (ключи — ровно такие, других не добавляй):\n{schema}"
+    if messages and messages[0]["role"] == "system":
+        first = {**messages[0], "content": f"{messages[0]['content']}\n\n{note}"}
+        return [first, *messages[1:]]
+    return [{"role": "system", "content": note}, *messages]
 
 
 def _completion(data: Mapping[str, Any], model: str) -> Completion:
@@ -121,9 +140,12 @@ class CloudRu:
         if functions or function_call:
             raise LlmError("вызов функций в адаптере cloud.ru не реализован")
         masked = [mask_message(m, self.stats.masked) for m in messages]
+        converted = [{"role": m["role"], "content": m["content"]} for m in masked]
+        if response_format is not None and model in SCHEMA_IN_PROMPT:
+            converted = _with_schema(converted, response_format)
         body: dict[str, object] = {
             "model": model,
-            "messages": [{"role": m["role"], "content": m["content"]} for m in masked],
+            "messages": converted,
             "temperature": temperature,
             "max_tokens": max_tokens + REASONING_TOKENS,
         }

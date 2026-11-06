@@ -138,3 +138,33 @@ def test_cost_uses_catalog_prices() -> None:
 
     assert cost_rub("z-ai/glm-5.3-flash", stats) == pytest.approx(26.71 + 89.0)
     assert cost_rub("unknown", stats) is None
+
+
+def test_schema_is_spelled_out_for_models_that_ignore_it() -> None:
+    """DeepSeek принимает json_schema, но отвечает своими ключами: схема — текстом."""
+    fake = FakeCloudRu()
+    llm = client(fake)
+    schema_format = {"type": "json_schema", "schema": SCHEMA, "strict": True}
+
+    llm.chat(
+        MESSAGES,
+        model="deepseek-ai/DeepSeek-V4-Flash",
+        temperature=1e-4,
+        max_tokens=10,
+        response_format=schema_format,
+    )
+    deepseek = fake.body()["messages"]
+    llm.chat(
+        MESSAGES,
+        model="z-ai/glm-5.3-flash",
+        temperature=1e-4,
+        max_tokens=10,
+        response_format=schema_format,
+    )
+    glm = fake.body()["messages"]
+
+    assert deepseek[0]["role"] == "system"
+    assert deepseek[0]["content"].startswith("Ты проверяешь утверждения.")
+    assert '"supported"' in deepseek[0]["content"]
+    assert len(deepseek) == len(MESSAGES)
+    assert glm[0]["content"] == "Ты проверяешь утверждения."
