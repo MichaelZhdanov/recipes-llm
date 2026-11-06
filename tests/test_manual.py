@@ -6,7 +6,16 @@ from eval_helpers import RUN, case
 
 from evals.answer_metrics import AnswerCase
 from evals.judge import Verdict
-from evals.manual import Agreement, compare, render, sample
+from evals.manual import (
+    Agreement,
+    compare,
+    disagreements,
+    dump,
+    render,
+    render_disagreements,
+    sample,
+    score_disagreements,
+)
 from evals.run import answer_records
 
 
@@ -63,3 +72,74 @@ def test_unmarked_statement_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="не размечено"):
         compare([item], raw)
+
+
+def judged(supported: list[bool], *, model: str, mode: str = "auto") -> dict[str, Any]:
+    """Пересчёт одного ответа судьёй `model`: у RUN два утверждения."""
+    raw = raw_with_judge()
+    raw["records"][0]["judge"]["supported"] = supported
+    raw["records"][0]["judge"]["comments"] = [f"{model}: про {n}" for n in (1, 2)]
+    raw["meta"] = {"mode": mode}
+    raw["judging"] = {"model": model}
+    return raw
+
+
+def test_disagreements_take_each_side_and_hide_the_judges() -> None:
+    ultra = judged([False, True], model="Ultra")
+    sonnet = judged([True, False], model="Sonnet")
+
+    items = disagreements([(ultra, sonnet)], questions=QUESTIONS)
+
+    assert [(i["mode"], i["statement"], i["supported"]) for i in items] == [
+        ("auto", 1, None),
+        ("auto", 2, None),
+    ]
+    assert not items[0]["recipes"][0].startswith("Рецепт целиком")
+    text = dump(items)
+    assert "Ultra" not in text and "Sonnet" not in text and "про 1" not in text
+
+
+def test_disagreements_take_at_most_per_side_and_skip_agreement() -> None:
+    ultra = judged([False, False], model="Ultra")
+    sonnet = judged([True, True], model="Sonnet")
+
+    assert len(disagreements([(ultra, sonnet)], per_side=1, questions=QUESTIONS)) == 1
+    assert disagreements([(ultra, ultra)], questions=QUESTIONS) == []
+
+
+def test_pair_must_judge_the_same_answers() -> None:
+    other_mode = judged([True, False], model="Sonnet", mode="always")
+    with pytest.raises(ValueError, match="разные режимы"):
+        disagreements([(judged([False, True], model="Ultra"), other_mode)])
+
+    other_answer = judged([True, False], model="Sonnet")
+    other_answer["records"][0]["content"] = "другой ответ"
+    with pytest.raises(ValueError, match="разных ответов"):
+        disagreements([(judged([False, True], model="Ultra"), other_answer)])
+
+
+def test_score_shows_whom_the_author_agrees_with() -> None:
+    pairs = [
+        (judged([False, True], model="Ultra"), judged([True, False], model="Sonnet"))
+    ]
+    first, second = disagreements(pairs, questions=QUESTIONS)
+    first["supported"] = False  # как A: «нет» только у A подтвердилось
+    second["supported"] = True  # как A: «нет» только у B не подтвердилось
+    second["note"] = "пересказ"
+
+    disputed = score_disagreements([first, second], pairs)
+    report = render_disagreements(disputed, pairs, marks_file="m.yaml")
+
+    assert [(d.author, d.a, d.b) for d in disputed] == [
+        (False, False, True),
+        (True, True, False),
+    ]
+    assert "| всего | 2 | 2 | 0 |" in report
+    assert "| A — Ultra | 1 | 1 |" in report
+    assert "| B — Sonnet | 1 | 0 |" in report
+    assert "  - B: Sonnet: про 2" in report
+    assert "  - автор: пересказ" in report
+
+    second["supported"] = None
+    with pytest.raises(ValueError, match="не размечено утверждение 2"):
+        score_disagreements([first, second], pairs)

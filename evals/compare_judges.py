@@ -35,7 +35,7 @@ def kappa(pairs: Sequence[tuple[bool, bool]]) -> float:
     return math.nan if expected == 1 else (observed - expected) / (1 - expected)
 
 
-def _verdicts(raw: dict[str, Any], field: str) -> dict[tuple[str, int, int], bool]:
+def verdicts(raw: dict[str, Any], field: str) -> dict[tuple[str, int, int], bool]:
     found = {}
     for record in raw["records"]:
         judge = record.get("judge") or {}
@@ -100,7 +100,7 @@ def compare(a: dict[str, Any], b: dict[str, Any], limit: int = 15) -> str:
     texts = _statements(a)
     comments_b = _statements(b)
     for field, title in (("supported", "опора на рецепт"), ("clear", "грамотность")):
-        left, right = _verdicts(a, field), _verdicts(b, field)
+        left, right = verdicts(a, field), verdicts(b, field)
         common = sorted(left.keys() & right.keys())
         pairs = [(left[key], right[key]) for key in common]
         agree = sum(x == y for x, y in pairs)

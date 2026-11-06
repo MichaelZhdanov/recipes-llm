@@ -12,6 +12,17 @@
 3. `score MARKS_YAML RAW_JSON` сравнивает оценки с судьёй: доля совпадений
    и каппа Коэна (совпадения сверх случайных). Отчёт —
    evals/reports/<имя>-manual.md, без текстов источников.
+
+Когда судей два, а их «не подтверждено» почти не пересекаются
+(evals/reports/2026-11-06-stage3.md), выбор между ними решает разметка
+именно расхождений:
+1. `disagreements --pair A B [--pair A2 B2]` — A и B — пересчёты одних
+   ответов двумя судьями (`--rescore`), по паре на режим ответа. Из каждой
+   пары берутся поровну утверждения, где «нет» сказал только A и только B.
+   Вердиктов, комментариев и имён судей в YAML нет.
+2. `score-disagreements MARKS --pair A B …` — с кем из судей автор согласен
+   и как часто подтверждается «нет» каждого. Отчёт —
+   evals/reports/<имя разметки>.md.
 """
 
 import argparse
@@ -25,12 +36,16 @@ from typing import Any
 
 import yaml
 
+from evals.compare_judges import verdicts
 from evals.dataset import HOLDOUT_DIR, load_cases
 from evals.judge import JUDGE_PROMPT, claims_of
 from evals.run import REPORTS_DIR, load_answer_run
 
 SAMPLE_SIZE = 20
 SEED = 20261104
+# Утверждений с каждой стороны расхождения в каждом режиме: 2 режима × 2
+# стороны × 8 — около 30 разметок, если «нет» у судьи меньше 8, берутся все.
+PER_SIDE = 8
 HEADER = f"""\
 # Поставьте supported: true или false у каждого утверждения.
 # Правило то же, что у судьи (evals/prompts/{JUDGE_PROMPT}.md, пункт supported):
@@ -158,6 +173,211 @@ def render(result: Agreement, *, marks_file: str, raw_file: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+DISAGREEMENTS_HEADER = f"""\
+# Утверждения, о которых судьи разошлись. Поставьте supported: true или false.
+# Вердиктов и имён судей здесь нет: разметка слепая. Правило то же, что у судьи
+# (evals/prompts/{JUDGE_PROMPT}.md):
+# - true, если всё сказанное следует из рецепта: названия, ингредиенты, количества.
+#   Пересказ, другие формы слов, числа прописью («два яйца» при «2 шт») — норма;
+# - false за шаг, время, температуру, подачу, совет или замену; за обобщение сильнее
+#   данных («постное», «без глютена», «подходит детям»); за «без X», когда X в рецепте
+#   есть; за ингредиент или количество из другого рецепта;
+# - неполный список ингредиентов — не ошибка; «шагов в данных нет» и «рецепт по
+#   ссылке» — верно;
+# - своих знаний о блюдах не используйте, только общеизвестное о продуктах
+#   (свинина — мясо, в пшеничной муке глютен).
+# note — по желанию: почему так, если случай спорный.
+# mode, id, run и statement не меняйте: по ним разметка сверяется с судьями.
+"""
+
+Pair = tuple[dict[str, Any], dict[str, Any]]
+
+
+def _check_pair(a: dict[str, Any], b: dict[str, Any]) -> str:
+    """Режим пары; A и B должны быть пересчётами одних и тех же ответов."""
+    if a["meta"]["mode"] != b["meta"]["mode"]:
+        raise ValueError(
+            f"в паре разные режимы: {a['meta']['mode']} и {b['meta']['mode']}"
+        )
+    answers_a = {(r["id"], r["run"]): r["content"] for r in a["records"]}
+    answers_b = {(r["id"], r["run"]): r["content"] for r in b["records"]}
+    if answers_a != answers_b:
+        raise ValueError(
+            "A и B — оценки разных ответов: нужны пересчёты одного прогона"
+        )
+    return str(a["meta"]["mode"])
+
+
+def disagreements(
+    pairs: Sequence[Pair],
+    *,
+    per_side: int = PER_SIDE,
+    seed: int = SEED,
+    questions: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Утверждения, где «не подтверждено» сказал только один судья, поровну
+    с каждой стороны, без вердиктов: автор не знает, кто что сказал."""
+    questions = dataset_questions() if questions is None else questions
+    rng = random.Random(seed)
+    items = []
+    for a, b in pairs:
+        mode = _check_pair(a, b)
+        left, right = verdicts(a, "supported"), verdicts(b, "supported")
+        common = sorted(left.keys() & right.keys())
+        records = {(r["id"], r["run"]): r for r in a["records"]}
+        for says_no in (left, right):
+            side = [
+                key for key in common if left[key] != right[key] and not says_no[key]
+            ]
+            for case_id, run, number in rng.sample(side, min(per_side, len(side))):
+                claim = claims_of(load_answer_run(records[(case_id, run)]))[number]
+                items.append(
+                    {
+                        "mode": mode,
+                        "id": case_id,
+                        "run": run,
+                        "statement": number + 1,
+                        "question": questions[case_id],
+                        "text": claim.text,
+                        "recipes": [
+                            f.removeprefix("Рецепт целиком:\n") for f in claim.fragments
+                        ],
+                        "supported": None,
+                        "note": "",
+                    }
+                )
+    return sorted(items, key=lambda i: (i["mode"], i["id"], i["run"], i["statement"]))
+
+
+@dataclass(frozen=True)
+class Disputed:
+    """Утверждение, о котором судьи разошлись, с вердиктами автора и обоих судей."""
+
+    mode: str
+    case_id: str
+    run: int
+    statement: int
+    text: str
+    author: bool
+    a: bool
+    b: bool
+    comment_a: str
+    comment_b: str
+    note: str
+
+
+def _comment(raw: dict[str, Any], case_id: str, run: int, number: int) -> str:
+    for record in raw["records"]:
+        if (record["id"], record["run"]) == (case_id, run):
+            comments = (record.get("judge") or {}).get("comments", [])
+            return str(comments[number]) if number < len(comments) else ""
+    return ""
+
+
+def score_disagreements(
+    marks: Sequence[dict[str, Any]], pairs: Sequence[Pair]
+) -> list[Disputed]:
+    by_mode = {_check_pair(a, b): (a, b) for a, b in pairs}
+    disputed = []
+    for item in marks:
+        if item["supported"] is None:
+            raise ValueError(
+                f"{item['mode']} · {item['id']}, прогон {item['run']}: "
+                f"не размечено утверждение {item['statement']}"
+            )
+        a, b = by_mode[item["mode"]]
+        key = (item["id"], item["run"], item["statement"] - 1)
+        disputed.append(
+            Disputed(
+                mode=item["mode"],
+                case_id=item["id"],
+                run=item["run"],
+                statement=item["statement"],
+                text=item["text"],
+                author=bool(item["supported"]),
+                a=verdicts(a, "supported")[key],
+                b=verdicts(b, "supported")[key],
+                comment_a=_comment(a, *key),
+                comment_b=_comment(b, *key),
+                note=item.get("note") or "",
+            )
+        )
+    return disputed
+
+
+def _yes_no(mark: bool) -> str:
+    return "да" if mark else "нет"
+
+
+def render_disagreements(
+    disputed: Sequence[Disputed], pairs: Sequence[Pair], *, marks_file: str
+) -> str:
+    names = {(a["judging"]["model"], b["judging"]["model"]) for a, b in pairs}
+    if len(names) != 1:
+        raise ValueError(f"в парах разные судьи: {sorted(names)}")
+    [(name_a, name_b)] = names
+    lines = [
+        "# Расхождения судей: ручная разметка",
+        "",
+        f"Разметка автора — `{marks_file}`; A — {name_a}, B — {name_b}, рубрика "
+        f"`{JUDGE_PROMPT}`. Разметка слепая: вердиктов, комментариев и имён судей "
+        "в файле не было. Утверждения выбраны поровну из «не подтверждено только "
+        f"у A» и «только у B», до {PER_SIDE} с каждой стороны в каждом режиме, "
+        "сид фиксирован.",
+        "",
+        "| Режим | утверждений | автор согласен с A | с B |",
+        "|---|---|---|---|",
+    ]
+    for mode in [*sorted({d.mode for d in disputed}), "всего"]:
+        rows = [d for d in disputed if mode in ("всего", d.mode)]
+        with_a = sum(d.author == d.a for d in rows)
+        lines.append(f"| {mode} | {len(rows)} | {with_a} | {len(rows) - with_a} |")
+    lines += [
+        "",
+        "| «Не подтверждено» только у | утверждений | автор тоже «нет» |",
+        "|---|---|---|",
+    ]
+    for title, side in (
+        (f"A — {name_a}", [d for d in disputed if not d.a]),
+        (f"B — {name_b}", [d for d in disputed if not d.b]),
+    ):
+        lines.append(f"| {title} | {len(side)} | {sum(not d.author for d in side)} |")
+    lines += ["", "## Утверждения", ""]
+    for d in disputed:
+        lines.append(
+            f"- {d.mode} · {d.case_id}, прогон {d.run + 1}, утверждение {d.statement}: "
+            f"«{d.text}» — автор {_yes_no(d.author)}, A {_yes_no(d.a)}, "
+            f"B {_yes_no(d.b)}"
+        )
+        lines.append(f"  - A: {d.comment_a}")
+        lines.append(f"  - B: {d.comment_b}")
+        if d.note:
+            lines.append(f"  - автор: {d.note}")
+    return "\n".join(lines) + "\n"
+
+
+def _load_pairs(pairs: Sequence[Sequence[Path]]) -> list[Pair]:
+    return [
+        (
+            json.loads(a.read_text(encoding="utf-8")),
+            json.loads(b.read_text(encoding="utf-8")),
+        )
+        for a, b in pairs
+    ]
+
+
+def _pair_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pair",
+        nargs=2,
+        type=Path,
+        action="append",
+        required=True,
+        metavar=("A", "B"),
+        help="сырые данные двух судей на одних ответах; по паре на режим",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.manual", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -166,7 +386,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     score = commands.add_parser("score", help="сравнить разметку автора с судьёй")
     score.add_argument("marks", type=Path)
     score.add_argument("raw", type=Path)
+    pick = commands.add_parser(
+        "disagreements", help="расхождения двух судей для слепой разметки"
+    )
+    _pair_argument(pick)
+    pick.add_argument(
+        "--out", type=Path, default=REPORTS_DIR / "raw" / "judges-manual.yaml"
+    )
+    score_pick = commands.add_parser(
+        "score-disagreements", help="с кем из двух судей согласен автор"
+    )
+    score_pick.add_argument("marks", type=Path)
+    _pair_argument(score_pick)
     args = parser.parse_args(argv)
+
+    if args.command == "disagreements":
+        items = disagreements(_load_pairs(args.pair))
+        args.out.write_text(DISAGREEMENTS_HEADER + dump(items), encoding="utf-8")
+        print(f"разметьте {len(items)} утверждений: {args.out}")
+        return 0
+    if args.command == "score-disagreements":
+        pairs = _load_pairs(args.pair)
+        marks = yaml.safe_load(args.marks.read_text(encoding="utf-8"))
+        disputed = score_disagreements(marks, pairs)
+        report = REPORTS_DIR / f"{args.marks.stem}.md"
+        report.write_text(
+            render_disagreements(disputed, pairs, marks_file=str(args.marks)),
+            encoding="utf-8",
+        )
+        with_a = sum(d.author == d.a for d in disputed)
+        print(f"автор согласен с A в {with_a} из {len(disputed)}, отчёт: {report}")
+        return 0
 
     raw = json.loads(args.raw.read_text(encoding="utf-8"))
     if args.command == "sample":
