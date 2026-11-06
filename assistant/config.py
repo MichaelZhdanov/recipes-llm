@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     llm_effort: LlmEffort = "medium"
     # Режим по умолчанию выберет сравнение always и auto в eval этапа 3.
     answer_mode: AnswerMode = "always"
+    # Проверка ответа Sonnet перед отправкой и одна доработка Haiku (review.py).
+    answer_review: bool = True
     gigachat_api_key: SecretStr = SecretStr("")
     gigachat_scope: GigaChatScope = "GIGACHAT_API_PERS"
     gigachat_api_url: str = GIGACHAT_API_URL

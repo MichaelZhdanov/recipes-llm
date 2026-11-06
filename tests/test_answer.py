@@ -23,6 +23,8 @@ from assistant.generation.gigachat import (
     Usage,
 )
 from assistant.generation.prompt import load_prompt
+from assistant.generation.review import Reviewer
+from assistant.generation.revise import Reviser
 from assistant.retrieval.embeddings import Embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
@@ -555,3 +557,86 @@ def test_auto_keeps_numbers_of_earlier_recipes(retriever: Retriever) -> None:
     numbers = {s.chunk.recipe_id: s.number for s in result.trace.sources}
     assert numbers[COOKIES.recipe_id] == 1
     assert numbers[CHICKEN.recipe_id] > 1
+
+
+class ReviewLlm:
+    """Проверяющая или дорабатывающая модель: ответы заготовками по очереди."""
+
+    def __init__(self, replies: list[dict[str, object]]) -> None:
+        self.replies = [json.dumps(r, ensure_ascii=False) for r in replies]
+        self.calls = 0
+        self.stats = LlmStats()
+
+    def chat(self, messages: Sequence[Message], **_: object) -> Completion:
+        self.calls += 1
+        return Completion(self.replies.pop(0), "stop", "m", Usage(1, 1, 0, 2))
+
+
+def reviewed_answer(
+    retriever: Retriever,
+    sonnet: list[dict[str, object]],
+    haiku: list[dict[str, object]],
+) -> AnswerResult:
+    probe = ask(
+        retriever, FakeLlm({"status": "not_found", "message": "", "statements": []})
+    )
+    content = {
+        "status": "answer",
+        "message": "🍗 Вот что нашлось:",
+        "statements": [
+            {
+                "text": "🍗 Нужны курица и рис.",
+                "citations": [
+                    {
+                        "source": source_number(probe, CHICKEN.recipe_id),
+                        "quote": CHICKEN_QUOTE,
+                    }
+                ],
+            }
+        ],
+    }
+    answerer = Answerer(
+        retriever,
+        FakeLlm(content),
+        model="claude-haiku-5-5",
+        ref="v3.4.2",
+        k=3,
+        reviewer=Reviewer(ReviewLlm(sonnet)),
+        reviser=Reviser(ReviewLlm(haiku), model="claude-haiku-5-5"),
+    )
+    return answerer.answer("курица рис")
+
+
+def test_reviewed_answer_goes_to_the_user_when_all_is_fine(
+    retriever: Retriever,
+) -> None:
+    yes: dict[str, object] = {
+        "statements": [
+            {"number": n, "comment": "ок", "supported": True} for n in (1, 2)
+        ]
+    }
+
+    result = reviewed_answer(retriever, [yes], [])
+
+    assert result.answer.status == "answer"
+    assert result.answer.message == "🍗 Вот что нашлось:"
+    assert [s.text for s in result.answer.statements] == ["🍗 Нужны курица и рис."]
+    assert result.trace.review is not None and result.trace.review.flagged == []
+
+
+def test_nothing_left_after_review_is_not_found_with_suggestions(
+    retriever: Retriever,
+) -> None:
+    no: dict[str, object] = {
+        "statements": [{"number": 1, "comment": "нет", "supported": False}]
+    }
+    drop: dict[str, object] = {
+        "statements": [{"number": 1, "drop": True, "text": "", "citations": []}]
+    }
+
+    result = reviewed_answer(retriever, [no], [drop])
+
+    assert result.answer.status == "not_found"
+    assert result.answer.reason == "review_out"
+    assert result.answer.sources  # что может пригодиться
+    assert "подтверждают рецепты" in render_markdown(result.answer)

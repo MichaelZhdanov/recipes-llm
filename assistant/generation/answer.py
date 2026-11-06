@@ -29,6 +29,7 @@
 бы подогнать его под набор.
 """
 
+import dataclasses
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -48,6 +49,7 @@ from assistant.generation.citations import (
     check_answer,
     numbers_in,
 )
+from assistant.generation.claude import Claude
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
@@ -58,6 +60,9 @@ from assistant.generation.gigachat import (
 )
 from assistant.generation.llm import llm_model, make_chat_model
 from assistant.generation.prompt import load_prompt
+from assistant.generation.review import EFFORT as REVIEW_EFFORT
+from assistant.generation.review import Review, Reviewer, review_answer
+from assistant.generation.revise import Reviser
 from assistant.indexing.chunks import Chunk
 from assistant.indexing.dataset import recipe_ids_in
 from assistant.retrieval.embeddings import make_embedder
@@ -102,6 +107,8 @@ Reason = Literal[
     "blacklist",
     "length",
     "no_sources",
+    # Проверка Sonnet не подтвердила ни одного утверждения и после доработки.
+    "review_out",
 ]
 
 
@@ -155,6 +162,8 @@ class Trace:
     args: SearchArgs | None = None
     # Все поиски модели в режиме auto (в always — один, тот же, что args).
     searches: tuple[SearchArgs, ...] = ()
+    # Проверка ответа перед отправкой (review.py); None — проверки не было.
+    review: Review | None = None
 
 
 @dataclass(frozen=True)
@@ -392,6 +401,8 @@ class Answerer:
         prompt_version: str | None = None,
         k: int = K,
         clock: Callable[[], float] = time.perf_counter,
+        reviewer: Reviewer | None = None,
+        reviser: Reviser | None = None,
     ) -> None:
         self.model = model
         self.mode = mode
@@ -406,12 +417,56 @@ class Answerer:
         # Словарь ингредиентов индекса: им разбирают вопрос в обоих режимах.
         self._vocabulary = retriever.vocabulary()
         self._planner = SearchPlanner(llm, model=model, vocabulary=self._vocabulary)
+        # Проверка перед отправкой: оба или ни одного.
+        self._reviewer = reviewer
+        self._reviser = reviser
 
     def answer(self, question: str, history: Sequence[Message] = ()) -> AnswerResult:
         """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога."""
         history = list(history)[-HISTORY_LIMIT:]
         if self.mode == "auto":
-            return self._answer_auto(question, history)
+            return self._reviewed(question, self._answer_auto(question, history))
+        return self._reviewed(question, self._answer_always(question, history))
+
+    def _reviewed(self, question: str, result: AnswerResult) -> AnswerResult:
+        """Sonnet проверяет ответ; «нет» — один раз Haiku на доработку (review.py)."""
+        if self._reviewer is None or self._reviser is None:
+            return result
+        if result.answer.status != "answer":
+            return result
+        trace = result.trace
+        review = review_answer(
+            question,
+            trace.sources,
+            [s for s in trace.checked if s.kept],
+            result.answer.message,
+            self._reviewer,
+            self._reviser,
+            self._clock,
+        )
+        trace = dataclasses.replace(trace, review=review)
+        if not review.final:
+            answer = result.answer.model_copy(
+                update={
+                    "status": "not_found",
+                    "reason": "review_out",
+                    "message": "",
+                    "statements": [],
+                    "sources": suggestions(trace.hits),
+                }
+            )
+            return AnswerResult(answer=answer, trace=trace)
+        statements, links = build_statements(review.final, trace.sources)
+        answer = result.answer.model_copy(
+            update={
+                "statements": statements,
+                "sources": links,
+                "message": result.answer.message if review.intro_kept else "",
+            }
+        )
+        return AnswerResult(answer=answer, trace=trace)
+
+    def _answer_always(self, question: str, history: list[Message]) -> AnswerResult:
         started = self._clock()
         args = self._planner.plan(question, history)
         hits = self._retriever.search(args.query, k=self._k, conditions=args.conditions)
@@ -517,6 +572,7 @@ _REASON_TEXT: dict[Reason, str] = {
     "blacklist": "Модель не стала отвечать на этот вопрос",
     "length": "Не получилось собрать ответ: он не уместился в лимит модели",
     "format_error": "Не получилось собрать ответ: модель ответила не по формату",
+    "review_out": "Не нашёл ответа, который подтверждают рецепты",
 }
 
 
@@ -566,10 +622,24 @@ def make_answerer(
     embedder = make_embedder(settings, embeddings_http)
     llm = make_chat_model(settings, llm_http)
     retriever = Retriever(VectorStore(qdrant), embedder, ref=settings.dataset_revision)
+    reviewer = reviser = None
+    if settings.answer_review:
+        # Проверяет Sonnet с effort high тем же ключом Anthropic; дорабатывает
+        # та же модель, что отвечала.
+        checker = Claude(
+            api_key=settings.anthropic_api_key,
+            api_url=settings.anthropic_api_url,
+            client=llm_http,
+            effort=REVIEW_EFFORT,
+        )
+        reviewer = Reviewer(checker)
+        reviser = Reviser(llm, model=llm_model(settings))
     return Answerer(
         retriever,
         llm,
         model=llm_model(settings),
         ref=settings.dataset_revision,
         mode=settings.answer_mode,
+        reviewer=reviewer,
+        reviser=reviser,
     )
