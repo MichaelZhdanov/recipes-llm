@@ -67,6 +67,14 @@ from assistant.indexing.chunks import Chunk
 from assistant.indexing.dataset import recipe_ids_in
 from assistant.retrieval.embeddings import make_embedder
 from assistant.retrieval.search import Retriever
+from assistant.retrieval.stock import (
+    NEAR_CANDIDATES,
+    Stock,
+    known_stock,
+    near_conditions,
+    near_hits,
+    strict_conditions,
+)
 from assistant.retrieval.store import Hit, VectorStore
 from assistant.security.pii import mask_pii
 from assistant.tools.search_recipes import (
@@ -88,7 +96,8 @@ from assistant.tools.search_recipes import (
 # рецепты» («к вину» — не блюдо на вине) и проверка утверждения по пунктам с
 # самопроверкой: закономерности ошибок писателя на эталонном наборе
 # (evals/reports/2026-11-07-writer-errors.md).
-PROMPT_VERSION = "recipes_v4"
+# v5 (этап 6): блок <stock> — что есть дома; чего не хватает, показывает код.
+PROMPT_VERSION = "recipes_v5"
 AUTO_PROMPT_VERSION = "recipes_auto_v3"
 # «Модель решает»: сколько поисков за один вопрос, потом — ответ без функций.
 MAX_SEARCHES = 3
@@ -157,6 +166,12 @@ class Answer(BaseModel):
     escalation: Escalation | None = None
     # Пользователь назвал аллергию: канал добавит предупреждение (решение 66).
     allergy: bool = False
+    # Подбор по складу (этап 6): чего не хватает рецепту в расширенном поиске,
+    # recipe_id → продукты; считает код по строкам рецепта.
+    missing: dict[int, list[str]] = {}
+    # Строгий подбор: есть рецепты, которым не хватает 1–4 продуктов, — канал
+    # предложит расширенный поиск.
+    near_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,6 +193,25 @@ class Trace:
     # Первая попытка, если её рецепты оказались не по вопросу и ассистент искал
     # заново (Answerer._researched); None — нового поиска не было.
     first: Trace | None = None
+    # Склад, по которому подбирали (этап 6); None — подбор по всем рецептам.
+    stock: Stock | None = None
+
+
+@dataclass(frozen=True)
+class StockRequest:
+    """Подбор «из того, что есть»: названия продуктов со склада (Grocy);
+    near — расширенный поиск, где не хватает 1–4 продуктов."""
+
+    names: tuple[str, ...]
+    near: bool = False
+
+
+@dataclass(frozen=True)
+class StockHits:
+    hits: list[Hit]
+    stock: Stock
+    missing: dict[int, list[str]]
+    near_available: bool
 
 
 @dataclass(frozen=True)
@@ -220,18 +254,24 @@ def prepare_sources(
     ]
 
 
-def user_message(question: str, sources: Sequence[SourceText]) -> str:
-    """Рецепты и вопрос."""
+def user_message(
+    question: str, sources: Sequence[SourceText], stock: Sequence[str] = ()
+) -> str:
+    """Рецепты и вопрос; stock — что есть у пользователя дома (этап 6)."""
     # Название рецепта — первая строка текста, в атрибуты оно не идёт: это
     # текст с сайта, и только text проходит маскирование и экранирование.
     blocks = [f'<recipe id="{s.number}">\n{s.text}\n</recipe>' for s in sources]
-    return "\n\n".join(
-        [
-            "Рецепты:",
-            "\n\n".join(blocks) if blocks else "(ничего не нашлось)",
-            f"Вопрос пользователя: {question}",
-        ]
-    )
+    parts = [
+        "Рецепты:",
+        "\n\n".join(blocks) if blocks else "(ничего не нашлось)",
+    ]
+    if stock:
+        # Имена — из словаря индекса (retrieval/stock.py): из блока тегом не выйти.
+        parts.append(
+            "Что есть у пользователя дома:\n<stock>\n" + "\n".join(stock) + "\n</stock>"
+        )
+    parts.append(f"Вопрос пользователя: {question}")
+    return "\n\n".join(parts)
 
 
 def add_sources(
@@ -507,15 +547,17 @@ class Answerer:
         question: str,
         history: Sequence[Message] = (),
         progress: Progress | None = None,
+        stock: StockRequest | None = None,
     ) -> AnswerResult:
         """Ответ с учётом до HISTORY_LIMIT прошлых реплик диалога.
 
-        progress — для канала: вызывается в начале каждой стадии."""
+        progress — для канала: вызывается в начале каждой стадии. stock —
+        подбор «из того, что есть» (этап 6): только в режиме «всегда ищем»."""
         history = list(history)[-HISTORY_LIMIT:]
-        if self.mode == "auto":
+        if self.mode == "auto" and stock is None:
             result = self._answer_auto(question, history, progress)
         else:
-            result = self._answer_always(question, history, progress)
+            result = self._answer_always(question, history, progress, stock=stock)
         return self._reviewed(question, history, result, progress)
 
     def _reviewed(
@@ -620,6 +662,7 @@ class Answerer:
         *,
         note: str = "",
         skip: Sequence[int] = (),
+        stock: StockRequest | None = None,
     ) -> AnswerResult:
         """note и skip — для нового поиска после проверки (`_researched`)."""
         _notify(progress, "search")
@@ -631,8 +674,13 @@ class Answerer:
         shown = earlier_recipe_ids(history)
         # «А ещё?» — уже показанные рецепты не ищутся и не подмешиваются.
         skip = [*skip, *shown] if args.other else list(skip)
-        hits = self._retriever.search_all(
-            args.all_queries, k=self._k, conditions=args.conditions, skip=skip
+        found = self._stock_hits(args, skip, stock) if stock else None
+        hits = (
+            found.hits
+            if found
+            else self._retriever.search_all(
+                args.all_queries, k=self._k, conditions=args.conditions, skip=skip
+            )
         )
         earlier = (
             []
@@ -648,7 +696,12 @@ class Answerer:
                 [
                     {"role": "system", "content": load_prompt(self.prompt_version)},
                     *history,
-                    {"role": "user", "content": user_message(question, sources)},
+                    {
+                        "role": "user",
+                        "content": user_message(
+                            question, sources, found.stock.names if found else ()
+                        ),
+                    },
                 ],
                 model=self.model,
                 temperature=DETERMINISTIC_TEMPERATURE,
@@ -659,7 +712,7 @@ class Answerer:
                     "strict": True,
                 },
             )
-        return assemble(
+        result = assemble(
             hits,
             sources,
             completion,
@@ -669,6 +722,52 @@ class Answerer:
             generation_seconds=self._clock() - retrieved if completion else 0.0,
             args=args,
         )
+        if found is None:
+            return result
+        answer = result.answer.model_copy(
+            update={
+                "missing": {
+                    link.recipe_id: found.missing[link.recipe_id]
+                    for link in result.answer.sources
+                    if link.recipe_id in found.missing
+                },
+                "near_available": found.near_available,
+            }
+        )
+        return AnswerResult(
+            answer, dataclasses.replace(result.trace, stock=found.stock)
+        )
+
+    def _stock_hits(
+        self, args: SearchArgs, skip: Sequence[int], request: StockRequest
+    ) -> StockHits:
+        """Подбор по складу: строгий (всё со склада) или расширенный (не хватает
+        1–4). В строгом заодно проверяется, есть ли что предложить расширенным."""
+        stock = known_stock(request.names, self._vocabulary)
+        near = near_hits(
+            self._retriever.search_all(
+                args.all_queries,
+                k=NEAR_CANDIDATES,
+                conditions=near_conditions(args.conditions, stock),
+                skip=skip,
+            ),
+            stock,
+            limit=self._k,
+        )
+        if request.near:
+            return StockHits(
+                [hit for hit, _ in near],
+                stock,
+                {hit.chunk.recipe_id: list(lacking) for hit, lacking in near},
+                near_available=False,
+            )
+        strict = self._retriever.search_all(
+            args.all_queries,
+            k=self._k,
+            conditions=strict_conditions(args.conditions, stock),
+            skip=skip,
+        )
+        return StockHits(strict, stock, {}, near_available=bool(near))
 
     def _escalated(self, args: SearchArgs, seconds: float) -> AnswerResult:
         answer = Answer(

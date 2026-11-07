@@ -260,7 +260,7 @@ def test_prompt_has_system_rules_recipes_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="курица с рисом")
 
     system, user = llm.calls[0]
-    assert PROMPT_VERSION == "recipes_v4"
+    assert PROMPT_VERSION == "recipes_v5"
     assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert '<recipe id="1">\nКурица с рисом в духовке\n' in user["content"]
@@ -953,3 +953,57 @@ def test_allergy_is_an_ordinary_answer_with_a_flag(retriever: Retriever) -> None
     assert result.answer.status != "escalate" and result.answer.escalation is None
     assert result.answer.allergy is True
     assert result.trace.hits
+
+
+def ask_stock(
+    retriever: Retriever, llm: FakeLlm, names: tuple[str, ...], *, near: bool = False
+) -> AnswerResult:
+    from assistant.generation.answer import StockRequest
+
+    answerer = Answerer(retriever, llm, model="m", ref="v3.4.2", k=3)
+    return answerer.answer(
+        "что приготовить", stock=StockRequest(names=names, near=near)
+    )
+
+
+CHICKEN_ANSWER = {
+    "status": "answer",
+    "message": "",
+    "statements": [
+        {
+            "text": "Курица с рисом в духовке",
+            "citations": [{"source": 1, "quote": CHICKEN_QUOTE}],
+        }
+    ],
+}
+
+
+def test_stock_strict_finds_whole_recipes_and_shows_the_stock_to_the_model(
+    retriever: Retriever,
+) -> None:
+    """Всё со склада или базовое (соль): курица с рисом — да, остальное — нет."""
+    llm = FakeLlm(CHICKEN_ANSWER)
+
+    result = ask_stock(retriever, llm, ("Курица", "рис", "лук репчатый", "чужое"))
+
+    assert [h.chunk.recipe_id for h in result.trace.hits] == [CHICKEN.recipe_id]
+    assert result.answer.missing == {} and not result.answer.near_available
+    assert result.trace.stock is not None and result.trace.stock.dropped == ("чужое",)
+    _, user = llm.calls[0]
+    assert "<stock>\nкурица\nрис\nлук репчатый\n</stock>" in user["content"]
+
+
+def test_stock_near_lists_what_is_missing_and_strict_offers_it(
+    retriever: Retriever,
+) -> None:
+    strict = ask_stock(
+        retriever,
+        FakeLlm({"status": "not_found", "message": "", "statements": []}),
+        ("курица", "рис"),
+    )
+    near = ask_stock(retriever, FakeLlm(CHICKEN_ANSWER), ("курица", "рис"), near=True)
+
+    # Целиком из склада — ничего (не хватает лука), но есть что предложить.
+    assert strict.trace.hits == [] and strict.answer.near_available
+    assert near.answer.status == "answer"
+    assert near.answer.missing == {CHICKEN.recipe_id: ["лук репчатый"]}
