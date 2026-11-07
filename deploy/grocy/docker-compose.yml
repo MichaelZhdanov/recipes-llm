@@ -9,7 +9,7 @@ services:
   grocy:
     # Официальный grocy/grocy-docker в архиве с 2026-02; неизменяемый тег
     # сборки, а не 4.7.1 — тот пересобирается каждую неделю.
-    image: lscr.io/linuxserver/grocy:v4.7.1-ls346
+    image: lscr.io/linuxserver/grocy:v4.7.1-ls348
     restart: unless-stopped
     # Логи веб-сервера Grocy: json-file по умолчанию не ограничен.
     logging:
