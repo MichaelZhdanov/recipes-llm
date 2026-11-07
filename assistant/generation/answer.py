@@ -47,6 +47,7 @@ from assistant.generation.citations import (
     ModelAnswer,
     SourceText,
     check_answer,
+    foreign_links,
     numbers_in,
 )
 from assistant.generation.claude import Claude
@@ -129,6 +130,9 @@ Reason = Literal[
 # finish_reason GigaChat, у которых есть своя причина; остальные (function_call,
 # error) значат, что ответ не по формату.
 _FINISH_REASONS: dict[str, Reason] = {"blacklist": "blacklist", "length": "length"}
+# Реплика вместо болтовни модели, которую нельзя показать (чужая ссылка) или
+# которая пуста: пустое сообщение Telegram не отправит.
+CHAT_FALLBACK = "Я подбираю рецепты из povarenok.ru — напишите, что хотите приготовить."
 
 
 class SourceLink(BaseModel):
@@ -380,17 +384,21 @@ def check_completion(completion: Completion, sources: Sequence[SourceText]) -> C
         parsed = ModelAnswer.model_validate_json(completion.content)
     except ValidationError:
         return Checked([], "format_error")
+    # Текст модели без цитат: ссылку в нём проверить нечем, кроме списка
+    # разрешённых (citations.foreign_links). С чужой ссылкой текст не идёт.
+    safe = parsed.message.strip()
+    if foreign_links(safe, sources):
+        safe = ""
     if parsed.status == "chat":
-        return Checked([], None, chat=True, message=parsed.message)
+        return Checked([], None, chat=True, message=safe or CHAT_FALLBACK)
     if parsed.status == "not_found":
-        return Checked([], "model_not_found", message=parsed.message)
+        return Checked([], "model_not_found", message=safe)
     checked = check_answer(parsed, sources)
     if not any(s.kept for s in checked):
         return Checked(checked, "filtered_out")
     # Вступление — живая фраза без фактов о рецептах. Число в нём проверить
     # нечем (цитат у вступления нет), поэтому такое вступление код убирает.
-    intro = parsed.message.strip()
-    return Checked(checked, None, message="" if numbers_in(intro) else intro)
+    return Checked(checked, None, message="" if numbers_in(safe) else safe)
 
 
 def assemble(

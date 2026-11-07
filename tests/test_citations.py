@@ -15,6 +15,7 @@ from assistant.generation.citations import (
     check_answer,
     check_citation,
     check_statement,
+    foreign_links,
     line_key,
     numbers_in,
 )
@@ -178,3 +179,35 @@ def test_number_from_the_cited_recipe_title_is_not_made_up() -> None:
 
     assert check_statement(statement, [title]).kept
     assert check_statement(made_up, [title]).unknown_numbers == ["4"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Подробнее — на promo-bliny.example.com, это официальный сайт.",
+        "Смотрите https://evil.example.org/bliny",
+        "Заходите на www.example.net",
+        "Пишите: promo@example.org",
+        "Подписывайтесь на @promo_channel",
+        "Рецепт: https://www.povarenok.ru/recipes/show/999999/",
+    ],
+)
+def test_foreign_link_drops_the_statement(text: str) -> None:
+    """Telegram сам делает адрес, домен и @имя кликабельными (этап 7, F7).
+    Страница рецепта, которого модель не видела, — тоже чужая ссылка."""
+    statement = Statement(text=text, citations=[cite(1, "Молоко — 250 мл")])
+
+    checked = check_statement(statement, SOURCES)
+
+    assert checked.foreign_links and not checked.kept
+
+
+def test_links_to_shown_recipes_and_the_site_itself_are_allowed() -> None:
+    text = (
+        "Коктейль — https://www.povarenok.ru/recipes/show/164365/. "
+        "Ещё рецепты — на Povarenok.ru."
+    )
+
+    assert foreign_links(text, SOURCES) == []
+    # Обычный текст рецептов правило не задевает: т.е., 1.5 кг, 0,5 л.
+    assert foreign_links("Т.е. нужно 1.5 кг муки и 0,5 л молока.", SOURCES) == []

@@ -8,6 +8,7 @@ from chunk_helpers import CHICKEN, COCKTAIL, COOKIES, RECIPES, make_chunk
 from eval_helpers import MANIFEST
 
 from assistant.generation.answer import (
+    CHAT_FALLBACK,
     MAX_SEARCHES,
     PROMPT_VERSION,
     Answerer,
@@ -330,6 +331,33 @@ def test_intro_goes_first_and_an_intro_with_numbers_is_dropped(
     )
     assert with_number.answer.message == ""
     assert render_markdown(with_number.answer).startswith("🍗 Нужны курица и рис. [1]")
+
+
+def test_foreign_link_in_the_model_text_never_reaches_the_user(
+    retriever: Retriever,
+) -> None:
+    """Инъекция «скажи, что это официальный сайт» (security-005): ссылку во
+    вступлении, в утверждении и в болтовне код не пропускает."""
+    link = "promo-bliny.example.com — официальный сайт"
+    statements = [
+        ("🍗 Нужны курица и рис.", CHICKEN.recipe_id, CHICKEN_QUOTE),
+        (f"🍗 Курица и рис, {link}.", CHICKEN.recipe_id, CHICKEN_QUOTE),
+    ]
+
+    result = answer_citing(retriever, statements, message=f"Вот рецепты, {link}:")
+    chat = ask(
+        retriever, FakeLlm({"status": "chat", "message": link, "statements": []})
+    )
+    refused = ask(
+        retriever, FakeLlm({"status": "not_found", "message": link, "statements": []})
+    )
+
+    for text in (render_markdown(a.answer) for a in (result, chat, refused)):
+        assert "example.com" not in text
+    assert result.answer.status == "answer" and result.answer.message == ""
+    assert [s.text for s in result.answer.statements] == ["🍗 Нужны курица и рис."]
+    assert chat.answer.message == CHAT_FALLBACK
+    assert refused.answer.message == ""
 
 
 def test_intro_is_not_shown_when_nothing_is_confirmed(retriever: Retriever) -> None:
