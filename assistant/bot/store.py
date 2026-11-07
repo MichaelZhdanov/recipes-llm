@@ -15,7 +15,11 @@
   чата одно — это гарантирует уникальный индекс, а не код: пока оно открыто,
   сообщения чата идут человеку, ассистент молчит. Состояние в базе, поэтому
   переживает перезапуск бота. `last_at` — последнее сообщение в любую
-  сторону: обращение без сообщений TICKET_IDLE закрывается само.
+  сторону: обращение без сообщений TICKET_IDLE закрывается само;
+- `grocy` — склад Grocy (этап 6): включён ли он у чата и откуда искать в
+  текущем разговоре («из того, что есть» или «по всем рецептам») — выбор
+  привязан к сессии, новый разговор спрашивает заново; `pending` — вопрос,
+  который ждёт этого выбора.
 
 Одно соединение на процесс под замком: запросы короткие, а бот отвечает
 из нескольких потоков.
@@ -35,11 +39,13 @@ from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
 TicketStatus = Literal["open", "closed"]
+# Откуда искать рецепты при включённом Grocy: из того, что есть, или по всем.
+Source = Literal["stock", "all"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -69,7 +75,8 @@ CREATE TABLE IF NOT EXISTS answers (
     vote TEXT CHECK (vote IN ('up', 'down')),
     vote_reason TEXT CHECK (vote_reason IN ('unclear', 'wrong', 'failed')),
     created_at REAL NOT NULL,
-    voted_at REAL
+    voted_at REAL,
+    question TEXT
 );
 CREATE TABLE IF NOT EXISTS pages (
     url TEXT PRIMARY KEY,
@@ -98,6 +105,17 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE UNIQUE INDEX IF NOT EXISTS tickets_open_chat ON tickets (chat_id)
     WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS tickets_thread ON tickets (thread_id);
+CREATE TABLE IF NOT EXISTS grocy (
+    chat_id INTEGER PRIMARY KEY,
+    enabled INTEGER NOT NULL,
+    source TEXT CHECK (source IN ('stock', 'all')),
+    session_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS pending (
+    chat_id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -154,6 +172,10 @@ class Store:
         if "last_at" not in columns:
             self._db.execute("ALTER TABLE tickets ADD COLUMN last_at REAL")
         self._db.execute("UPDATE tickets SET last_at = opened_at WHERE last_at IS NULL")
+        # 4 → 5: вопрос ответа — для расширенного поиска по складу.
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(answers)")}
+        if "question" not in columns:
+            self._db.execute("ALTER TABLE answers ADD COLUMN question TEXT")
 
     def close(self) -> None:
         self._db.close()
@@ -230,11 +252,13 @@ class Store:
         model: str,
         recipe_ids: Sequence[int],
         seconds: float,
+        question: str = "",
     ) -> int:
+        """question — без ПДн (маскируется): по нему расширенный поиск по складу."""
         with self._lock, self._db:
             cursor = self._db.execute(
                 "INSERT INTO answers (chat_id, status, reason, model, recipe_ids, seconds, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "created_at, question) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     chat_id,
                     status,
@@ -243,9 +267,19 @@ class Store:
                     json.dumps(list(recipe_ids)),
                     seconds,
                     self._clock(),
+                    mask_pii(question).text if question else None,
                 ),
             )
             return int(cursor.lastrowid or 0)
+
+    def question_of(self, answer_id: int, chat_id: int) -> str | None:
+        """Вопрос ответа этого чата; None — чужой, неизвестный или без вопроса."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT question FROM answers WHERE id = ? AND chat_id = ?",
+                (answer_id, chat_id),
+            ).fetchone()
+        return None if row is None or row[0] is None else str(row[0])
 
     def set_message_id(self, answer_id: int, message_id: int) -> None:
         with self._lock, self._db:
@@ -382,6 +416,63 @@ class Store:
                 (vote, ticket_id, chat_id),
             )
             return cursor.rowcount == 1
+
+    # --- Склад Grocy: включение, выбор на разговор, вопрос в ожидании ---
+
+    def grocy_enabled(self, chat_id: int) -> bool:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT enabled FROM grocy WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+        return row is not None and bool(row[0])
+
+    def set_grocy(self, chat_id: int, enabled: bool) -> None:
+        """Включить или выключить; выбор источника в разговоре сбрасывается."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO grocy (chat_id, enabled) VALUES (?, ?) ON CONFLICT (chat_id) "
+                "DO UPDATE SET enabled = excluded.enabled, source = NULL, session_id = NULL",
+                (chat_id, int(enabled)),
+            )
+
+    def source(self, chat_id: int) -> Source | None:
+        """Откуда искать в текущем разговоре; None — ещё не выбрано (или новый разговор)."""
+        with self._lock:
+            session = self._session(chat_id, create=False)
+            row = self._db.execute(
+                "SELECT source, session_id FROM grocy WHERE chat_id = ? AND enabled = 1",
+                (chat_id,),
+            ).fetchone()
+        if row is None or session is None or row[1] != session or row[0] is None:
+            return None
+        return "stock" if row[0] == "stock" else "all"
+
+    def set_source(self, chat_id: int, source: Source) -> None:
+        """Выбор — на текущий разговор (сессию): новый разговор спросит заново."""
+        with self._lock, self._db:
+            session = self._session(chat_id, create=True)
+            self._db.execute(
+                "UPDATE grocy SET source = ?, session_id = ? WHERE chat_id = ?",
+                (source, session, chat_id),
+            )
+
+    def save_pending(self, chat_id: int, question: str) -> None:
+        """Вопрос ждёт выбора источника (без ПДн, как в истории)."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO pending (chat_id, question, created_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (chat_id) DO UPDATE SET question = excluded.question, "
+                "created_at = excluded.created_at",
+                (chat_id, mask_pii(question).text, self._clock()),
+            )
+
+    def pop_pending(self, chat_id: int) -> str | None:
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT question FROM pending WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            self._db.execute("DELETE FROM pending WHERE chat_id = ?", (chat_id,))
+        return None if row is None else str(row[0])
 
     # --- Кэши ---
 

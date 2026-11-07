@@ -210,3 +210,84 @@ def test_database_without_last_at_is_migrated(tmp_path: Path) -> None:
 
     assert [t.id for t in db.idle_tickets(800)] == [1]
     assert db.idle_tickets(1000) == []
+
+
+# --- Склад Grocy ---
+
+
+def test_grocy_choice_lives_in_the_conversation_and_resets_on_toggle() -> None:
+    clock = Clock()
+    db = store(clock)
+    assert not db.grocy_enabled(7) and db.source(7) is None
+
+    db.set_grocy(7, True)
+    db.set_source(7, "stock")
+    db.add_turn(7, "что на ужин", "…")
+    assert db.grocy_enabled(7) and db.source(7) == "stock"
+
+    db.reset(7)  # /new — новый разговор: спросить заново
+    assert db.source(7) is None
+    db.set_source(7, "all")
+    clock.now += SESSION_TIMEOUT + 1  # 30 минут тишины — тоже новый
+    assert db.source(7) is None
+    db.set_source(7, "stock")
+    db.set_grocy(7, False)
+    assert not db.grocy_enabled(7) and db.source(7) is None
+
+
+def test_pending_question_is_taken_once_and_masked() -> None:
+    db = store(Clock())
+
+    db.save_pending(7, "что на ужин? мой тел. +7 916 123-45-67")
+    question = db.pop_pending(7)
+
+    assert question is not None and question.startswith("что на ужин?")
+    assert "916" not in question
+    assert db.pop_pending(7) is None
+
+
+def test_answer_keeps_its_question_for_the_extended_search() -> None:
+    db = store(Clock())
+    answer_id = db.save_answer(
+        7,
+        status="answer",
+        reason=None,
+        model="m",
+        recipe_ids=[],
+        seconds=1,
+        question="ужин",
+    )
+
+    assert db.question_of(answer_id, 7) == "ужин"
+    assert db.question_of(answer_id, 8) is None
+
+
+def test_answers_without_question_column_are_migrated(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "bot.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE answers (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
+        "message_id INTEGER, status TEXT NOT NULL, reason TEXT, model TEXT NOT NULL, "
+        "recipe_ids TEXT NOT NULL, seconds REAL NOT NULL, vote TEXT, vote_reason TEXT, "
+        "created_at REAL NOT NULL, voted_at REAL);"
+        "INSERT INTO answers (chat_id, status, model, recipe_ids, seconds, created_at) "
+        "VALUES (7, 'answer', 'm', '[]', 1, 1);"
+    )
+    old.commit()
+    old.close()
+
+    db = Store(path)
+
+    assert db.question_of(1, 7) is None
+    new = db.save_answer(
+        7,
+        status="answer",
+        reason=None,
+        model="m",
+        recipe_ids=[],
+        seconds=1,
+        question="суп",
+    )
+    assert db.question_of(new, 7) == "суп"
