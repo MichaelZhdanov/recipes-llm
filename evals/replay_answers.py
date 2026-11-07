@@ -24,7 +24,7 @@ import httpx2
 from qdrant_client import QdrantClient
 
 from assistant.config import Settings
-from assistant.generation.answer import Answerer
+from assistant.generation.answer import PROMPT_VERSION, Answerer
 from assistant.generation.gigachat import DETERMINISTIC_TEMPERATURE, Message
 from assistant.generation.llm import llm_model, make_chat_model, make_http_client
 from assistant.retrieval.embeddings import make_embedder
@@ -86,6 +86,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="только N кейсов поровну из категорий (сид как в make eval)",
     )
     parser.add_argument("--label", required=True, help="суффикс имени отчёта")
+    parser.add_argument(
+        "--prompt",
+        default=PROMPT_VERSION,
+        help="версия промпта ответа: сравнить две на одном разборе (recipes_v5 / v6)",
+    )
     args = parser.parse_args(argv)
 
     raw = json.loads(args.raw.read_text(encoding="utf-8"))
@@ -117,9 +122,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             ref=settings.dataset_revision,
             k=args.k,
             planner=SavedPlanner(plans),
+            prompt_version=args.prompt,
         )
         print(
-            f"повтор ответа: {model}, effort {args.effort or 'по умолчанию'}, k={args.k}, "
+            f"повтор ответа: {model}, {args.prompt}, effort {args.effort or 'по умолчанию'}, k={args.k}, "
             f"{len(cases)} кейсов, разбор из {args.raw.name}",
             file=sys.stderr,
             flush=True,
