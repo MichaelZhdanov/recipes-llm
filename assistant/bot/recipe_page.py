@@ -13,8 +13,12 @@
 в `img src`. Разбор — парсером, без модели: текст и фото берутся как есть.
 
 У старых рецептов (проверено на 22811 и 5841, 2026-11-07) пошаговой разметки
-нет: сразу после заголовка `<h2>Рецепт «…»:</h2>` идёт один `<div>`, где шаги —
+нет: после заголовка `<h2>Рецепт «…»:</h2>` идёт один `<div>`, где шаги —
 абзацы через `<br /><br />`, без фото. Тогда шаг — абзац, фото у шагов нет.
+Между заголовком и абзацами бывают видео (`div.video-bl`) и пустой список
+шагов `<ul itemprop="recipeInstructions"></ul>` — их парсер пропускает.
+Выборка 300 живых страниц (2026-11-07): 77 % — шаги с фото, 17 % — абзацы,
+4 % — абзацы после видео, 0,7 % — после пустого списка.
 Фото бот скачивает сам и отдаёт Telegram файлом: по ссылке Telegram
 забирает картинки povarenok через раз («failed to get HTTP URL content»).
 """
@@ -66,13 +70,23 @@ class _PageParser(HTMLParser):
         self._heading: list[str] = []
         self._after_heading = False
         self._text_depth = 0
+        # Блок видео между заголовком и абзацами — пропускается целиком.
+        self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
-        if self._after_heading:
-            # Решает первый элемент после заголовка: <ul> шагов — новый формат,
-            # <div> — старый, абзацами.
-            self._after_heading = False
+        if self._skip_depth:
+            if tag == "div":
+                self._skip_depth += 1
+            return
+        if self._after_heading and not self._in_instructions:
+            # Решает первый элемент после заголовка (кроме видео): <ul> шагов —
+            # новый формат, <div> — старый, абзацами.
+            if tag == "div" and "video-bl" in (attr.get("class") or "").split():
+                self._skip_depth = 1
+                return
+            is_list = tag == "ul" and attr.get("itemprop") == "recipeInstructions"
+            self._after_heading = is_list
             if tag == "div" and not self.steps:
                 self._text_depth = 1
                 return
@@ -108,6 +122,10 @@ class _PageParser(HTMLParser):
             self._heading.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if self._skip_depth:
+            if tag == "div":
+                self._skip_depth -= 1
+            return
         if self._text_depth:
             if tag == "div":
                 self._text_depth -= 1
@@ -120,6 +138,8 @@ class _PageParser(HTMLParser):
         elif tag == "ul" and self._in_instructions:
             self._close_step()
             self._in_instructions = False
+            # Пустой список шагов сразу после заголовка — абзацы могут идти за ним.
+            self._after_heading = self._after_heading and not self.steps
 
     def _close_paragraph(self) -> None:
         """Абзац старого формата — шаг без фото; пустые (между <br>) — пропуск."""

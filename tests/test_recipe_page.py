@@ -84,6 +84,35 @@ def test_old_recipes_without_step_markup_give_paragraphs_as_steps() -> None:
     ]
 
 
+def test_paragraphs_after_a_video_or_an_empty_step_list_are_still_found() -> None:
+    """Выборка 300 живых страниц: 4 % — видео между заголовком и абзацами,
+    0,7 % — пустой <ul itemprop="recipeInstructions"></ul> перед ними."""
+    heading = "<h2>Рецепт &laquo;Суп&raquo;:</h2>"
+    video = (
+        '<div class="video-bl"><div class="video-wrapper">'
+        '<iframe src="https://www.youtube.com/embed/x"></iframe></div></div>'
+    )
+    expected = parse_page(OLD_PAGE).steps
+
+    with_video = OLD_PAGE.replace(heading, heading + video)
+    empty_list = OLD_PAGE.replace(
+        heading, heading + '<ul itemprop="recipeInstructions"> </ul>'
+    )
+    # Видео-рецепт: после ролика пустой <div> — шагов текстом на странице нет.
+    video_only = with_video.replace(
+        OLD_PAGE[
+            OLD_PAGE.index("<div>Грибы") : OLD_PAGE.index("Приятного аппетита!</div>")
+            + 25
+        ],
+        "<div></div>",
+    )
+
+    assert len(expected) == 3
+    assert parse_page(with_video).steps == expected
+    assert parse_page(empty_list).steps == expected
+    assert parse_page(video_only).steps == []
+
+
 def test_only_a_div_right_after_the_recipe_heading_is_taken_as_steps() -> None:
     # Другой заголовок перед <div> — не шаги (описание, ингредиенты, теги).
     other = OLD_PAGE.replace("<h2>Рецепт &laquo;Суп&raquo;:</h2>", "<h2>Советы:</h2>")
