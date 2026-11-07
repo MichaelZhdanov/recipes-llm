@@ -58,7 +58,7 @@ from assistant.generation.answer import (
     StockRequest,
     Trace,
 )
-from assistant.generation.gigachat import Message
+from assistant.generation.gigachat import LlmError, Message
 from assistant.generation.steps import Status, Steps
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.embeddings import EmbeddingError
@@ -255,6 +255,18 @@ def test_failure_of_a_dependency_leaves_history_untouched(
     assert reply.text == ERROR_TEXT
     assert reply.buttons == [] and reply.answer_id is None
     assert service.store.history(7) == []
+
+
+def test_error_text_with_a_secret_never_reaches_the_user() -> None:
+    """Ловушка: адрес Bot API содержит токен, и текст сетевой ошибки может его
+    повторить. Пользователь видит только заготовленный текст, в логе — `***`."""
+    answerer = FakeAnswerer(
+        error=LlmError(f"нет ответа от https://api.telegram.org/bot{TOKEN}/getMe")
+    )
+
+    reply = make_service(answerer).ask(7, "блины")
+
+    assert reply.text == ERROR_TEXT and TOKEN not in reply.text
 
 
 def test_reset_forgets_the_conversation() -> None:

@@ -12,6 +12,7 @@ from bot_helpers import FakeTelegram, press, update
 from assistant.bot.app import Handlers, build_dispatcher, make_bot
 from assistant.bot.format import (
     ASK_AGAIN_TEXT,
+    GONE_TEXT,
     GROCY_ALREADY_OFF_TEXT,
     GROCY_ALREADY_ON_TEXT,
     GROCY_OFF_TEXT,
@@ -176,6 +177,23 @@ def test_strict_answer_offers_near_and_near_lists_what_is_missing() -> None:
     question, request = answerer.calls[-1]
     assert question == "что испечь" and request is not None and request.near
     assert "🛒 Не хватает: мука пшеничная, сахар" in near.text
+
+
+def test_forged_near_button_with_another_chats_answer_reveals_nothing() -> None:
+    """Ловушка: клиент Telegram может прислать любые callback_data (Bot API
+    предупреждает об этом). Чужой ответ — «уже не найти», модель не вызывается."""
+    answerer = RecordingAnswerer(answer(near_available=True))
+    bot_service = service(answerer)
+    bot_service.connect_grocy(USER)
+    bot_service.ask(USER, "что испечь")
+    strict = bot_service.choose_source(USER, "stock")
+    assert strict.answer_id is not None
+    calls = len(answerer.calls)
+
+    forged = bot_service.near(USER + 1, strict.answer_id)
+
+    assert forged.text == GONE_TEXT and forged.answer_id is None
+    assert len(answerer.calls) == calls
 
 
 def test_grocy_down_is_said_honestly_and_search_goes_over_all_recipes() -> None:
