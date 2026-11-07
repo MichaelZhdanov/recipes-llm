@@ -98,12 +98,15 @@ gaps: ## пробелы базы: с чем бот не справился [ARGS
 test: ## unit-тесты (pytest)
 	uv run pytest
 
-# Правила алертов проверяет promtool из того же образа Prometheus, что в стеке.
+# Правила алертов проверяет promtool из того же образа Prometheus, что в стеке:
+# тег и digest берутся из docker-compose.yml, второй копии нет.
+PROMETHEUS_IMAGE = $(shell grep -m1 -oE 'docker\.io/prom/prometheus:[^[:space:]]+' docker-compose.yml)
+
 alerts-test: ## тесты правил алертов Prometheus (promtool)
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool \
-		docker.io/prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
+		$(PROMETHEUS_IMAGE) check config /etc/prometheus/prometheus.yml
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool \
-		docker.io/prom/prometheus:v3.15.1 test rules /etc/prometheus/alerts_test.yml
+		$(PROMETHEUS_IMAGE) test rules /etc/prometheus/alerts_test.yml
 
 lint: ## ruff check, ruff format --check, mypy, shellcheck
 	uv run ruff check .

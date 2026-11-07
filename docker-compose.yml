@@ -55,9 +55,12 @@ x-settings: &settings
   JOURNAL_KEY: ${JOURNAL_KEY:-}
   LOG_LEVEL: ${LOG_LEVEL:-}
 
+# Сторонние образы — тег и digest (тег@sha256:…): Docker скачивает ровно этот
+# digest, даже если автор образа перезальёт тег; тег — для человека. Digest —
+# индекс образа (все платформы): сервер берёт из него linux/amd64, Mac — arm64.
 services:
   qdrant:
-    image: docker.io/qdrant/qdrant:v1.20.0
+    image: docker.io/qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
     restart: unless-stopped
     logging: *logging
     ports:
@@ -129,7 +132,7 @@ services:
   # решение 80); Alertmanager — профиль alerts, только на сервере: он пишет в
   # настоящую группу операторов (решение 81). Конфиги — observability/.
   prometheus:
-    image: docker.io/prom/prometheus:v3.15.1
+    image: docker.io/prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
@@ -148,7 +151,7 @@ services:
       - "127.0.0.1:9090:9090"
 
   grafana:
-    image: docker.io/grafana/grafana:13.3.0
+    image: docker.io/grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
@@ -173,7 +176,7 @@ services:
       - "127.0.0.1:3000:3000"
 
   alertmanager:
-    image: docker.io/prom/alertmanager:v0.34.2
+    image: docker.io/prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b
     profiles: [alerts]
     restart: unless-stopped
     logging: *logging
@@ -193,7 +196,7 @@ services:
   # нет: поэтому — только адрес моста docker0, из интернета он не виден.
   # Prometheus ходит туда через host-gateway (= docker0).
   node-exporter:
-    image: docker.io/prom/node-exporter:v1.12.1
+    image: docker.io/prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     profiles: [host]
     restart: unless-stopped
     logging: *logging
@@ -230,7 +233,7 @@ services:
   # только когда заданы оба домена (deploy.sh). Единственные публичные порты
   # стека: 80 — проверка домена Let's Encrypt и редирект, 443 — HTTPS.
   caddy:
-    image: docker.io/library/caddy:2.11.9
+    image: docker.io/library/caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0
     profiles: [tls]
     restart: unless-stopped
     logging: *logging

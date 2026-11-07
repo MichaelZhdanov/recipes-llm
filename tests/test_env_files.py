@@ -5,6 +5,7 @@
 `.env.example` пустые.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -292,3 +293,34 @@ def test_services_from_our_image_check_their_own_health() -> None:
     for name in long_running:
         assert "healthcheck" in services[name], name
     assert "9109/metrics" in str(services["hostlog"]["healthcheck"]["test"])
+
+
+def test_third_party_images_are_pinned_by_tag_and_digest() -> None:
+    """Сторонний образ — `тег@sha256:…`: Docker скачивает ровно этот digest,
+    даже если автор образа перезальёт тег. Наши сервисы собираются из Dockerfile."""
+    composes = [load_compose(), load_grocy_compose()]
+    images = [
+        (name, service["image"])
+        for compose in composes
+        for name, service in compose["services"].items()
+        if not service.get("build")
+    ]
+
+    assert len(images) == 7
+    for name, image in images:
+        assert re.fullmatch(
+            r"[a-z0-9.]+/[a-z0-9./-]+:[\w.-]+@sha256:[0-9a-f]{64}", image
+        ), (
+            name,
+            image,
+        )
+
+
+def test_alerts_test_uses_the_prometheus_image_from_compose() -> None:
+    """promtool в make alerts-test — из того же образа, что Prometheus в стеке:
+    Makefile берёт ссылку из docker-compose.yml, своей копии digest у него нет."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert not re.search(r"prometheus:v\d", makefile)
+    assert "$(PROMETHEUS_IMAGE) check config" in makefile
+    assert "$(PROMETHEUS_IMAGE) test rules" in makefile
