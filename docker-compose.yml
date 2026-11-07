@@ -4,9 +4,9 @@
 # Каждый сервис получает только свои переменные через environment, без env_file.
 # Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот,
 # observability — Prometheus и Grafana, alerts — Alertmanager → Telegram,
-# tls — Caddy с HTTPS для Grafana и Grocy; Qdrant — всегда. Локально по
-# умолчанию api, на сервере deploy.sh включает bot,observability,alerts и
-# tls, если заданы домены.
+# tls — Caddy с HTTPS для Grafana и Grocy, host — метрики самого сервера;
+# Qdrant — всегда. Локально по умолчанию api, на сервере deploy.sh включает
+# bot,observability,alerts,host и tls, если заданы домены.
 # Публичные порты — только у Caddy (80, 443), остальные — на 127.0.0.1.
 # Склад Grocy — отдельный compose-проект (deploy/grocy/, на сервере /opt/grocy):
 # ассистент и бот видят его через внешнюю docker-сеть grocy.
@@ -140,6 +140,9 @@ services:
     volumes:
       - ./observability/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
+    # node_exporter слушает мост docker0 хоста: имя host.docker.internal — его адрес.
+    extra_hosts:
+      - host.docker.internal:host-gateway
     ports:
       - "127.0.0.1:9090:9090"
 
@@ -181,6 +184,25 @@ services:
       - alertmanager-data:/alertmanager
     # Токен бота и id группы — файлами в /run/secrets, не в конфиге.
     secrets: [telegram_bot_token, escalation_chat_id]
+
+  # --- Состояние самого сервера (профиль host, только на сервере) ---
+  # node_exporter — как в его README: сеть и процессы хоста, корень хоста —
+  # только на чтение; так видны CPU, память, диск и трафик сервера, а не
+  # контейнера. В сети хоста он слушал бы 0.0.0.0:9100, а файрвола на сервере
+  # нет: поэтому — только адрес моста docker0, из интернета он не виден.
+  # Prometheus ходит туда через host-gateway (= docker0).
+  node-exporter:
+    image: docker.io/prom/node-exporter:v1.12.1
+    profiles: [host]
+    restart: unless-stopped
+    logging: *logging
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=172.17.0.1:9100
+    volumes:
+      - /:/host:ro,rslave
 
   # HTTPS для Grafana и Grocy (решение 82) — профиль tls, только на сервере и
   # только когда заданы оба домена (deploy.sh). Единственные публичные порты

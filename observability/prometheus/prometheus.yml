@@ -29,3 +29,16 @@ scrape_configs:
       - names: [assistant]
         type: A
         port: 8080
+  # Своя статистика Grafana, в том числе неудачные входы
+  # (grafana_authn_authn_failed_login_total).
+  - job_name: grafana
+    dns_sd_configs:
+      - names: [grafana]
+        type: A
+        port: 3000
+  # Сервер: node_exporter в сети хоста на мосту docker0 (профиль host, только
+  # на сервере). Имя — из /etc/hosts контейнера (extra_hosts), а DNS SD /etc/hosts
+  # не читает: поэтому static_configs. Локально цели нет — она «down».
+  - job_name: node
+    static_configs:
+      - targets: [host.docker.internal:9100]

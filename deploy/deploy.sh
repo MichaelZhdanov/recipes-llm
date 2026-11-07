@@ -65,7 +65,7 @@ main() {
     echo "== стек"
     # HTTPS для Grafana и Grocy (Caddy, решение 82) — только когда в .env оба
     # домена: их пишет set_env.py из переменных Actions.
-    local profiles=bot,observability,alerts
+    local profiles=bot,observability,alerts,host
     if [[ -n "$(env_value GRAFANA_DOMAIN)" && -n "$(env_value GROCY_DOMAIN)" ]]; then
         profiles="$profiles,tls"
     else

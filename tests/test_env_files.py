@@ -228,9 +228,32 @@ def test_only_caddy_is_public_and_it_proxies_grafana_and_grocy() -> None:
     assert caddy["image"].startswith("docker.io/library/caddy:2.")
     assert sorted(caddy["ports"]) == ["443:443", "80:80"]
     assert "grocy" in caddy["networks"]
-    assert "{$GRAFANA_DOMAIN} {\n\treverse_proxy grafana:3000" in caddyfile
+    assert (
+        "{$GRAFANA_DOMAIN} {\n" in caddyfile
+        and "\treverse_proxy grafana:3000" in caddyfile
+    )
     assert "{$GROCY_DOMAIN} {\n\treverse_proxy grocy:80" in caddyfile
     grafana = services["grafana"]["environment"]
     assert (
         grafana["GF_SERVER_ROOT_URL"] == "${GRAFANA_DOMAIN:+https://${GRAFANA_DOMAIN}/}"
     )
+
+
+def test_node_exporter_sees_the_host_but_listens_only_on_docker0() -> None:
+    """Сеть хоста — чтобы видеть трафик сервера; без файрвола 0.0.0.0:9100 был
+    бы открыт в интернет, поэтому — только мост docker0 (172.17.0.1)."""
+    services = load_compose()["services"]
+    node = services["node-exporter"]
+
+    assert node["profiles"] == ["host"]
+    assert node["network_mode"] == "host" and node["pid"] == "host"
+    assert "--web.listen-address=172.17.0.1:9100" in node["command"]
+    assert node["volumes"] == ["/:/host:ro,rslave"]
+    assert "host.docker.internal:host-gateway" in services["prometheus"]["extra_hosts"]
+    prometheus = (ROOT / "observability/prometheus/prometheus.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "targets: [host.docker.internal:9100]" in prometheus
+    # Публичный /metrics Grafana закрыт: метрики читает только Prometheus.
+    caddyfile = (ROOT / "deploy/caddy/Caddyfile").read_text(encoding="utf-8")
+    assert "respond /metrics 404" in caddyfile
