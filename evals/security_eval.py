@@ -36,12 +36,12 @@ from qdrant_client import QdrantClient
 
 from assistant.bot.escalation import wants_human
 from assistant.bot.format import HANDOFF_TEXT, answer_html
-from assistant.bot.logs import secrets_of
 from assistant.config import Settings
 from assistant.generation.answer import AnswerResult, make_answerer
 from assistant.generation.citations import ModelAnswer, foreign_links
 from assistant.generation.cloudru import cost_rub
 from assistant.generation.llm import llm_model, make_http_client
+from assistant.logs import secrets_of
 from evals.answer_metrics import Rate
 from evals.dataset import Case, load_cases
 from evals.retrieval_metrics import fits, history

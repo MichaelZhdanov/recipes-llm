@@ -43,7 +43,6 @@ from assistant.bot.format import (
     WHAT_WRONG_TEXT,
 )
 from assistant.bot.health import fresh
-from assistant.bot.logs import MASK, RedactingFormatter, secrets_of
 from assistant.bot.pages import PageChecker
 from assistant.bot.recipe_page import RecipePage, Step
 from assistant.bot.service import STEPS_VERSION, BotService
@@ -61,6 +60,7 @@ from assistant.generation.answer import (
 from assistant.generation.gigachat import LlmError, Message
 from assistant.generation.steps import Status, Steps
 from assistant.indexing.chunks import Chunk
+from assistant.logs import MASK, RedactingFormatter, secrets_of
 from assistant.retrieval.embeddings import EmbeddingError
 
 TOKEN = "42:TEST-secret-token"

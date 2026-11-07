@@ -3,8 +3,8 @@
 import asyncio
 
 from assistant.bot.app import run
-from assistant.bot.logs import setup_logging
 from assistant.config import Settings
+from assistant.logs import setup_logging
 
 
 def main() -> None:

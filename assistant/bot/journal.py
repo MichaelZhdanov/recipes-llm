@@ -10,7 +10,7 @@
   всего около 10 цифр;
 - вопрос — после mask_pii и не длиннее QUESTION_CHARS;
 - значения секретов вычищает тот же форматтер, что у обычного лога
-  (`logs.py`): последняя линия, сам журнал секретов не пишет.
+  (`assistant/logs.py`): последняя линия, сам журнал секретов не пишет.
 
 Строки уходят в stdout логгером `journal` без префиксов, их собирает Docker
 (ротация — `x-logging` в docker-compose.yml). Обычный лог остаётся для
@@ -27,10 +27,10 @@ from datetime import UTC, datetime
 
 from pydantic import SecretStr
 
+from assistant.logs import JOURNAL as LOGGER
 from assistant.security.pii import mask_pii
 from assistant.tools.search_recipes import SearchArgs
 
-LOGGER = "journal"
 QUESTION_CHARS = 300
 PSEUDONYM_CHARS = 12
 

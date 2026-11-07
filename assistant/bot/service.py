@@ -270,7 +270,7 @@ class BotService:
             )
         except DEPENDENCY_ERRORS as error:
             # Текст ошибки — код HTTP и ответ API, без вопроса пользователя;
-            # секреты из лога вычищает форматтер (logs.py).
+            # секреты из лога вычищает форматтер (assistant/logs.py).
             logger.error("ассистент не ответил: %s: %s", type(error).__name__, error)
             self._journal(record, None, "error", error=type(error).__name__)
             return FAILURE_REPLY if self.operators else ERROR_REPLY

@@ -1,4 +1,4 @@
-"""Логи бота: секреты вычищаются из каждой записи.
+"""Логи бота и HTTP API: секреты вычищаются из каждой записи.
 
 Токен бота входит в адрес каждого запроса к Bot API
 (`https://api.telegram.org/bot<токен>/…`): текст сетевой ошибки или
@@ -11,10 +11,11 @@ import logging
 
 from pydantic import SecretStr
 
-from assistant.bot.journal import LOGGER as JOURNAL
 from assistant.config import Settings
 
 FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+# Логгер журнала событий бота (bot/journal.py): свой обработчик без префиксов.
+JOURNAL = "journal"
 MASK = "***"
 
 

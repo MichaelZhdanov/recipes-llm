@@ -11,8 +11,7 @@ import pytest
 from chunk_helpers import CHICKEN, COCKTAIL
 from pydantic import SecretStr
 
-from assistant.bot.journal import LOGGER, QUESTION_CHARS, Journal
-from assistant.bot.logs import MASK, setup_logging
+from assistant.bot.journal import QUESTION_CHARS, Journal
 from assistant.bot.pages import PageChecker
 from assistant.bot.service import BotService
 from assistant.bot.store import Store
@@ -27,6 +26,7 @@ from assistant.generation.answer import (
     Trace,
 )
 from assistant.generation.gigachat import LlmError, Message
+from assistant.logs import JOURNAL, MASK, setup_logging
 from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import Hit
 from assistant.tools.search_recipes import SearchArgs
@@ -208,8 +208,8 @@ def test_journal_lines_are_plain_json_with_secrets_masked(
         err = capsys.readouterr().err
     finally:
         root.handlers, root.level = saved
-        logging.getLogger(LOGGER).handlers = []
-        logging.getLogger(LOGGER).propagate = True
+        logging.getLogger(JOURNAL).handlers = []
+        logging.getLogger(JOURNAL).propagate = True
 
     (line,) = err.splitlines()
     assert token not in line
