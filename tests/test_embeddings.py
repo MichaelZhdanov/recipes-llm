@@ -143,6 +143,7 @@ def test_auth_error_is_clear_and_does_not_leak_key(status: int) -> None:
     with pytest.raises(EmbeddingError, match=f"HTTP {status}") as error:
         make(fake).embed_query("x")
 
+    assert error.value.status == status
     # 403 бывает, когда ключ из одного кабинета, а адрес от другого.
     assert "VOYAGE_API_URL" in str(error.value)
     assert "ai.mongodb.com" in str(error.value)

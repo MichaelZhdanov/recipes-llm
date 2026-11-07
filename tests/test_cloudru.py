@@ -107,8 +107,11 @@ def test_personal_data_is_masked_before_the_request() -> None:
 def test_no_money_error_explains_the_balance() -> None:
     llm = client(FakeCloudRu(status=402))
 
-    with pytest.raises(LlmError, match="нет рублей"):
+    with pytest.raises(LlmError, match="нет рублей") as error:
         llm.chat(MESSAGES, model="z-ai/glm-5.3-flash", temperature=1e-4, max_tokens=10)
+
+    # Код HTTP — в самой ошибке: по нему метрики видят «кончились рубли».
+    assert error.value.status == 402
 
 
 def test_empty_key_is_an_error_before_any_request() -> None:

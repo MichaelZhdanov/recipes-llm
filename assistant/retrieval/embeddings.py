@@ -45,7 +45,15 @@ class Embedder(Protocol):
 
 
 class EmbeddingError(RuntimeError):
-    pass
+    """Ошибка API эмбеддингов; status — код HTTP ответа API, если ошибка из-за него.
+
+    По коду метрики и журнал отличают «кончились рубли» (402, 403 «Project
+    not found» у cloud.ru) от остальных сбоев, не разбирая текст.
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -224,7 +232,7 @@ class HttpEmbedder:
             hint = self.provider.hints.get(response.status_code)
             if hint:
                 message += f". {hint}"
-            raise EmbeddingError(message)
+            raise EmbeddingError(message, status=response.status_code)
         data = response.json()
         items = sorted(data["data"], key=lambda item: item["index"])
         if len(items) != len(inputs):

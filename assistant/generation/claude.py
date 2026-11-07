@@ -225,7 +225,7 @@ class Claude:
             sleep=self._sleep,
         )
         if response.status_code != 200:
-            raise LlmError(self._error(response, model))
+            raise LlmError(self._error(response, model), status=response.status_code)
         completion = _completion(response.json(), model)
         self.stats.add(completion.usage)
         return completion
