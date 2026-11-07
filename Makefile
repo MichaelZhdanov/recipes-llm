@@ -31,6 +31,8 @@ up: .env ## поднять стек: Qdrant, профили из COMPOSE_PROFILE
 	@docker compose ps --format '{{.Service}}: {{.Status}}'
 	@echo "HTTP API:   http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (профиль api)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
+	@echo "Grafana:    http://localhost:3000 (профиль observability; admin / GRAFANA_ADMIN_PASSWORD из .env)"
+	@echo "Prometheus: http://localhost:9090 (профиль observability)"
 
 down: ## остановить стек (данные в томах Docker сохраняются)
 	docker compose down

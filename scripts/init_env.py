@@ -27,6 +27,8 @@ GENERATED_SECRETS: dict[str, int] = {
     "GROCY_ADMIN_PASSWORD": 24,
     # Ключ псевдонимов журнала бота: с сервера не уходит.
     "JOURNAL_KEY": 32,
+    # Пароль admin в Grafana (профиль observability).
+    "GRAFANA_ADMIN_PASSWORD": 24,
 }
 
 

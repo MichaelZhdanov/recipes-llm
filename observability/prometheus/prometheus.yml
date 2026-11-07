@@ -1,0 +1,18 @@
+# Prometheus стека Recipes LLM (этап 8, F8). Цели — по DNS-именам сервисов
+# compose: если сервис не поднят (локально нет бота, на сервере нет HTTP
+# API), цели просто нет, а не «упала».
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: bot
+    dns_sd_configs:
+      - names: [bot]
+        type: A
+        port: 9108
+  - job_name: api
+    dns_sd_configs:
+      - names: [assistant]
+        type: A
+        port: 8080

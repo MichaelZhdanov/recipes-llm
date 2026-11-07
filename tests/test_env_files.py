@@ -144,3 +144,47 @@ def test_ports_are_published_only_on_localhost() -> None:
     for name, service in services.items():
         for port in service.get("ports", []):
             assert port.startswith("127.0.0.1:"), f"{name}: {port}"
+
+
+def test_observability_runs_in_its_profiles_with_pinned_images_and_local_ports() -> (
+    None
+):
+    """Prometheus и Grafana — профиль observability (решение 80); образы —
+    точной версией, порты — только 127.0.0.1."""
+    services = load_compose()["services"]
+
+    assert services["prometheus"]["profiles"] == ["observability"]
+    assert services["grafana"]["profiles"] == ["observability"]
+    for name in ("prometheus", "grafana"):
+        image = services[name]["image"]
+        assert ":" in image and not image.endswith(":latest"), image
+        for port in services[name].get("ports", []):
+            assert port.startswith("127.0.0.1:"), port
+    # Порта метрик бота на хосте нет: Prometheus читает его из docker-сети.
+    assert "ports" not in services["bot"]
+
+
+def test_dashboard_queries_only_metrics_the_code_exports() -> None:
+    """Опечатка в имени метрики — пустая панель без ошибки: сверяем с кодом."""
+    import json
+    import re
+
+    from prometheus_client import generate_latest
+
+    from assistant.generation.gigachat import LlmStats
+    from assistant.metrics import Metrics, UsageStats
+    from assistant.retrieval.embeddings import EmbeddingStats
+
+    usage = UsageStats("m", LlmStats(), "e", EmbeddingStats())
+    exported = generate_latest(Metrics(usage=lambda: usage).registry).decode()
+    names = set(re.findall(r"^# TYPE (\w+) ", exported, flags=re.M))
+    known = names | {f"{n}_total" for n in names} | {f"{n}_bucket" for n in names}
+    dashboard = json.loads(
+        (ROOT / "observability/grafana/dashboards/recipes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    exprs = [t["expr"] for p in dashboard["panels"] for t in p["targets"]]
+
+    used = {m for e in exprs for m in re.findall(r"\b(recipes_\w+)", e)}
+    assert used and used <= known, used - known

@@ -2,8 +2,9 @@
 # Значения ${...} compose берёт из .env в этой папке.
 # Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
 # Каждый сервис получает только свои переменные через environment, без env_file.
-# Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот; Qdrant —
-# всегда. Локально по умолчанию api, на сервере deploy.sh включает только bot.
+# Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот,
+# observability — Prometheus и Grafana; Qdrant — всегда. Локально по
+# умолчанию api, на сервере deploy.sh включает bot,observability.
 # Склад Grocy — отдельный compose-проект (deploy/grocy/, на сервере /opt/grocy):
 # ассистент и бот видят его через внешнюю docker-сеть grocy.
 name: recipes-llm
@@ -119,12 +120,55 @@ services:
       - ${GROCY_DIR:-./data/grocy}/config:/grocy
     networks: [grocy]
 
+  # --- Наблюдаемость (этап 8, F8) ---
+  # Prometheus и Grafana — профиль observability (на сервере и локально,
+  # решение 80). Конфиги — observability/.
+  prometheus:
+    image: docker.io/prom/prometheus:v3.15.1
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Хранить 15 дней: хватит увидеть неделю к неделе, диск — мегабайты.
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: docker.io/grafana/grafana:13.2.4
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      # Пароль admin действует при первом запуске (пустая база Grafana);
+      # генерирует scripts/init_env.py.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      # Только с этой машины; на сервере — ssh -L 3000:127.0.0.1:3000.
+      - "127.0.0.1:3000:3000"
+
 volumes:
   qdrant-data:
   bot-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   # Общая сеть со складом Grocy (его compose — deploy/grocy/). Её создаёт make up.
   grocy:
     name: grocy
     external: true
+

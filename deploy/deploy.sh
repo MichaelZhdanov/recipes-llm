@@ -54,10 +54,11 @@ main() {
     # На сервере — только бот: HTTP API наружу не нужен (решение автора 53).
     # Склад Grocy — отдельный проект в /opt/grocy (решение автора): make up
     # кладёт туда его compose, поднимает и наполняет демо-складом; секреты Grocy
-    # генерирует сам. Переменные перекрывают значения из .env сервера. API от
-    # прошлых деплоев останавливается.
+    # генерирует сам. Prometheus и Grafana — на сервере (решение 80).
+    # Переменные перекрывают значения из .env сервера. API от прошлых деплоев
+    # останавливается.
     echo "== стек"
-    export COMPOSE_PROFILES=bot GROCY_DIR=/opt/grocy
+    export COMPOSE_PROFILES=bot,observability GROCY_DIR=/opt/grocy
     docker compose rm --stop --force assistant
     make --no-print-directory up
 

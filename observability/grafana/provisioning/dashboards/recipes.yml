@@ -1,0 +1,11 @@
+# Дашборды из файлов: правка — в observability/grafana/dashboards/*.json и
+# коммит, а не клики в интерфейсе (изменения в интерфейсе не сохранятся).
+apiVersion: 1
+providers:
+  - name: recipes
+    folder: Recipes LLM
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
