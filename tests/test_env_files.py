@@ -199,20 +199,29 @@ def test_dashboard_queries_only_metrics_the_code_exports() -> None:
     from prometheus_client import generate_latest
 
     from assistant.generation.gigachat import LlmStats
+    from assistant.hostlog import HostLogMetrics
     from assistant.metrics import Metrics, UsageStats
     from assistant.retrieval.embeddings import EmbeddingStats
 
     usage = UsageStats("m", LlmStats(), "e", EmbeddingStats())
-    exported = generate_latest(Metrics(usage=lambda: usage).registry).decode()
-    names = set(re.findall(r"^# TYPE (\w+) ", exported, flags=re.M))
-    known = names | {f"{n}_total" for n in names} | {f"{n}_bucket" for n in names}
-    dashboard = json.loads(
-        (ROOT / "observability/grafana/dashboards/recipes.json").read_text(
-            encoding="utf-8"
+    exported = "".join(
+        generate_latest(registry).decode()
+        for registry in (
+            Metrics(usage=lambda: usage).registry,
+            HostLogMetrics().registry,
         )
     )
+    names = set(re.findall(r"^# TYPE (\w+) ", exported, flags=re.M))
+    known = names | {f"{n}_total" for n in names} | {f"{n}_bucket" for n in names}
+    dashboards = sorted((ROOT / "observability/grafana/dashboards").glob("*.json"))
+    assert [d.name for d in dashboards] == ["recipes.json", "server.json"]
     rules = (ROOT / "observability/prometheus/alerts.yml").read_text(encoding="utf-8")
-    exprs = [t["expr"] for p in dashboard["panels"] for t in p["targets"]] + [rules]
+    exprs = [rules] + [
+        t["expr"]
+        for d in dashboards
+        for p in json.loads(d.read_text(encoding="utf-8"))["panels"]
+        for t in p["targets"]
+    ]
 
     used = {m for e in exprs for m in re.findall(r"\b(recipes_\w+)", e)}
     assert used and used <= known, used - known
