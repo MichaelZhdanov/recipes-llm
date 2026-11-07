@@ -73,3 +73,49 @@ tests:
             exp_annotations:
               summary: "Склад Grocy недоступен"
               description: "Бот не смог прочитать склад и ищет по всем рецептам. Проверьте /opt/grocy (docker compose ps)."
+
+  - interval: 1m
+    input_series:
+      # Диск на 95 % — 10 минут «for», затем алерт.
+      - series: 'node_filesystem_avail_bytes{mountpoint="/", fstype="ext4", device="/dev/vda2", job="node"}'
+        values: "5x20"
+      - series: 'node_filesystem_size_bytes{mountpoint="/", fstype="ext4", device="/dev/vda2", job="node"}'
+        values: "100x20"
+      # 40 неудачных входов SSH в минуту: 400 за 10 минут.
+      - series: 'recipes_ssh_logins_total{result="failed", job="hostlog"}'
+        values: "0+40x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DiskAlmostFull
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DiskAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: warning, mountpoint: "/", fstype: ext4, device: /dev/vda2, job: node}
+            exp_annotations:
+              summary: "Диск сервера занят больше чем на 90 %"
+              description: "На / свободно меньше 10 %: скоро Qdrant, Prometheus и логи перестанут писать. Что занимает место — docker system df и du -sh /var/lib/docker/*."
+      - eval_time: 12m
+        alertname: SshLoginSpike
+        exp_alerts:
+          - exp_labels: {severity: warning, result: failed, job: hostlog}
+            exp_annotations:
+              summary: "Всплеск неудачных входов по SSH"
+              description: "Больше 300 неудачных входов по SSH за 10 минут: массовый перебор паролей с многих адресов. fail2ban банит каждый после 5 попыток; надёжная защита — вход только по ключу (PasswordAuthentication no)."
+
+  - interval: 1m
+    input_series:
+      # Обычный фон: 5 в минуту — 50 за 10 минут, молчим; диск на 50 %.
+      - series: 'recipes_ssh_logins_total{result="failed", job="hostlog"}'
+        values: "0+5x20"
+      - series: 'node_filesystem_avail_bytes{mountpoint="/", fstype="ext4", job="node"}'
+        values: "50x20"
+      - series: 'node_filesystem_size_bytes{mountpoint="/", fstype="ext4", job="node"}'
+        values: "100x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SshLoginSpike
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiskAlmostFull
+        exp_alerts: []

@@ -42,3 +42,25 @@ groups:
         annotations:
           summary: "Склад Grocy недоступен"
           description: "Бот не смог прочитать склад и ищет по всем рецептам. Проверьте /opt/grocy (docker compose ps)."
+
+      - alert: DiskAlmostFull
+        expr: >
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Диск сервера занят больше чем на 90 %"
+          description: "На / свободно меньше 10 %: скоро Qdrant, Prometheus и логи перестанут писать. Что занимает место — docker system df и du -sh /var/lib/docker/*."
+
+      - alert: SshLoginSpike
+        # В среднем ≈ 42 неудачных входа за 10 минут (6 004 в сутки, 2026-11-07):
+        # порог — примерно семь средних. fail2ban банит адрес после 5 попыток,
+        # всплеск значит перебор с очень многих адресов.
+        expr: increase(recipes_ssh_logins_total{result="failed"}[10m]) > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: "Всплеск неудачных входов по SSH"
+          description: "Больше 300 неудачных входов по SSH за 10 минут: массовый перебор паролей с многих адресов. fail2ban банит каждый после 5 попыток; надёжная защита — вход только по ключу (PasswordAuthentication no)."
