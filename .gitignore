@@ -4,6 +4,7 @@ QUESTIONS.md
 PLAN.md
 
 # Секреты
+*.pass
 .env
 # SSH-ключи деплоя: приватный ключ живёт только в секрете GitHub DEPLOY_SSH_KEY
 /deploy/deploy.key
