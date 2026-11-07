@@ -15,6 +15,7 @@ from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
 from assistant.generation.answer import (
+    Answerer,
     AnswerResult,
     Progress,
     StockRequest,
@@ -22,6 +23,7 @@ from assistant.generation.answer import (
 )
 from assistant.generation.gigachat import LlmError, Message
 from assistant.generation.llm import make_http_client
+from assistant.metrics import UsageStats
 from assistant.retrieval.embeddings import EmbeddingError
 from assistant.retrieval.store import IndexMismatchError, IndexMissingError
 
@@ -80,6 +82,16 @@ class LazyAnswerer:
                     qdrant=self._qdrant,
                 )
         return self._answerer.answer(question, history, progress, stock)
+
+    def usage(self) -> UsageStats | None:
+        """Счётчики токенов для метрик; None — ассистент ещё не создан."""
+        answerer = self._answerer
+        if not isinstance(answerer, Answerer):
+            return None
+        embedder = answerer.embedder
+        return UsageStats(
+            answerer.model, answerer.llm_stats, embedder.model, embedder.stats
+        )
 
     def close(self) -> None:
         self._embeddings_http.close()

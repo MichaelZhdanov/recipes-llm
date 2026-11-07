@@ -22,7 +22,7 @@ import hmac
 import json
 import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 
 from pydantic import SecretStr
@@ -48,13 +48,16 @@ class Journal:
         *,
         write: Callable[[str], None] | None = None,
         now: Callable[[], str] = _now,
+        listeners: Sequence[Callable[[str, Mapping[str, object]], None]] = (),
     ) -> None:
         """key пуст — случайный ключ процесса: псевдонимы безопасны, но после
-        перезапуска у того же человека будет другой."""
+        перезапуска у того же человека будет другой. listeners получают каждое
+        событие — так метрики (`assistant/metrics.py`) считают то же, что журнал."""
         value = key.get_secret_value() if key is not None else ""
         self._key = value.encode() or secrets.token_bytes(32)
         self._write = write or logger.info
         self._now = now
+        self._listeners = tuple(listeners)
 
     def user(self, chat_id: int) -> str:
         digest = hmac.new(self._key, str(chat_id).encode(), hashlib.sha256)
@@ -63,6 +66,8 @@ class Journal:
     def event(self, name: str, chat_id: int, **fields: object) -> None:
         record = {"time": self._now(), "event": name, "user": self.user(chat_id)}
         self._write(json.dumps({**record, **fields}, ensure_ascii=False))
+        for listener in self._listeners:
+            listener(name, fields)
 
 
 def question_text(question: str) -> str:

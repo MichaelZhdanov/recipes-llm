@@ -61,6 +61,11 @@ class Retriever:
                     merged.append(hits[rank])
         return merged[:k]
 
+    @property
+    def embedder(self) -> Embedder:
+        """Эмбеддер вопросов: модель и счётчики токенов — для метрик."""
+        return self._embedder
+
     def vocabulary(self) -> dict[str, int]:
         """Словарь ингредиентов индекса — для разбора вопроса."""
         return self._store.vocabulary()

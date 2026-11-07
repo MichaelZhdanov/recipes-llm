@@ -7,6 +7,8 @@
 - `POST /ask {"question": "…"}` — ответ со ссылками, тот же, что у `make ask`.
   У каждого ответа — заголовок `X-Request-ID`: та же метка стоит на всех
   записях лога по пути этого запроса.
+- `GET /metrics` — метрики Prometheus: вопросы, время ответа, токены и цена
+  (`assistant/metrics.py`).
   Если Qdrant, API эмбеддингов или LLM недоступны, ответ 503 с короткой
   причиной, подробности — в лог сервиса.
 
@@ -15,6 +17,7 @@
 """
 
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -22,6 +25,7 @@ from typing import Literal
 
 import httpx2
 from fastapi import FastAPI, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel, Field, field_validator
 
 from assistant import __version__
@@ -29,6 +33,7 @@ from assistant.config import Settings
 from assistant.generation.answer import Answer
 from assistant.generation.gigachat import LlmError
 from assistant.logs import REQUEST_ID, setup_logging
+from assistant.metrics import Metrics, dependency_kind
 from assistant.service import (
     MAX_QUESTION_CHARS,
     SEARCH_ERRORS,
@@ -69,6 +74,7 @@ def create_app(
     if answerer is None:
         answerer = lazy = LazyAnswerer(config)
     service = answerer
+    metrics = Metrics(usage=lazy.usage if lazy is not None else lambda: None)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -99,23 +105,54 @@ def create_app(
             status="ok", version=__version__, dataset_revision=config.dataset_revision
         )
 
+    @app.get("/metrics", include_in_schema=False)
+    def metrics_text() -> Response:
+        return Response(metrics.text(), media_type=CONTENT_TYPE_LATEST)
+
     @app.post("/ask", responses={503: {"description": "поиск или LLM недоступны"}})
     def ask(request: AskRequest) -> Answer:
         """Ответ со ссылками на источники или «не нашёл» с подсказками."""
+        started = time.monotonic()
         try:
-            return service.answer(request.question).answer
-        except SEARCH_ERRORS as error:
-            logger.error("поиск недоступен: %s", error)
-            raise HTTPException(503, "поиск недоступен") from error
-        except LlmError as error:
-            logger.error("LLM недоступна: %s", error)
-            raise HTTPException(503, "модель недоступна") from error
-        except httpx2.TransportError as error:
-            # Сеть до API эмбеддингов или LLM: повторы уже не помогли.
-            logger.error("внешний сервис не отвечает: %s", error)
-            raise HTTPException(503, "внешний сервис не отвечает") from error
+            result = service.answer(request.question)
+        except (*SEARCH_ERRORS, LlmError, httpx2.TransportError) as error:
+            metrics.record(
+                "answer",
+                {
+                    "source": "api",
+                    "status": "error",
+                    "error_kind": dependency_kind(error),
+                },
+            )
+            raise _unavailable(error) from error
+        metrics.record(
+            "answer",
+            {
+                "source": "api",
+                "status": result.answer.status,
+                "reason": result.answer.reason,
+                "search": result.trace.args,
+                "seconds": time.monotonic() - started,
+                "retrieval_seconds": result.trace.retrieval_seconds,
+                "generation_seconds": result.trace.generation_seconds,
+            },
+        )
+        return result.answer
 
     return app
+
+
+def _unavailable(error: Exception) -> HTTPException:
+    """503 с короткой причиной; подробности — в лог."""
+    if isinstance(error, SEARCH_ERRORS):
+        logger.error("поиск недоступен: %s", error)
+        return HTTPException(503, "поиск недоступен")
+    if isinstance(error, LlmError):
+        logger.error("LLM недоступна: %s", error)
+        return HTTPException(503, "модель недоступна")
+    # Сеть до API эмбеддингов или LLM: повторы уже не помогли.
+    logger.error("внешний сервис не отвечает: %s", error)
+    return HTTPException(503, "внешний сервис не отвечает")
 
 
 def app_from_env() -> FastAPI:

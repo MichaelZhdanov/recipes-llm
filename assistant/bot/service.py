@@ -80,6 +80,7 @@ from assistant.generation.steps import Steps
 from assistant.grocy.client import GrocyError, StockItem
 from assistant.indexing.chunks import Chunk
 from assistant.logs import REQUEST_ID
+from assistant.metrics import dependency_kind
 from assistant.service import DEPENDENCY_ERRORS, QuestionAnswerer
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,9 @@ class Record:
     # all — по всем рецептам; stock — из того, что есть; near — «поискать ещё».
     source: str
     stock_items: int | None
+    # Время начала (часы сервиса) и «просили склад, а Grocy не ответил».
+    started: float = 0.0
+    stock_down: bool = False
 
 
 @dataclass(frozen=True)
@@ -285,6 +289,8 @@ class BotService:
             question,
             ("near" if near else "stock") if stock else "all",
             len(stock.names) if stock else None,
+            started,
+            from_stock and stock is None,
         )
         try:
             result = self.answerer.answer(
@@ -294,7 +300,13 @@ class BotService:
             # Текст ошибки — код HTTP и ответ API, без вопроса пользователя;
             # секреты из лога вычищает форматтер (assistant/logs.py).
             logger.error("ассистент не ответил: %s: %s", type(error).__name__, error)
-            self._journal(record, None, "error", error=type(error).__name__)
+            self._journal(
+                record,
+                None,
+                "error",
+                error=type(error).__name__,
+                error_kind=dependency_kind(error),
+            )
             return FAILURE_REPLY if self.operators else ERROR_REPLY
         answer = result.answer
         if answer.escalation is not None:
@@ -328,7 +340,6 @@ class BotService:
             answer_id=answer_id,
             reason=answer.reason,
             allergy=answer.allergy,
-            seconds=round(seconds, 1),
         )
         text = answer_html(answer, alive, gigachat_note=self.gigachat_note)
         if note:
@@ -389,6 +400,10 @@ class BotService:
             status=status,
             model=result.answer.model if result else None,
             prompt=result.answer.prompt_version if result else None,
+            seconds=round(self._clock() - record.started, 1),
+            retrieval_seconds=round(trace.retrieval_seconds, 1) if trace else None,
+            generation_seconds=round(trace.generation_seconds, 1) if trace else None,
+            stock_down=record.stock_down,
             **fields,
         )
 

@@ -55,6 +55,7 @@ from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
     ChatModel,
     Completion,
+    LlmStats,
     Message,
     call_message,
     function_result,
@@ -66,7 +67,7 @@ from assistant.generation.review import Review, Reviewer, review_answer
 from assistant.generation.revise import Reviser
 from assistant.indexing.chunks import Chunk
 from assistant.indexing.dataset import recipe_ids_in
-from assistant.retrieval.embeddings import make_embedder
+from assistant.retrieval.embeddings import Embedder, make_embedder
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.stock import (
     NEAR_CANDIDATES,
@@ -553,6 +554,15 @@ class Answerer:
         # Проверка перед отправкой: оба или ни одного.
         self._reviewer = reviewer
         self._reviser = reviser
+
+    @property
+    def llm_stats(self) -> LlmStats:
+        """Накопленные токены LLM — разбор вопроса и ответ (метрики, отчёты)."""
+        return self._llm.stats
+
+    @property
+    def embedder(self) -> Embedder:
+        return self._retriever.embedder
 
     def answer(
         self,

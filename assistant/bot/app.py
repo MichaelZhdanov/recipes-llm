@@ -93,6 +93,7 @@ from assistant.generation.llm import make_http_client
 from assistant.generation.steps import make_steps, make_steps_models
 from assistant.grocy import client as grocy_client
 from assistant.indexing.chunks import Chunk
+from assistant.metrics import Metrics
 from assistant.retrieval.store import VectorStore
 from assistant.service import MAX_QUESTION_CHARS, LazyAnswerer
 
@@ -690,12 +691,19 @@ GROCY_COMMANDS = [
 
 
 async def heartbeat(
-    bot: Bot, path: Path = HEARTBEAT, every: float = HEARTBEAT_EVERY
+    bot: Bot,
+    path: Path = HEARTBEAT,
+    every: float = HEARTBEAT_EVERY,
+    metrics: Metrics | None = None,
 ) -> None:
+    """Раз в every секунд — getMe: файл для healthcheck Docker и метрика для
+    алерта «бот не отвечает» (Prometheus видит, если её давно не обновляли)."""
     while True:
         try:
             await bot.get_me()
             path.touch()
+            if metrics is not None:
+                metrics.heartbeat.set_to_current_time()
         except Exception:
             # Сеть до Telegram или сбой API: проверка здоровья это увидит.
             logger.warning("Telegram не ответил на getMe", exc_info=True)
@@ -727,6 +735,9 @@ async def run(settings: Settings) -> None:
         raise SystemExit("не задан TELEGRAM_BOT_TOKEN: токен бота — у @BotFather")
     store = Store(DATABASE)
     answerer = LazyAnswerer(settings)
+    # Метрики (этап 8): /metrics для Prometheus в той же docker-сети.
+    metrics = Metrics(usage=answerer.usage)
+    metrics.serve()
     pages_http = httpx2.Client()
     steps_http = make_http_client(settings)
     qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
@@ -758,12 +769,12 @@ async def run(settings: Settings) -> None:
         gigachat_note=settings.llm_provider == "gigachat",
         operators=settings.escalation_chat_id is not None,
         stock=stock,
-        journal=Journal(settings.journal_key),
+        journal=Journal(settings.journal_key, listeners=[metrics.record]),
     )
     bot = make_bot(token)
     handlers = Handlers(service, operators_chat=settings.escalation_chat_id)
     dispatcher = build_dispatcher(handlers)
-    beat = asyncio.create_task(heartbeat(bot))
+    beat = asyncio.create_task(heartbeat(bot, metrics=metrics))
     closer = asyncio.create_task(auto_close(handlers, bot))
     try:
         await bot.set_my_commands(
