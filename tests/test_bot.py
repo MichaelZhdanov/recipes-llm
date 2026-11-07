@@ -269,14 +269,14 @@ def test_thumbs_down_asks_what_went_wrong_and_records_the_reason() -> None:
     assert answer_id is not None
 
     assert service.vote(8, answer_id, "down") == (GONE_TEXT, None)  # чужой чат
-    assert service.vote_reason(7, answer_id, "failed") == GONE_TEXT  # ещё не 👎
+    assert service.vote_reason(7, answer_id, "failed").text == GONE_TEXT  # ещё не 👎
     assert service.vote(7, answer_id, "up") == (THANKS_TEXT, None)
     toast, follow = service.vote(7, answer_id, "down")
 
     assert toast == THANKS_TEXT
     assert follow is not None and follow.text == WHAT_WRONG_TEXT
     assert follow.buttons[2] == [("Не получилось", f"why:{answer_id}:failed")]
-    assert service.vote_reason(7, answer_id, "failed") == THANKS_TEXT
+    assert service.vote_reason(7, answer_id, "failed").text == THANKS_TEXT
 
 
 def test_without_a_checker_ai_steps_are_neither_offered_nor_written() -> None:
