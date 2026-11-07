@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval gaps test alerts-test lint format
+.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval gaps test alerts-test trivy lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -113,6 +113,13 @@ alerts-test: ## тесты правил алертов Prometheus (promtool)
 		$(PROMETHEUS_IMAGE) check config /etc/prometheus/prometheus.yml
 	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool \
 		$(PROMETHEUS_IMAGE) test rules /etc/prometheus/alerts_test.yml
+
+# Trivy-гейт (scripts/trivy_gate.py): образ ассистента — свежая сборка из
+# Dockerfile, сторонние — по digest из compose. Код 1 — есть устранимые HIGH и
+# CRITICAL, что и где обновить — в выводе. В CI — тот же скрипт по образу из GHCR.
+trivy: ## Trivy: устранимых HIGH и CRITICAL в образах прода быть не должно
+	docker compose build assistant
+	uv run --no-project --python 3.14 scripts/trivy_gate.py --image "$$(docker compose config --images assistant)"
 
 lint: ## ruff check, ruff format --check, mypy, shellcheck
 	uv run ruff check .

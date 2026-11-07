@@ -6,6 +6,11 @@ on:
   pull_request:
   # Ручной запуск (Actions → CI → Run workflow): проверка и деплой текущего main.
   workflow_dispatch:
+  # Раз в месяц (решение автора) — только Trivy-гейт по образу, который в проде:
+  # CVE публикуют каждый день, устранимая может появиться без наших коммитов.
+  # Красный запуск — письмо от GitHub.
+  schedule:
+    - cron: "0 6 1 * *"
 
 # Минимальные права: по умолчанию CI только читает код; build и deploy
 # добавляют себе права на пакеты GHCR.
@@ -14,6 +19,7 @@ permissions:
 
 jobs:
   check:
+    if: github.event_name != 'schedule'
     # Конкретная версия, а не ubuntu-latest: ярлык latest GitHub переводит на новые
     # релизы сам, и окружение CI менялось бы без коммита в репозитории.
     runs-on: ubuntu-26.04
@@ -56,8 +62,9 @@ jobs:
   # коммита. Сервер скачивает его же по digest и сам ничего не собирает: в проде
   # работает ровно то, что собрал (и проверил) CI.
   build:
-    # PR из форка в GHCR писать не может: у его токена нет packages: write.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # PR из форка в GHCR писать не может: у его токена нет packages: write. По
+    # расписанию образ не собирается: проверяется тот, что уже в проде.
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -93,11 +100,44 @@ jobs:
           echo "образ: $image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
-  # Деплой на сервер: только после зелёной проверки и сборки, только push в main
-  # и ручной запуск (в PR секретов нет). Вход root по ключу деплоя, см.
+  # Trivy-гейт: устранимых HIGH и CRITICAL в проде быть не должно
+  # (scripts/trivy_gate.py). Образ ассистента — тот, что собрала build и скачает
+  # сервер; сторонние — по digest из compose. По расписанию build нет — образ
+  # последнего коммита main, тот, что в проде.
+  scan:
+    needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || github.event_name == 'schedule') }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+
+      - name: Образ ассистента из GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILT: ${{ needs.build.outputs.image }}
+        run: |
+          image="${BUILT:-ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA}"
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker pull --quiet "$image"
+          docker logout ghcr.io
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Trivy — устранимых HIGH и CRITICAL в проде быть не должно
+        run: uv run --no-project --python 3.14 scripts/trivy_gate.py --image "$IMAGE"
+
+  # Деплой на сервер: только после зелёных проверки, сборки и Trivy, только push
+  # в main и ручной запуск (в PR секретов нет). Вход root по ключу деплоя, см.
   # deploy/bootstrap.sh.
   deploy:
-    needs: [check, build]
+    needs: [check, build, scan]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-26.04
     environment: prod

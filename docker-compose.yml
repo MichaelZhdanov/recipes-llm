@@ -63,6 +63,8 @@ x-app-image: &app-image ${APP_IMAGE:-recipes-llm-app}
 # Сторонние образы — тег и digest (тег@sha256:…): Docker скачивает ровно этот
 # digest, даже если автор образа перезальёт тег; тег — для человека. Digest —
 # индекс образа (все платформы): сервер берёт из него linux/amd64, Mac — arm64.
+# Новую строку image печатает Trivy-гейт (make trivy), когда обновление устраняет
+# HIGH или CRITICAL.
 services:
   qdrant:
     image: docker.io/qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
