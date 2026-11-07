@@ -1,8 +1,8 @@
-"""Хранилище бота: история с окном и сбросом, оценки, кэши."""
+"""Хранилище бота: история с окном и сбросом, оценки, кэши, обращения к человеку."""
 
 from pathlib import Path
 
-from assistant.bot.store import HISTORY_LIMIT, SESSION_TIMEOUT, Store
+from assistant.bot.store import HISTORY_LIMIT, SESSION_TIMEOUT, Store, Ticket
 
 
 class Clock:
@@ -99,3 +99,74 @@ def test_database_file_survives_reopening(tmp_path: Path) -> None:
 
     assert len(second.history(1)) == 2
     second.close()
+
+
+# --- Обращения к человеку ---
+
+
+def test_one_open_ticket_per_chat_and_it_is_found_by_chat_and_thread() -> None:
+    db = store(Clock())
+
+    first = db.open_ticket(7, "health", "тошнит после грибов")
+    again = db.open_ticket(7, "request", "просит человека")
+    db.set_thread(first.id, 55)
+
+    assert again == first
+    assert first.status == "open" and first.thread_id is None
+    found = db.open_ticket_of(7)
+    assert found is not None and found.thread_id == 55
+    assert db.ticket_of_thread(55) == found
+    assert db.open_ticket_of(8) is None
+
+
+def test_closed_ticket_frees_the_chat_and_is_closed_once() -> None:
+    db = store(Clock())
+    ticket = db.open_ticket(7, "request", "")
+    db.set_thread(ticket.id, 55)
+
+    assert db.close_ticket(ticket.id) is True
+    # /close в теме и /bot у пользователя могут прийти одновременно.
+    assert db.close_ticket(ticket.id) is False
+    assert db.open_ticket_of(7) is None
+    assert db.ticket_of_thread(55) is None
+    assert db.open_ticket(7, "feedback", "").id != ticket.id
+
+
+def test_only_own_closed_ticket_can_be_rated() -> None:
+    db = store(Clock())
+    ticket = db.open_ticket(7, "request", "")
+
+    assert db.vote_ticket(ticket.id, 7, "up") is False
+    db.close_ticket(ticket.id)
+    assert db.vote_ticket(ticket.id, 8, "up") is False
+    assert db.vote_ticket(ticket.id, 7, "down") is True
+
+
+def test_recent_statuses_are_newest_first_within_the_session() -> None:
+    clock = Clock()
+    db = store(clock)
+    for status in ("answer", "not_found"):
+        db.save_answer(
+            7, status=status, reason=None, model="m", recipe_ids=[], seconds=1
+        )
+    clock.now += SESSION_TIMEOUT + 1
+    db.save_answer(
+        7, status="not_found", reason=None, model="m", recipe_ids=[], seconds=1
+    )
+
+    # Старый «не нашёл» — из прошлой сессии: «два подряд» он не даёт.
+    assert db.recent_statuses(7) == ["not_found"]
+    assert db.recent_statuses(8) == []
+
+
+def test_tickets_survive_reopening(tmp_path: Path) -> None:
+    path = tmp_path / "bot.sqlite3"
+    db = Store(path)
+    ticket = db.open_ticket(7, "health", "сыпь после торта")
+    db.set_thread(ticket.id, 55)
+    db.close()
+
+    reopened = Store(path)
+    assert reopened.open_ticket_of(7) == Ticket(
+        ticket.id, 7, 55, "health", "сыпь после торта", "open"
+    )

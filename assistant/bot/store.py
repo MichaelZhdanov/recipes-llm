@@ -9,7 +9,12 @@
 - `answers` — ответы бота с оценками 👍/👎 и причиной 👎 (повод эскалации —
   этап 5);
 - `pages` — кэш проверки страницы рецепта; `steps` — кэш шагов приготовления,
-  которые написал ИИ: одни для всех пользователей.
+  которые написал ИИ: одни для всех пользователей;
+- `tickets` — обращения к человеку (этап 5): повод, сводка, тема в группе
+  операторов, открыто или закрыто, оценка разговора. Открытое обращение у
+  чата одно — это гарантирует уникальный индекс, а не код: пока оно открыто,
+  сообщения чата идут человеку, ассистент молчит. Состояние в базе, поэтому
+  переживает перезапуск бота.
 
 Одно соединение на процесс под замком: запросы короткие, а бот отвечает
 из нескольких потоков.
@@ -22,17 +27,18 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from assistant.generation.gigachat import Message
 from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
+TicketStatus = Literal["open", "closed"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -76,6 +82,20 @@ CREATE TABLE IF NOT EXISTS steps (
     prompt_version TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    thread_id INTEGER,
+    reason TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+    vote TEXT CHECK (vote IN ('up', 'down')),
+    opened_at REAL NOT NULL,
+    closed_at REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS tickets_open_chat ON tickets (chat_id)
+    WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS tickets_thread ON tickets (thread_id);
 """
 
 
@@ -84,6 +104,30 @@ class SavedSteps:
     text: str
     approved: bool
     prompt_version: str
+
+
+@dataclass(frozen=True)
+class Ticket:
+    """Обращение к человеку. thread_id — тема в группе операторов; None — ещё
+    не создана (между записью в базу и ответом Telegram)."""
+
+    id: int
+    chat_id: int
+    thread_id: int | None
+    reason: str
+    summary: str
+    status: TicketStatus
+
+
+_TICKET_COLUMNS = "id, chat_id, thread_id, reason, summary, status"
+
+
+def _ticket(row: Any) -> Ticket | None:
+    """Строка таблицы tickets (столбцы _TICKET_COLUMNS) → Ticket."""
+    if row is None:
+        return None
+    id_, chat_id, thread_id, reason, summary, status = row
+    return Ticket(id_, chat_id, thread_id, reason, summary, status)
 
 
 class Store:
@@ -216,6 +260,18 @@ class Store:
             )
             return cursor.rowcount == 1
 
+    def recent_statuses(self, chat_id: int, limit: int = 2) -> list[str]:
+        """Статусы последних ответов чата, от нового к старому (только ответы
+        текущей сессии): «два „не нашёл“ подряд» — повод предложить человека."""
+        since = self._clock() - SESSION_TIMEOUT
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT status FROM answers WHERE chat_id = ? AND created_at >= ? "
+                "ORDER BY id DESC LIMIT ?",
+                (chat_id, since, limit),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def recipe_ids(self, answer_id: int, chat_id: int) -> list[int] | None:
         """id рецептов ответа — для кнопки шагов; None — чужой или неизвестный ответ."""
         with self._lock:
@@ -224,6 +280,78 @@ class Store:
                 (answer_id, chat_id),
             ).fetchone()
         return None if row is None else [int(i) for i in json.loads(row[0])]
+
+    # --- Обращения к человеку ---
+
+    def open_ticket(self, chat_id: int, reason: str, summary: str) -> Ticket:
+        """Новое обращение; если у чата уже есть открытое — оно и возвращается."""
+        with self._lock, self._db:
+            try:
+                cursor = self._db.execute(
+                    "INSERT INTO tickets (chat_id, reason, summary, status, opened_at) "
+                    "VALUES (?, ?, ?, 'open', ?)",
+                    (chat_id, reason, summary, self._clock()),
+                )
+            except sqlite3.IntegrityError:
+                found = self._db.execute(
+                    f"SELECT {_TICKET_COLUMNS} FROM tickets "
+                    "WHERE chat_id = ? AND status = 'open'",
+                    (chat_id,),
+                ).fetchone()
+            else:
+                found = self._db.execute(
+                    f"SELECT {_TICKET_COLUMNS} FROM tickets WHERE id = ?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+        ticket = _ticket(found)
+        assert ticket is not None
+        return ticket
+
+    def set_thread(self, ticket_id: int, thread_id: int) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE tickets SET thread_id = ? WHERE id = ?", (thread_id, ticket_id)
+            )
+
+    def open_ticket_of(self, chat_id: int) -> Ticket | None:
+        """Открытое обращение чата: есть — сообщения идут человеку."""
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_TICKET_COLUMNS} FROM tickets "
+                "WHERE chat_id = ? AND status = 'open'",
+                (chat_id,),
+            ).fetchone()
+        return _ticket(row)
+
+    def ticket_of_thread(self, thread_id: int) -> Ticket | None:
+        """Открытое обращение темы в группе операторов."""
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_TICKET_COLUMNS} FROM tickets "
+                "WHERE thread_id = ? AND status = 'open'",
+                (thread_id,),
+            ).fetchone()
+        return _ticket(row)
+
+    def close_ticket(self, ticket_id: int) -> bool:
+        """False — уже закрыто: /close и /bot могут прийти одновременно."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "UPDATE tickets SET status = 'closed', closed_at = ? "
+                "WHERE id = ? AND status = 'open'",
+                (self._clock(), ticket_id),
+            )
+            return cursor.rowcount == 1
+
+    def vote_ticket(self, ticket_id: int, chat_id: int, vote: Vote) -> bool:
+        """Оценка разговора с человеком — только своего закрытого обращения."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "UPDATE tickets SET vote = ? WHERE id = ? AND chat_id = ? "
+                "AND status = 'closed'",
+                (vote, ticket_id, chat_id),
+            )
+            return cursor.rowcount == 1
 
     # --- Кэши ---
 
