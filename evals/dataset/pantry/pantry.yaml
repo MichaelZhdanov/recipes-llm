@@ -1,0 +1,171 @@
+- id: pantry-001
+  category: pantry
+  question: "В холодильнике: куриное филе, картошка, морковь, лук, сметана, сыр, яйца, рис. Что приготовить на ужин?"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[филе куриное, грудка куриная, курица, картофель, рис]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Подходят курица с картофелем в сметане, курица с рисом, картофельная запеканка с сыром. Не обязательно использовать всё сразу. Из лишнего может понадобиться масло, специи."
+
+- id: pantry-002
+  category: pantry
+  question: "накидай чего-нибудь вкусного. есть фарш полпачки, макароны, два помидора, немного сыра, пара яиц, зелень, чеснок"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: [[фарш мясной, макаронные изделия, спагетти]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Макароны по-флотски, паста с фаршем и томатами, запеканка из макарон с фаршем и сыром. Скорее всего понадобится лук и масло."
+
+- id: pantry-003
+  category: pantry
+  question: "Что есть: кабачок, баклажан, болгарский перец, помидоры, творог, гречка, сметана, кефир. Подскажи что-нибудь несложное"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[кабачок, баклажан, перец болгарский, помидор, крупа гречневая]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Овощное рагу, кабачки с помидорами, запечённые баклажаны, гречка с овощами. Творог и кефир можно не использовать. Понадобятся лук, масло."
+
+- id: pantry-004
+  category: pantry
+  question: "у меня есть куринные ножки, греча, огурцы, капуста, свёкла, кефир, пара картофелин. чо можно сделать на обед"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: [[голень куриная, бедро куриное, курица, крупа гречневая, капуста белокочанная, свекла, картофель]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Куриные ножки с картошкой, борщ или щи, винегрет, гречка с курицей. Блюдо из части продуктов — норма. Докупить: лук, морковь, томатная паста."
+
+- id: pantry-005
+  category: pantry
+  question: "Вот что нашла дома: горбуша, лимон, картофель, зелёный лук, майонез, горчица, сыр, молоко, мука. Что-нибудь вкусное из этого?"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[горбуша, лосось, семга, филе рыбное, картофель]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Горбуша запечённая с картофелем и сыром, котлеты из горбуши, рыба в кляре. Докупить может понадобиться лук репчатый, яйца."
+
+- id: pantry-006
+  category: pantry
+  question: "в холодильнике лежат\nговядена\nпюре картофельное нет, но картошки много\nгрибы\nморковка\nсливки\nчто-нибудь на ужен придумаешь"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: [[говядина, картофель, шампиньоны, грибы]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Говядина с грибами в сливках, жаркое с говядиной и картошкой, грибной суп. Докупить: лук, специи."
+
+- id: pantry-007
+  category: pantry
+  question: "есть свинина, картошка, шампиньоны, морковь, сметана, чеснок, сыр. сделай что-нибудь на ужин, только без лука"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[свинина, картофель, шампиньоны]]
+  expected_exclude: [лук репчатый, лук красный, лук зеленый, лук белый, лук-порей, лук-шалот]
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Свинина с картошкой и грибами в сметане, мясо по-французски без лука. Лука в рецептах быть не должно. Докупить может понадобиться масло, майонез."
+
+- id: pantry-008
+  category: pantry
+  question: "яблоки, творог, мука, два яйца, мёд, корица, масло сливочное. хочется чего-то сладкого к чаю"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[яблоко, творог]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Сладкое: шарлотка, яблочный пирог, сырники, творожная запеканка, яблоки с мёдом и корицей. Не подходят мясные и солёные блюда. Докупить: сахар, разрыхлитель."
+
+- id: pantry-009
+  category: pantry
+  question: "ща есть только картошка и яйца, чё из них можно сделать"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: [[картофель, яйцо куриное]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Картофельная запеканка, драники, жареная картошка с яйцом, картофельный салат с яйцом. Почти наверняка понадобится лук, масло, мука."
+
+- id: pantry-010
+  category: pantry
+  question: "осталась тока тыква и пара банонов, чего из них приготовить"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: [[тыква, банан]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Тыквенная каша, запечённая тыква, тыквенный пирог, банановые оладьи или десерт. Докупить: мука, яйца, сахар."
+
+- id: pantry-011
+  category: pantry
+  question: "ой, а ещё есть кабачки и баклажаны, придумай что-нибудь другое"
+  style: colloquial
+  turns:
+    - role: user
+      text: "есть курица, картошка, сметана, лук, чеснок. что на ужин?"
+    - role: assistant
+      text: "Вот что нашёл:\n1. Курица с картофелем в сметане — https://www.povarenok.ru/recipes/show/162479/\n2. Курица с картофелем и шампиньонами — https://www.povarenok.ru/recipes/show/102275/\n3. Курица с картофелем — https://www.povarenok.ru/recipes/show/7253/"
+  expected_behavior: answer
+  expected_include: [[кабачок, баклажан]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Новые блюда из кабачков и баклажанов, не повтор курицы с картошкой: запеканка из кабачков, рагу, баклажаны с чесноком, можно с курицей. Докупить помидоры, сыр."
+
+- id: pantry-012
+  category: pantry
+  question: "из еды только кетчуп, майонез, горчица, соевый соус, лавровый лист, паприка, специи и две куриные грудки. что с этим можно сделать?"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: [[грудка куриная, филе куриное, курица]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Блюда из куриной грудки: в соевом соусе, в горчично-майонезной маринаде, запечённая со специями. Приправы и соусы — не основа блюда. Докупить чеснок, масло."
