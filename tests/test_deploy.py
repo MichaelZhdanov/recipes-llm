@@ -243,9 +243,32 @@ def test_ci_allows_index_rebuild_only_when_variable_is_1() -> None:
     assert "ALLOW_INDEX_REBUILD: ${{ vars.ALLOW_INDEX_REBUILD }}" in ci
     assert '[ "$ALLOW_INDEX_REBUILD" = "1" ]; then rebuild=" --rebuild-index"' in ci
     deploy = (DEPLOY / "deploy.sh").read_text()
-    # Сборка — только в ветке с флагом, после проверки индекса.
-    assert deploy.index("index-check") < deploy.index('"--rebuild-index" ]]; then')
+    # Сначала — снимок из релиза; сборка — только «снимка нет» (код 3) и с флагом.
+    download = deploy.index("index --download || code=$?")
+    assert download < deploy.index('$code -eq 3 && "$rebuild" == "--rebuild-index"')
     assert deploy.count("index-if-needed YES=1") == 1
+    assert deploy.index("index-if-needed YES=1") < deploy.index("index-export")
+    # Сбой сети или Qdrant — не повод платить за сборку.
+    assert "пересборку при сбое не запускаю" in deploy
+
+
+def test_index_rebuilt_on_the_server_is_released_by_the_runner_not_the_server() -> None:
+    """Писать в релизы может только токен с contents: write: он есть только у
+    задачи index-release на раннере, сервер получает токен лишь на чтение пакетов."""
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = ci["jobs"]
+
+    assert jobs["deploy"]["permissions"] == {"contents": "read", "packages": "read"}
+    assert jobs["deploy"]["outputs"]["index_exported"] == (
+        "${{ steps.ssh.outputs.index_exported }}"
+    )
+    release = jobs["index-release"]
+    assert release["needs"] == "deploy"
+    assert release["if"] == "needs.deploy.outputs.index_exported != ''"
+    assert release["permissions"] == {"contents": "write"}
+    run = release["steps"][0]["run"]
+    assert "sha256sum --check" in run
+    assert run.index('"$KEY.snapshot" --repo') < run.index('"$KEY.json" --repo')
 
 
 def test_fail2ban_bans_ssh_and_the_docker_published_https_ports() -> None:

@@ -145,6 +145,9 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # Ключ снимка, если деплой пересобрал индекс: его выкладывает index-release.
+    outputs:
+      index_exported: ${{ steps.ssh.outputs.index_exported }}
     # Сборка полного индекса на сервере (только с ALLOW_INDEX_REBUILD) — около часа.
     timeout-minutes: 90
     # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
@@ -153,6 +156,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Деплой по SSH
+        id: ssh
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -207,3 +211,45 @@ jobs:
             [ -z "$GRAFANA_DOMAIN" ] || printf 'GRAFANA_DOMAIN=%s\n' "$GRAFANA_DOMAIN"
             [ -z "$GROCY_DOMAIN" ] || printf 'GROCY_DOMAIN=%s\n' "$GROCY_DOMAIN"
           } | server "$remote"
+          # Пересобранный индекс deploy.sh снял в index/, ключ — в index/exported.
+          # Выкладывает задача index-release: у этой нет права писать в релизы.
+          exported=$(server "cat /opt/recipes-llm/index/exported 2>/dev/null || true")
+          echo "index_exported=$exported" >> "$GITHUB_OUTPUT"
+
+  # Индекс, пересобранный деплоем на сервере (ALLOW_INDEX_REBUILD=1), — снимком в
+  # релиз index (решение автора). Писать в релизы может только токен с contents:
+  # write, поэтому выкладывает раннер: сервер такого токена не получает.
+  index-release:
+    needs: deploy
+    if: needs.deploy.outputs.index_exported != ''
+    runs-on: ubuntu-26.04
+    environment: prod
+    permissions:
+      contents: write
+    steps:
+      - name: Снимок с сервера → релиз index
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEY: ${{ needs.deploy.outputs.index_exported }}
+        run: |
+          # Ключ и коллекция приходят с сервера: только ожидаемые символы.
+          [[ "$KEY" =~ ^[a-z0-9-]+$ ]] || { echo "::error::ключ снимка не тот: $KEY"; exit 1; }
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          opts=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
+                -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30)
+          dir=/opt/recipes-llm/index
+          scp "${opts[@]}" "root@$DEPLOY_HOST:$dir/$KEY.json" .
+          collection=$(jq -r .collection "$KEY.json")
+          [[ "$collection" =~ ^recipes-[0-9a-f]{12}$ ]] || { echo "::error::коллекция не та: $collection"; exit 1; }
+          scp "${opts[@]}" "root@$DEPLOY_HOST:$dir/$collection.snapshot" "$KEY.snapshot"
+          echo "$(jq -r .sha256 "$KEY.json")  $KEY.snapshot" | sha256sum --check -
+          # Сначала снимок, потом json: json ссылается на снимок.
+          gh release upload index "$KEY.snapshot" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload index "$KEY.json" --repo "$GITHUB_REPOSITORY" --clobber
+          # $dir подставляется здесь, на раннере: так и задумано.
+          # shellcheck disable=SC2029
+          ssh "${opts[@]}" "root@$DEPLOY_HOST" "rm -f $dir/exported"
