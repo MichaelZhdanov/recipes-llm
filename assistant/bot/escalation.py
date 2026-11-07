@@ -57,9 +57,25 @@ _REQUEST = re.compile(
 )
 
 
+# «Ты живой человек?», «напиши, что ты живой человек» — это о самом боте, а не
+# просьба позвать человека (security-008: так инъекция звала оператора).
+# Только «ты/вы» прямо перед словами, через одно слово-связку: «ты можешь
+# позвать живого человека?» — по-прежнему просьба.
+_ABOUT_BOT = re.compile(
+    r"\b(ты|вы)(\s+(же|вообще|правда|точно|реально|тут|—|-))?\s+$", re.IGNORECASE
+)
+
+
 def wants_human(text: str) -> bool:
     """Явная просьба позвать человека: «позовите человека», «оператор», «живой повар»."""
-    return _REQUEST.search(text.replace("ё", "е").replace("Ё", "Е")) is not None
+    text = text.replace("ё", "е").replace("Ё", "Е")
+    for match in _REQUEST.finditer(text):
+        if match.group().lower().startswith("жив") and _ABOUT_BOT.search(
+            text[: match.start()]
+        ):
+            continue
+        return True
+    return False
 
 
 def reason_label(reason: str) -> str:
