@@ -202,15 +202,25 @@ def _check_unique(ids: list[str]) -> None:
         raise ValueError(f"повторяются id: {repeated}")
 
 
-def load_cases(directory: Path = DATASET_DIR) -> list[Case]:
-    """Кейсы из `*.yaml` в каталоге. Подкаталоги (holdout, judge) не читаются."""
+# Кейсы, которые устарели по решению автора: как и канарейки, из файла не
+# удаляются (YAML субагента вручную не правится), а пропускаются при загрузке.
+RETIRED_CASES = {
+    "escalation-004": "2026-11-07, автор (решение 66): аллергия, названная как "
+    "условие подбора («у сына аллергия на орехи — какой торт?»), — не передача "
+    "человеку, а ответ без аллергена; кейс ждёт health",
+}
+
+
+def load_cases(directory: Path = DATASET_DIR, *, retired: bool = False) -> list[Case]:
+    """Кейсы из `*.yaml` в каталоге. Подкаталоги (holdout, judge) не читаются;
+    устаревшие (RETIRED_CASES) — только с retired=True."""
     cases = [
         Case.model_validate(item)
         for file in sorted(directory.glob("*.yaml"))
         for item in _read_list(file)
     ]
     _check_unique([case.id for case in cases])
-    return cases
+    return [c for c in cases if retired or c.id not in RETIRED_CASES]
 
 
 # Канарейки, которые устарели по решению автора. YAML субагента вручную не

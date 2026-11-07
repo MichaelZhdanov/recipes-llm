@@ -251,3 +251,14 @@ def test_clarity_canary_needs_its_own_id_prefix(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         load_clarity_canaries(file)
+
+
+def test_retired_case_is_skipped_but_stays_in_the_file() -> None:
+    from evals.dataset import RETIRED_CASES, load_cases
+
+    loaded = {c.id for c in load_cases()}
+    everything = {c.id for c in load_cases(retired=True)}
+
+    assert set(RETIRED_CASES) <= everything
+    assert not set(RETIRED_CASES) & loaded
+    assert everything - loaded == set(RETIRED_CASES)
