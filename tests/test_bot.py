@@ -6,30 +6,24 @@
 """
 
 import asyncio
-import json
 import logging
 import sys
 import threading
-import time
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import httpx2
 import pytest
-from aiogram import Bot
-from aiogram.client.session.base import BaseSession
 from aiogram.methods import (
     AnswerCallbackQuery,
     EditMessageReplyMarkup,
-    EditMessageText,
     SendChatAction,
     SendMessage,
     SendPhoto,
-    TelegramMethod,
 )
-from aiogram.methods.base import TelegramType
 from aiogram.types import BufferedInputFile
+from bot_helpers import FakeTelegram, press, update
 from chunk_helpers import make_chunk
 from pydantic import SecretStr
 
@@ -348,83 +342,6 @@ def test_refusal_is_cached_and_a_broken_answer_is_retried() -> None:
 # --- Обработчики aiogram на фейковом Bot API ---
 
 
-class FakeTelegram(BaseSession):
-    """Bot API без сети: записывает вызовы и отвечает, как ответил бы Telegram."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[TelegramMethod[Any]] = []
-        self._message_id = 100
-
-    async def make_request(
-        self,
-        bot: Bot,
-        method: TelegramMethod[TelegramType],
-        timeout: int | None = None,
-    ) -> TelegramType:
-        self.calls.append(method)
-        result: object = True
-        if isinstance(method, SendMessage):
-            self._message_id += 1
-            result = self._message(method.chat_id, self._message_id, method.text)
-        elif isinstance(method, SendPhoto):
-            self._message_id += 1
-            result = self._message(method.chat_id, self._message_id, method.caption)
-        elif isinstance(method, EditMessageText):
-            result = self._message(method.chat_id, method.message_id, method.text)
-        content = json.dumps({"ok": True, "result": result})
-        return self.check_response(bot, method, 200, content).result  # type: ignore[return-value]
-
-    @staticmethod
-    def _message(
-        chat_id: object, message_id: object, text: str | None
-    ) -> dict[str, object]:
-        return {
-            "message_id": message_id,
-            "date": int(time.time()),
-            "chat": {"id": chat_id, "type": "private"},
-            "text": text,
-        }
-
-    async def close(self) -> None:
-        pass
-
-    async def stream_content(
-        self, *args: object, **kwargs: object
-    ) -> AsyncGenerator[bytes]:
-        raise NotImplementedError
-        yield b""
-
-    def sent(self) -> list[str]:
-        return [m.text for m in self.calls if isinstance(m, SendMessage)]
-
-    def edits(self) -> list[EditMessageText]:
-        return [m for m in self.calls if isinstance(m, EditMessageText)]
-
-
-def update(
-    text: str | None,
-    *,
-    chat_id: int = 7,
-    chat_type: str = "private",
-    age: float = 0.0,
-    update_id: int = 1,
-) -> dict[str, Any]:
-    message: dict[str, Any] = {
-        "message_id": update_id,
-        "date": int(time.time() - age),
-        "chat": {"id": chat_id, "type": chat_type},
-        "from": {"id": chat_id, "is_bot": False, "first_name": "Тест"},
-    }
-    if text is None:
-        message["photo"] = [
-            {"file_id": "p", "file_unique_id": "p", "width": 1, "height": 1}
-        ]
-    else:
-        message["text"] = text
-    return {"update_id": update_id, "message": message}
-
-
 def feed(service: BotService, *updates: dict[str, Any]) -> FakeTelegram:
     telegram = FakeTelegram()
     bot = make_bot(TOKEN, session=telegram)
@@ -556,29 +473,6 @@ def test_formatter_masks_secrets_in_message_and_traceback() -> None:
 
 
 # --- Кнопки под ответом ---
-
-
-def press(
-    data: str, *, message_id: int, markup: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    message: dict[str, Any] = {
-        "message_id": message_id,
-        "date": int(time.time()),
-        "chat": {"id": 7, "type": "private"},
-        "text": "ответ",
-    }
-    if markup is not None:
-        message["reply_markup"] = markup
-    return {
-        "update_id": 100 + message_id,
-        "callback_query": {
-            "id": f"cb{message_id}",
-            "from": {"id": 7, "is_bot": False, "first_name": "Тест"},
-            "chat_instance": "ci",
-            "data": data,
-            "message": message,
-        },
-    }
 
 
 def test_vote_buttons_disappear_and_thumbs_down_asks_why() -> None:
