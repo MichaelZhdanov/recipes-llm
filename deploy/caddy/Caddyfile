@@ -1,0 +1,23 @@
+# Caddy (этап 8, решение 82): HTTPS для Grafana и Grocy на сервере. Caddy сам
+# получает сертификаты Let's Encrypt для доменов и продлевает их; порт 80 —
+# проверка домена и редирект на HTTPS. Домены — переменные Actions
+# GRAFANA_DOMAIN и GROCY_DOMAIN (деплой пишет их в .env), сертификаты —
+# в томе caddy-data: повторный деплой не запрашивает их заново.
+# Вход — собственный у Grafana и у Grocy; второго пароля и списка IP здесь
+# нет (решение автора: MVP).
+{
+	# Только TCP: UDP 443 для HTTP/3 не публикуется, браузер работает по HTTP/2.
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$GRAFANA_DOMAIN} {
+	reverse_proxy grafana:3000
+}
+
+# Grocy — отдельный compose-проект (/opt/grocy), Caddy видит его по общей
+# docker-сети grocy, как и бот.
+{$GROCY_DOMAIN} {
+	reverse_proxy grocy:80
+}

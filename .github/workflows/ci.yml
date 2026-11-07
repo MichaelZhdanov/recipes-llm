@@ -80,6 +80,10 @@ jobs:
           # Переменная Actions, не секрет: 1 — деплою можно пересобрать индекс
           # (≈ 200 ₽); 0 или не задана — нельзя, снимок грузит deploy/upload_index.sh.
           ALLOW_INDEX_REBUILD: ${{ vars.ALLOW_INDEX_REBUILD }}
+          # Переменные Actions: домены HTTPS для Grafana и Grocy (Caddy на
+          # сервере); не заданы оба — оба только по ssh-туннелю.
+          GRAFANA_DOMAIN: ${{ vars.GRAFANA_DOMAIN }}
+          GROCY_DOMAIN: ${{ vars.GROCY_DOMAIN }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
@@ -106,6 +110,8 @@ jobs:
             [ -z "$ANTHROPIC_API_KEY" ] || printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
             [ -z "$TELEGRAM_BOT_TOKEN" ] || printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
             [ -z "$ESCALATION_CHAT_ID" ] || printf 'ESCALATION_CHAT_ID=%s\n' "$ESCALATION_CHAT_ID"
+            [ -z "$GRAFANA_DOMAIN" ] || printf 'GRAFANA_DOMAIN=%s\n' "$GRAFANA_DOMAIN"
+            [ -z "$GROCY_DOMAIN" ] || printf 'GROCY_DOMAIN=%s\n' "$GROCY_DOMAIN"
           } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
                 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                 -o ServerAliveInterval=30 "root@$DEPLOY_HOST" "$remote"

@@ -6,8 +6,9 @@
 аргументами: аргументы команды видит любой пользователь сервера в списке
 процессов (ps), stdin — нет.
 
-Принимаются ключи из ALLOWED: ключи API из секретов GitHub и модель
-ассистента, которую задаёт сам deploy/deploy.sh.
+Принимаются ключи из ALLOWED: ключи API из секретов GitHub, домены Grafana
+и Grocy из переменных Actions и модель ассистента, которую задаёт сам
+deploy/deploy.sh.
 
 Значение пишется в одинарных кавычках: так Docker Compose и uv берут его
 буквально, и `$` или `#` в ключе не станут подстановкой или комментарием.
@@ -27,6 +28,9 @@ ALLOWED = frozenset(
         "ANTHROPIC_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "ESCALATION_CHAT_ID",
+        # Домены HTTPS для Grafana и Grocy (Caddy, профиль tls) — переменные Actions.
+        "GRAFANA_DOMAIN",
+        "GROCY_DOMAIN",
         # Модель ассистента на сервере — из deploy.sh, а не из старого .env.
         "LLM_PROVIDER",
         "LLM_MODEL",

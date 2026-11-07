@@ -173,6 +173,25 @@ def test_ci_allows_index_rebuild_only_when_variable_is_1() -> None:
     assert deploy.count("index-if-needed YES=1") == 1
 
 
+def test_https_profile_only_when_both_domains_are_in_env(tmp_path: Path) -> None:
+    """Caddy (профиль tls) — только с обоими доменами: иначе Caddyfile без
+    адреса сайта. Домены — переменные Actions, деплой пишет их в .env."""
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "GRAFANA_DOMAIN: ${{ vars.GRAFANA_DOMAIN }}" in ci
+    assert "GROCY_DOMAIN: ${{ vars.GROCY_DOMAIN }}" in ci
+    deploy = (DEPLOY / "deploy.sh").read_text()
+    assert 'profiles="$profiles,tls"' in deploy
+
+    # env_value из deploy.sh: кавычки set_env.py снимаются, нет ключа — пусто.
+    function = deploy[deploy.index("env_value() {") : deploy.index("\n}\n") + 2]
+    (tmp_path / ".env").write_text("GRAFANA_DOMAIN='g.example.org'\nGROCY_DOMAIN=\n")
+    script = f'{function}\necho "[$(env_value GRAFANA_DOMAIN)][$(env_value GROCY_DOMAIN)][$(env_value NOPE)]"'
+    result = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "[g.example.org][][]"
+
+
 @pytest.mark.parametrize(
     ("stdin", "message"),
     [

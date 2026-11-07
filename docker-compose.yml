@@ -1,11 +1,13 @@
 # Стек Recipes LLM. Запуск: make up (при первом запуске создаёт .env).
 # Значения ${...} compose берёт из .env в этой папке.
-# Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
+# Порты опубликованы на 127.0.0.1; исключение — Caddy (профиль tls, ниже).
 # Каждый сервис получает только свои переменные через environment, без env_file.
 # Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот,
-# observability — Prometheus и Grafana, alerts — Alertmanager → Telegram;
-# Qdrant — всегда. Локально по умолчанию api, на сервере deploy.sh включает
-# bot,observability,alerts.
+# observability — Prometheus и Grafana, alerts — Alertmanager → Telegram,
+# tls — Caddy с HTTPS для Grafana и Grocy; Qdrant — всегда. Локально по
+# умолчанию api, на сервере deploy.sh включает bot,observability,alerts и
+# tls, если заданы домены.
+# Публичные порты — только у Caddy (80, 443), остальные — на 127.0.0.1.
 # Склад Grocy — отдельный compose-проект (deploy/grocy/, на сервере /opt/grocy):
 # ассистент и бот видят его через внешнюю docker-сеть grocy.
 name: recipes-llm
@@ -154,12 +156,16 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      # За Caddy (профиль tls) — свой адрес и cookie только по HTTPS; без
+      # домена переменные пустые, и Grafana берёт свои значения по умолчанию.
+      GF_SERVER_ROOT_URL: ${GRAFANA_DOMAIN:+https://${GRAFANA_DOMAIN}/}
+      GF_SECURITY_COOKIE_SECURE: ${GRAFANA_DOMAIN:+true}
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      # Только с этой машины; на сервере — ssh -L 3000:127.0.0.1:3000.
+      # С этой машины; на сервере снаружи — https://GRAFANA_DOMAIN через Caddy.
       - "127.0.0.1:3000:3000"
 
   alertmanager:
@@ -176,12 +182,36 @@ services:
     # Токен бота и id группы — файлами в /run/secrets, не в конфиге.
     secrets: [telegram_bot_token, escalation_chat_id]
 
+  # HTTPS для Grafana и Grocy (решение 82) — профиль tls, только на сервере и
+  # только когда заданы оба домена (deploy.sh). Единственные публичные порты
+  # стека: 80 — проверка домена Let's Encrypt и редирект, 443 — HTTPS.
+  caddy:
+    image: docker.io/library/caddy:2.11.7
+    profiles: [tls]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-}
+      GROCY_DOMAIN: ${GROCY_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Сертификаты и ключи: переживают пересоздание контейнера.
+      - caddy-data:/data
+      - caddy-config:/config
+    # Grocy — в своём compose-проекте, общая сеть grocy (как у бота).
+    networks: [default, grocy]
+
 volumes:
   qdrant-data:
   bot-data:
   prometheus-data:
   grafana-data:
   alertmanager-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   # Общая сеть со складом Grocy (его compose — deploy/grocy/). Её создаёт make up.

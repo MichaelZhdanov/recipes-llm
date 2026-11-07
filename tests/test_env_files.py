@@ -139,9 +139,13 @@ def test_no_service_loads_whole_env_file() -> None:
 
 
 def test_ports_are_published_only_on_localhost() -> None:
+    """Кроме Caddy: его 80 и 443 — единственные публичные порты (решение 82,
+    test_only_caddy_is_public_and_it_proxies_grafana_and_grocy)."""
     services = load_compose()["services"]
 
     for name, service in services.items():
+        if name == "caddy":
+            continue
         for port in service.get("ports", []):
             assert port.startswith("127.0.0.1:"), f"{name}: {port}"
 
@@ -212,3 +216,21 @@ def test_dashboard_queries_only_metrics_the_code_exports() -> None:
 
     used = {m for e in exprs for m in re.findall(r"\b(recipes_\w+)", e)}
     assert used and used <= known, used - known
+
+
+def test_only_caddy_is_public_and_it_proxies_grafana_and_grocy() -> None:
+    """Решение 82: публичные порты — только 80 и 443 у Caddy (профиль tls)."""
+    services = load_compose()["services"]
+    caddy = services["caddy"]
+    caddyfile = (ROOT / "deploy/caddy/Caddyfile").read_text(encoding="utf-8")
+
+    assert caddy["profiles"] == ["tls"]
+    assert caddy["image"].startswith("docker.io/library/caddy:2.")
+    assert sorted(caddy["ports"]) == ["443:443", "80:80"]
+    assert "grocy" in caddy["networks"]
+    assert "{$GRAFANA_DOMAIN} {\n\treverse_proxy grafana:3000" in caddyfile
+    assert "{$GROCY_DOMAIN} {\n\treverse_proxy grocy:80" in caddyfile
+    grafana = services["grafana"]["environment"]
+    assert (
+        grafana["GF_SERVER_ROOT_URL"] == "${GRAFANA_DOMAIN:+https://${GRAFANA_DOMAIN}/}"
+    )

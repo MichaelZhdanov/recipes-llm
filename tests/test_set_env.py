@@ -87,6 +87,17 @@ def test_bot_token_and_escalation_chat_are_accepted_on_deploy() -> None:
     )
 
 
+def test_grafana_and_grocy_domains_are_accepted_on_deploy() -> None:
+    """Домены HTTPS (Caddy) приходят из переменных Actions через stdin."""
+    values = parse_values(
+        "GRAFANA_DOMAIN=grafana.example.org\nGROCY_DOMAIN=grocy.example.org\n"
+    )
+
+    assert set_values("", values) == (
+        "GRAFANA_DOMAIN='grafana.example.org'\nGROCY_DOMAIN='grocy.example.org'\n"
+    )
+
+
 def test_anthropic_key_is_accepted_on_deploy() -> None:
     """LLM ассистента по умолчанию — Claude: ключ приходит из секретов GitHub."""
     values = parse_values("ANTHROPIC_API_KEY=sk-ant-test\n")

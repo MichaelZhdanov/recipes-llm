@@ -22,6 +22,11 @@
 # до запуска, поэтому новая версия скрипта подействует со следующего деплоя.
 set -euo pipefail
 
+# Значение ключа из .env без кавычек (set_env.py пишет одинарные); нет — пусто.
+env_value() {
+    grep -s "^$1=" .env | tail -n 1 | cut -d= -f2- | tr -d "'\"" || true
+}
+
 main() {
     if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--rebuild-index" ) ]]; then
         echo "использование: $0 <коммит> [--rebuild-index]  (ключи API — в stdin)" >&2
@@ -58,7 +63,15 @@ main() {
     # сервере (решения 80–81). Переменные перекрывают значения из .env
     # сервера. API от прошлых деплоев останавливается.
     echo "== стек"
-    export COMPOSE_PROFILES=bot,observability,alerts GROCY_DIR=/opt/grocy
+    # HTTPS для Grafana и Grocy (Caddy, решение 82) — только когда в .env оба
+    # домена: их пишет set_env.py из переменных Actions.
+    local profiles=bot,observability,alerts
+    if [[ -n "$(env_value GRAFANA_DOMAIN)" && -n "$(env_value GROCY_DOMAIN)" ]]; then
+        profiles="$profiles,tls"
+    else
+        echo "домены GRAFANA_DOMAIN и GROCY_DOMAIN не заданы — Grafana и Grocy только по ssh-туннелю"
+    fi
+    export COMPOSE_PROFILES="$profiles" GROCY_DIR=/opt/grocy
     docker compose rm --stop --force assistant
     make --no-print-directory up
 
