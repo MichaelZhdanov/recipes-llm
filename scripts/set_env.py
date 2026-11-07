@@ -7,7 +7,7 @@
 процессов (ps), stdin — нет.
 
 Принимаются ключи из ALLOWED: ключи API из секретов GitHub, домены Grafana
-и Grocy из переменных Actions и модель ассистента, которую задаёт сам
+и Grocy из переменных Actions, модель и образ ассистента, которые задаёт сам
 deploy/deploy.sh.
 
 Значение пишется в одинарных кавычках: так Docker Compose и uv берут его
@@ -36,6 +36,8 @@ ALLOWED = frozenset(
         "LLM_MODEL",
         "LLM_EFFORT",
         "ANSWER_REVIEW",
+        # Образ ассистента из GHCR по digest — его передаёт deploy.sh.
+        "APP_IMAGE",
     }
 )
 

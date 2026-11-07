@@ -324,3 +324,17 @@ def test_alerts_test_uses_the_prometheus_image_from_compose() -> None:
     assert not re.search(r"prometheus:v\d", makefile)
     assert "$(PROMETHEUS_IMAGE) check config" in makefile
     assert "$(PROMETHEUS_IMAGE) test rules" in makefile
+
+
+def test_our_services_share_one_image_built_locally_or_given_by_deploy() -> None:
+    """API, бот, сид Grocy и hostlog — один образ: локально собирается из
+    Dockerfile, на сервере APP_IMAGE — образ из GHCR по digest."""
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    services = load_compose()["services"]
+
+    assert "x-app-image: &app-image ${APP_IMAGE:-recipes-llm-app}" in compose_text
+    ours = sorted(n for n, s in services.items() if s.get("build"))
+    assert ours == ["assistant", "bot", "grocy-seed", "hostlog"]
+    for name in ours:
+        assert services[name]["image"] == "${APP_IMAGE:-recipes-llm-app}", name
+        assert services[name]["build"] == ".", name

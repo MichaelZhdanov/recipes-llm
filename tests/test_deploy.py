@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
@@ -147,18 +148,92 @@ def test_rerun_updates_the_clone_even_after_a_deploy(tmp_path: Path) -> None:
     assert (app_dir / "deploy" / "deploy.sh").exists()
 
 
-def test_deploy_accepts_only_the_rebuild_flag(tmp_path: Path) -> None:
-    result = subprocess.run(
-        ["bash", str(DEPLOY / "deploy.sh"), "abc123", "--yes-rebuild"],
+IMAGE = "ghcr.io/michaelzhdanov/recipes-llm@sha256:" + "0" * 64
+
+
+def run_deploy(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(DEPLOY / "deploy.sh"), *args],
         env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
         capture_output=True,
         text=True,
         check=False,
     )
 
+
+def test_deploy_accepts_only_the_rebuild_flag(tmp_path: Path) -> None:
+    result = run_deploy(tmp_path, "abc123", IMAGE, "--yes-rebuild")
+
     assert result.returncode == 2
     assert "--rebuild-index" in result.stderr
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "ghcr.io/michaelzhdanov/recipes-llm:abc123",
+        "docker.io/library/caddy@sha256:" + "0" * 64,
+        "--rebuild-index",
+    ],
+)
+def test_deploy_takes_our_image_only_by_digest(tmp_path: Path, image: str) -> None:
+    """Тег можно перезалить: сервер берёт образ только по digest из GHCR."""
+    result = run_deploy(tmp_path, "abc123", image)
+
+    assert result.returncode == 2
+    assert "@sha256:<digest>" in result.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_server_pulls_the_image_ci_built_and_does_not_build() -> None:
+    """CI собирает образ один раз и отправляет в GHCR; сервер входит туда
+    коротким токеном задачи деплоя, скачивает образ по digest и выходит."""
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = ci["jobs"]
+    build, deploy_job = jobs["build"], jobs["deploy"]
+
+    assert build["permissions"] == {"contents": "read", "packages": "write"}
+    assert build["outputs"]["image"] == "${{ steps.push.outputs.image }}"
+    push = next(s for s in build["steps"] if s.get("id") == "push")["run"]
+    assert "--password-stdin" in push and "imagetools inspect" in push
+    assert "docker build" not in str(jobs["check"])
+    assert set(deploy_job["needs"]) >= {"check", "build"}
+    assert deploy_job["permissions"] == {"contents": "read", "packages": "read"}
+    step = deploy_job["steps"][0]
+    assert step["env"]["IMAGE"] == "${{ needs.build.outputs.image }}"
+    assert 'printf \'%s\' "$GITHUB_TOKEN" | server "docker login ghcr.io' in step["run"]
+    assert "deploy/deploy.sh $GITHUB_SHA $IMAGE$rebuild" in step["run"]
+    # Вход — обычным docker login, без сторонних actions.
+    assert "login-action" not in str(ci)
+
+    deploy = (DEPLOY / "deploy.sh").read_text()
+    assert "trap 'docker logout ghcr.io" in deploy
+    assert deploy.index('docker pull --quiet "$image"') < deploy.index(
+        "make --no-print-directory up"
+    )
+    assert "printf 'APP_IMAGE=%s\\n' \"$image\"" in deploy
+    assert 'APP_IMAGE="$image"' in deploy
+    assert "docker image prune --all --force" in deploy
+
+
+def test_make_up_builds_locally_and_only_pulls_with_app_image() -> None:
+    """Без APP_IMAGE make up собирает образ из Dockerfile, с ним — не собирает."""
+
+    def dry_run(*args: str) -> str:
+        return subprocess.run(
+            ["make", "-n", "-C", str(ROOT), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert "docker compose up -d --build --wait" in dry_run("up", "APP_IMAGE=")
+    assert "docker compose up -d --no-build --wait" in dry_run(
+        "up", f"APP_IMAGE={IMAGE}"
+    )
+    assert "run --rm --build grocy-seed" in dry_run("grocy-seed", "APP_IMAGE=")
+    assert "--build" not in dry_run("grocy-seed", f"APP_IMAGE={IMAGE}")
 
 
 def test_ci_allows_index_rebuild_only_when_variable_is_1() -> None:

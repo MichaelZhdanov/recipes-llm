@@ -15,6 +15,12 @@ INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)
 # /opt/grocy) или из .env; пусто — без Grocy.
 GROCY_DIR ?= $(shell grep -s '^GROCY_DIR=' .env | cut -d= -f2-)
 
+# Образ ассистента: из окружения (deploy.sh задаёт образ из GHCR по digest) или
+# из .env. Задан — образ скачивается, а не собирается: на сервере работает ровно
+# то, что собрал и проверил CI. Пусто — сборка из Dockerfile.
+APP_IMAGE ?= $(shell grep -s '^APP_IMAGE=' .env | cut -d= -f2- | tr -d "'\"")
+BUILD = $(if $(APP_IMAGE),--no-build,--build)
+
 # Файловая цель: выполняется, только если .env ещё нет.
 .env: ## создать .env со случайными секретами
 	$(INIT_ENV)
@@ -26,7 +32,7 @@ up: .env ## поднять стек: Qdrant, профили из COMPOSE_PROFILE
 	$(INIT_ENV)
 	@docker network inspect grocy >/dev/null 2>&1 || docker network create grocy >/dev/null
 	@if [ -n "$(GROCY_DIR)" ]; then $(MAKE) --no-print-directory grocy-up; fi
-	docker compose up -d --build --wait --wait-timeout 300
+	docker compose up -d $(BUILD) --wait --wait-timeout 300
 	@if [ -n "$(GROCY_DIR)" ]; then $(MAKE) --no-print-directory grocy-seed; fi
 	@docker compose ps --format '{{.Service}}: {{.Status}}'
 	@echo "HTTP API:   http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (профиль api)"
@@ -67,7 +73,7 @@ grocy-up: ## склад Grocy — свой compose-проект в GROCY_DIR (н
 	docker compose --project-directory "$(GROCY_DIR)" -f "$(GROCY_DIR)/docker-compose.yml" up -d --wait --wait-timeout 300
 
 grocy-seed: .env ## демо-склад Grocy: продукты, остатки, пользователь без прав и его ключ (идемпотентно)
-	GROCY_DIR="$(GROCY_DIR)" docker compose run --rm --build grocy-seed
+	GROCY_DIR="$(GROCY_DIR)" docker compose run --rm $(if $(APP_IMAGE),,--build) grocy-seed
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.

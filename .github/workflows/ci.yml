@@ -7,7 +7,8 @@ on:
   # Ручной запуск (Actions → CI → Run workflow): проверка и деплой текущего main.
   workflow_dispatch:
 
-# Минимальные права: CI только читает код.
+# Минимальные права: по умолчанию CI только читает код; build и deploy
+# добавляют себе права на пакеты GHCR.
 permissions:
   contents: read
 
@@ -51,16 +52,59 @@ jobs:
       - name: Правила алертов (promtool)
         run: make alerts-test
 
-      - name: Сборка образа ассистента
-        run: docker compose build assistant
+  # Образ ассистента собирается один раз — здесь — и уходит в GHCR с тегом
+  # коммита. Сервер скачивает его же по digest и сам ничего не собирает: в проде
+  # работает ровно то, что собрал (и проверил) CI.
+  build:
+    # PR из форка в GHCR писать не может: у его токена нет packages: write.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-  # Деплой на сервер: только после зелёной проверки, только main и не из PR
-  # (в PR секретов нет). Вход root по ключу деплоя, см. deploy/bootstrap.sh.
+      # GITHUB_TOKEN — встроенный: GitHub выдаёт его на каждую задачу, живёт до её
+      # конца, права — из permissions выше. Вход — обычным docker login, без
+      # сторонних actions.
+      - name: Сборка образа и отправка в GHCR
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Имя в GHCR — только строчными: MichaelZhdanov → michaelzhdanov.
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          # --pull: свежий базовый образ; кэша на раннере нет, apt-get upgrade
+          # в Dockerfile ставит все вышедшие исправления Debian.
+          docker build --pull \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$repo:$GITHUB_SHA" .
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push --quiet "$repo:$GITHUB_SHA"
+          # Digest — у самого реестра: дальше образ идёт только по нему.
+          image="$repo@$(docker buildx imagetools inspect "$repo:$GITHUB_SHA" --format '{{.Manifest.Digest}}')"
+          docker logout ghcr.io
+          echo "образ: $image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+  # Деплой на сервер: только после зелёной проверки и сборки, только push в main
+  # и ручной запуск (в PR секретов нет). Вход root по ключу деплоя, см.
+  # deploy/bootstrap.sh.
   deploy:
-    needs: check
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [check, build]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-26.04
     environment: prod
+    # Токен задачи — только читать пакеты: им сервер скачивает образ из GHCR.
+    permissions:
+      contents: read
+      packages: read
     # Сборка полного индекса на сервере (только с ALLOW_INDEX_REBUILD) — около часа.
     timeout-minutes: 90
     # Деплои идут по очереди; новый push не обрывает начатый деплой посередине.
@@ -84,6 +128,8 @@ jobs:
           # сервере); не заданы оба — оба только по ssh-туннелю.
           GRAFANA_DOMAIN: ${{ vars.GRAFANA_DOMAIN }}
           GROCY_DOMAIN: ${{ vars.GROCY_DOMAIN }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::notice::Деплой не настроен: нет секрета DEPLOY_HOST в environment prod (README, «Деплой»)."
@@ -92,6 +138,15 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          # Ключ сервера не проверяется (решение автора): сервер может переезжать.
+          server() {
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 "root@$DEPLOY_HOST" "$@"
+          }
+          # Сервер входит в GHCR токеном этой задачи: только чтение пакетов, живёт
+          # до конца задачи; в stdin, а не в команде. deploy.sh в конце выходит.
+          printf '%s' "$GITHUB_TOKEN" | server "docker login ghcr.io --username $GITHUB_ACTOR --password-stdin"
           # Сначала клон на сервере переходит на проверенный коммит, потом
           # запускается deploy.sh уже из него: так всегда работает новая версия
           # скрипта, даже если клон на сервере старый (или скрипта там ещё нет).
@@ -99,8 +154,7 @@ jobs:
           remote="$remote && git checkout --quiet --detach $GITHUB_SHA"
           rebuild=""
           if [ "$ALLOW_INDEX_REBUILD" = "1" ]; then rebuild=" --rebuild-index"; fi
-          remote="$remote && deploy/deploy.sh $GITHUB_SHA$rebuild"
-          # Ключ сервера не проверяется (решение автора): сервер может переезжать.
+          remote="$remote && deploy/deploy.sh $GITHUB_SHA $IMAGE$rebuild"
           # Ключи API — в stdin, а не в команде: так их не видно в ps на
           # сервере. Незаданный в GitHub ключ не передаётся, и в .env на
           # сервере остаётся прежнее значение.
@@ -112,6 +166,4 @@ jobs:
             [ -z "$ESCALATION_CHAT_ID" ] || printf 'ESCALATION_CHAT_ID=%s\n' "$ESCALATION_CHAT_ID"
             [ -z "$GRAFANA_DOMAIN" ] || printf 'GRAFANA_DOMAIN=%s\n' "$GRAFANA_DOMAIN"
             [ -z "$GROCY_DOMAIN" ] || printf 'GROCY_DOMAIN=%s\n' "$GROCY_DOMAIN"
-          } | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
-                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o ServerAliveInterval=30 "root@$DEPLOY_HOST" "$remote"
+          } | server "$remote"

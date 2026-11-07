@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Деплой на сервере: deploy/deploy.sh <коммит> [--rebuild-index]. Запускается от root.
+# Деплой на сервере: deploy/deploy.sh <коммит> <образ> [--rebuild-index]. От root.
 #
-# GitHub Actions сначала переводит клон на коммит, потом вызывает скрипт:
+# <образ> — образ ассистента в GHCR по digest (ghcr.io/…@sha256:…): его собрал
+# CI, на сервере образ не собирается. GitHub Actions входит
+# сервером в GHCR коротким токеном задачи деплоя, переводит клон на коммит и
+# вызывает скрипт:
 #   printf 'GIGACHAT_API_KEY=%s\n' … | ssh root@<сервер> \
-#     "cd /opt/recipes-llm && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha>"
-# Вручную на сервере достаточно deploy/deploy.sh <sha>: checkout ниже повторится.
+#     "cd /opt/recipes-llm && git fetch origin main && git checkout --detach <sha> && deploy/deploy.sh <sha> <образ>"
+# Вручную на сервере — deploy/deploy.sh <sha> <образ> после docker login ghcr.io
+# (если пакет в GHCR приватный): checkout ниже повторится.
 # Ключи API — в stdin, а не аргументами: аргументы видны в списке
 # процессов (ps), stdin — нет.
 #
-# Шаги: ключи API и модель ассистента в .env → код ровно того коммита, что
-# проверил CI → fail2ban → стек (Qdrant, бот, наблюдаемость) → индекс тот? →
-# состояние сервисов.
+# Шаги: ключи API, модель и образ ассистента в .env → код ровно того коммита,
+# что проверил CI → fail2ban → стек (Qdrant, бот, наблюдаемость) → индекс тот? →
+# старые образы → состояние сервисов.
 #
 # Индекс сам не строится: полная сборка — ≈ 200 ₽ эмбеддингов и около часа, а
 # снимок уже посчитан локально и загружается deploy/upload_index.sh. Индекса
@@ -29,16 +33,24 @@ env_value() {
 }
 
 main() {
-    if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--rebuild-index" ) ]]; then
-        echo "использование: $0 <коммит> [--rebuild-index]  (ключи API — в stdin)" >&2
+    if [[ $# -lt 2 || $# -gt 3 || ( $# -eq 3 && "$3" != "--rebuild-index" ) ]]; then
+        echo "использование: $0 <коммит> <образ> [--rebuild-index]  (ключи API — в stdin)" >&2
         exit 2
     fi
-    local sha="$1" rebuild="${2:-}"
+    local sha="$1" image="$2" rebuild="${3:-}"
+    # Только по digest: тег можно перезалить, digest — нет.
+    if [[ ! "$image" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
+        echo "образ — ghcr.io/<владелец>/<имя>@sha256:<digest>, а не «$image»" >&2
+        exit 2
+    fi
 
     cd "$(dirname "$(readlink -f "$0")")/.."
     # Два деплоя (из CI и ручной) не идут одновременно: оба могут строить индекс.
     exec 9>"$HOME/.recipes-llm-deploy.lock"
     flock -w 1800 9
+    # Вход в GHCR сделал CI токеном задачи деплоя (только чтение пакетов, живёт до
+    # конца задачи). После деплоя запись о входе стирается, даже если он упал.
+    trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
     # На сервере не нужны линтеры и тесты: uv ставит только зависимости сервиса.
     export UV_NO_DEV=1
@@ -52,6 +64,10 @@ main() {
     echo "== модель ассистента → .env"
     printf '%s\n' LLM_PROVIDER=cloudru LLM_MODEL=zai-org/GLM-5.1 LLM_EFFORT=low \
         ANSWER_REVIEW=false | uv run --no-project --python 3.14 scripts/set_env.py .env
+
+    # В .env — чтобы и ручной docker compose на сервере поднимал этот образ.
+    echo "== образ ассистента $image → .env"
+    printf 'APP_IMAGE=%s\n' "$image" | uv run --no-project --python 3.14 scripts/set_env.py .env
 
     echo "== код коммита $sha"
     git fetch --quiet origin main
@@ -94,7 +110,10 @@ main() {
     else
         echo "домены GRAFANA_DOMAIN и GROCY_DOMAIN не заданы — Grafana и Grocy только по ssh-туннелю"
     fi
-    export COMPOSE_PROFILES="$profiles" GROCY_DIR=/opt/grocy
+    export COMPOSE_PROFILES="$profiles" GROCY_DIR=/opt/grocy APP_IMAGE="$image"
+    # Явно до make up: тот поднимает стек без сборки (APP_IMAGE задан), образ
+    # должен уже лежать на сервере.
+    docker pull --quiet "$image"
     docker compose rm --stop --force assistant
     make --no-print-directory up
 
@@ -116,6 +135,12 @@ main() {
         echo "  в GitHub (Settings → Environments → prod → Variables) и Run workflow." >&2
         exit 1
     fi
+
+    # Каждый деплой скачивает новый образ ассистента (≈ 0,5 ГБ на диске): прошлые
+    # и прочие образы, которые не нужны ни одному контейнеру, удаляются. Сервер
+    # отдан проекту целиком — чужих образов на нём нет.
+    echo "== старые образы"
+    docker image prune --all --force | tail -n 1
 
     # make up уже дождался healthy (--wait): здесь — только что запущено.
     echo "== проверка"
