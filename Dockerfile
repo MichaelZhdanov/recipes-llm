@@ -1,6 +1,15 @@
 # Python 3.14 и uv 0.13.5; тот же образ, что в Makefile и deploy/bootstrap.sh.
 FROM ghcr.io/astral-sh/uv:0.13.5-python3.14-trixie-slim
 
+# Уязвимостей, для которых вышел патч, в образе быть не должно (Trivy-гейт в CI):
+# - пакеты Debian — с исправлениями, вышедшими после сборки базового образа;
+# - pip базового образа удаляется: зависимости ставит uv, а внутри pip — свои
+#   устаревшие копии urllib3, msgpack и setuptools.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall --yes --root-user-action=ignore pip
+
 # Байткод компилируется при установке: быстрее старт.
 # Кеш uv не нужен в образе: без него слой меньше.
 ENV UV_COMPILE_BYTECODE=1 \
