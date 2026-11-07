@@ -370,3 +370,32 @@ def test_schema_asks_for_escalation_and_allergy_every_time() -> None:
     # Примеры для GigaChat заполняют все обязательные поля.
     for example in SEARCH_RECIPES["few_shot_examples"]:  # type: ignore[attr-defined]
         assert set(parameters["required"]) <= set(example["params"])
+
+
+def test_pantry_list_is_queries_not_required_ingredients() -> None:
+    """search_v5 клала каждый продукт перечня «что есть дома» в include отдельной
+    группой — «нужно всё сразу», и фильтр не пропускал ни одного рецепта
+    (pantry-002, pantry-007, 2026-11-07). v6: перечень — в queries, include пуст."""
+    from pathlib import Path
+
+    from assistant.generation.prompt import load_prompt
+    from assistant.tools.search_recipes import PROMPT_VERSION
+
+    prompt = load_prompt("search_v6")
+    assert PROMPT_VERSION == "search_v6"
+    assert "3a. Перечень того, что есть дома" in prompt
+    assert "Тогда include пустой []" in prompt
+    (pantry,) = [
+        e
+        for e in SEARCH_RECIPES["few_shot_examples"]  # type: ignore[attr-defined]
+        if "дома есть" in e["request"]
+    ]
+    assert pantry["params"]["include"] == [] and len(pantry["params"]["queries"]) >= 2
+    # Продукты примера не встречаются ни в одном наборе eval: пример не
+    # подсказывает ответы на кейсы.
+    data = "\n".join(
+        p.read_text(encoding="utf-8").lower()
+        for p in Path("evals/dataset").rglob("*.yaml")
+    )
+    for product in ("кальмар", "булгур", "спарж", "тофу"):
+        assert product not in data, product
