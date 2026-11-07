@@ -39,7 +39,7 @@ from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
@@ -117,6 +117,11 @@ CREATE TABLE IF NOT EXISTS pending (
     question TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS asks (
+    chat_id INTEGER NOT NULL,
+    at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS asks_chat ON asks (chat_id, at);
 """
 
 
@@ -493,6 +498,29 @@ class Store:
             ).fetchone()
             self._db.execute("DELETE FROM pending WHERE chat_id = ?", (chat_id,))
         return None if row is None else str(row[0])
+
+    # --- Ограничение частоты (limits.py) ---
+
+    def ask_times(self, chat_id: int, window: float) -> list[float]:
+        """Когда чат звал модель за последние window секунд."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT at FROM asks WHERE chat_id = ? AND at > ? ORDER BY at",
+                (chat_id, self._clock() - window),
+            ).fetchall()
+        return [float(row[0]) for row in rows]
+
+    def add_ask(self, chat_id: int, keep: float) -> None:
+        """Запомнить обращение к модели; старше keep секунд — не нужны."""
+        now = self._clock()
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM asks WHERE at <= ?", (now - keep,))
+            self._db.execute(
+                "INSERT INTO asks (chat_id, at) VALUES (?, ?)", (chat_id, now)
+            )
+
+    def now(self) -> float:
+        return self._clock()
 
     # --- Кэши ---
 

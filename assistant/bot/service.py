@@ -39,6 +39,7 @@ from assistant.bot.format import (
     GROCY_UNAVAILABLE_TEXT,
     HANDOFF_TEXT,
     HEALTH_TEXT,
+    LIMIT_TEXT,
     NEAR_OFFER_TEXT,
     NEW_TEXT,
     NO_OPERATORS_TEXT,
@@ -64,6 +65,7 @@ from assistant.bot.format import (
     steps_refused_html,
 )
 from assistant.bot.journal import Journal, question_text, search_fields
+from assistant.bot.limits import KEEP, LIMITS, exceeded, wait_text
 from assistant.bot.pages import PageChecker
 from assistant.bot.recipe_page import RecipePage
 from assistant.bot.store import SavedSteps, Source, Store, Ticket, Vote, VoteReason
@@ -247,6 +249,11 @@ class BotService:
         *,
         near: bool = False,
     ) -> Reply:
+        limited = self._limited(chat_id)
+        if limited is not None:
+            return limited
+        # Считается до вызова: сбой модели тоже тратит деньги.
+        self.store.add_ask(chat_id, KEEP)
         started = self._clock()
         stock = self._stock_request(near) if from_stock else None
         note = STOCK_DOWN_TEXT if from_stock and stock is None else ""
@@ -319,6 +326,24 @@ class BotService:
             text = f"{text}\n\n{NOT_FOUND_TWICE_TEXT}"
             buttons = [*buttons, *human_buttons("not_found_twice")]
         return Reply(text, buttons, answer_id)
+
+    def _limited(self, chat_id: int) -> Reply | None:
+        """Лимит частоты (решение 75): ответ «подождите» или None."""
+        hit = exceeded(self.store.ask_times(chat_id, KEEP), self.store.now(), LIMITS)
+        if hit is None:
+            return None
+        self.journal.event(
+            "limited",
+            chat_id,
+            window=hit.limit.window,
+            wait=round(hit.wait),
+        )
+        limit = hit.limit
+        return Reply(
+            LIMIT_TEXT.format(
+                count=limit.count, label=limit.label, wait=wait_text(hit.wait)
+            )
+        )
 
     def _journal(
         self,
