@@ -195,6 +195,9 @@ class Trace:
     first: Trace | None = None
     # Склад, по которому подбирали (этап 6); None — подбор по всем рецептам.
     stock: Stock | None = None
+    # Строгий подбор: что предложит расширенный поиск — рецепт и чего ему не
+    # хватает (для eval: без второго вызова модели).
+    stock_near: tuple[tuple[Chunk, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,7 @@ class StockHits:
     stock: Stock
     missing: dict[int, list[str]]
     near_available: bool
+    near: tuple[tuple[Chunk, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -734,9 +738,10 @@ class Answerer:
                 "near_available": found.near_available,
             }
         )
-        return AnswerResult(
-            answer, dataclasses.replace(result.trace, stock=found.stock)
+        trace = dataclasses.replace(
+            result.trace, stock=found.stock, stock_near=found.near
         )
+        return AnswerResult(answer, trace)
 
     def _stock_hits(
         self, args: SearchArgs, skip: Sequence[int], request: StockRequest
@@ -767,7 +772,13 @@ class Answerer:
             conditions=strict_conditions(args.conditions, stock),
             skip=skip,
         )
-        return StockHits(strict, stock, {}, near_available=bool(near))
+        return StockHits(
+            strict,
+            stock,
+            {},
+            near_available=bool(near),
+            near=tuple((hit.chunk, lacking) for hit, lacking in near),
+        )
 
     def _escalated(self, args: SearchArgs, seconds: float) -> AnswerResult:
         answer = Answer(
