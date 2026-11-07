@@ -22,7 +22,8 @@
   пишет, ассистент молчит. /close в теме, закрытие темы кнопкой Telegram или
   /bot у пользователя возвращают ассистента. Других групп бот не слушает.
   Обращение без сообщений 12 часов закрывается само (`auto_close`).
-- Склад Grocy (этап 6): /grocy включает его у своего чата; на новый вопрос
+- Склад Grocy (этап 6): /grocy или кнопка под /start подключает его у своего
+  чата (в MVP — общий склад на сервере), /grocy_off отключает; на новый вопрос
   разговора бот спрашивает кнопками «из того, что есть» или «по всем
   рецептам», под строгим ответом — кнопка «где не хватает 1–4 продуктов».
 """
@@ -62,17 +63,16 @@ from assistant.bot.escalation import topic_name
 from assistant.bot.format import (
     ALREADY_WITH_HUMAN_TEXT,
     BUSY_TEXT,
-    HELP_TEXT,
     NO_OPERATORS_TEXT,
     NOT_TEXT,
     OPERATOR_ONLY_TEXT,
-    START_TEXT,
     STEPS_STATUS_TEXT,
     TOO_LONG_TEXT,
     TOPIC_CLOSED_TEXT,
     TOPIC_EXPIRED_TEXT,
     USER_LEFT_TEXT,
     Keyboard,
+    help_text,
     status_text,
 )
 from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
@@ -175,10 +175,11 @@ class Handlers:
         self.operators_chat = operators_chat
 
     async def start(self, message: Message) -> None:
-        await message.answer(START_TEXT)
+        reply = await asyncio.to_thread(self.service.start, message.chat.id)
+        await message.answer(reply.text, reply_markup=keyboard(reply.buttons))
 
     async def help(self, message: Message) -> None:
-        await message.answer(HELP_TEXT)
+        await message.answer(help_text(self.service.stock is not None))
 
     async def new(self, message: Message) -> None:
         text = await asyncio.to_thread(self.service.reset, message.chat.id)
@@ -350,9 +351,26 @@ class Handlers:
     # --- Склад Grocy ---
 
     async def grocy(self, message: Message) -> None:
-        """/grocy — включить или выключить интеграцию с Grocy для своего чата."""
-        text = await asyncio.to_thread(self.service.toggle_grocy, message.chat.id)
+        """/grocy — подключить склад Grocy (в MVP — общий склад на сервере)."""
+        text = await asyncio.to_thread(self.service.connect_grocy, message.chat.id)
         await message.answer(text)
+
+    async def grocy_off(self, message: Message) -> None:
+        """/grocy_off — отключить склад: дальше поиск по всем рецептам."""
+        text = await asyncio.to_thread(self.service.disconnect_grocy, message.chat.id)
+        await message.answer(text)
+
+    async def grocy_button(self, callback: CallbackQuery) -> None:
+        """Кнопка «Подключить Grocy» под /start."""
+        message = callback.message
+        await callback.answer()
+        if message is None:
+            return
+        text = await asyncio.to_thread(self.service.connect_grocy, message.chat.id)
+        if isinstance(message, Message):
+            with contextlib.suppress(TelegramBadRequest):
+                await message.edit_reply_markup(reply_markup=None)
+            await message.answer(text)
 
     async def source(self, callback: CallbackQuery, bot: Bot) -> None:
         """«Из того, что есть» / «по всем рецептам» — ответ на вопрос в ожидании."""
@@ -613,6 +631,7 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.message.register(handlers.new, Command("new"))
     router.message.register(handlers.human, Command("human"))
     router.message.register(handlers.grocy, Command("grocy"))
+    router.message.register(handlers.grocy_off, Command("grocy_off"))
     router.message.register(handlers.question, F.text)
     router.message.register(handlers.other)
     router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
@@ -624,6 +643,7 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.callback_query.register(handlers.rate, F.data.startswith("rate:"))
     router.callback_query.register(handlers.source, F.data.startswith("source:"))
     router.callback_query.register(handlers.near, F.data.startswith("near:"))
+    router.callback_query.register(handlers.grocy_button, F.data == "grocy:on")
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     if handlers.operators_chat is not None:
@@ -661,10 +681,11 @@ COMMANDS = [
     BotCommand(command="bot", description="вернуться к ассистенту от повара"),
     BotCommand(command="help", description="что я умею"),
 ]
-# Пункт меню — только когда Grocy подключён (решение 70).
-GROCY_COMMAND = BotCommand(
-    command="grocy", description="включить или выключить интеграцию с Grocy"
-)
+# Пункты меню — только когда Grocy на сервере есть (решение 70).
+GROCY_COMMANDS = [
+    BotCommand(command="grocy", description="подключить склад Grocy (демо)"),
+    BotCommand(command="grocy_off", description="отключить склад Grocy"),
+]
 
 
 async def heartbeat(
@@ -744,7 +765,7 @@ async def run(settings: Settings) -> None:
     closer = asyncio.create_task(auto_close(handlers, bot))
     try:
         await bot.set_my_commands(
-            [*COMMANDS[:2], GROCY_COMMAND, *COMMANDS[2:]] if stock else COMMANDS
+            [*COMMANDS[:2], *GROCY_COMMANDS, *COMMANDS[2:]] if stock else COMMANDS
         )
         await dispatcher.start_polling(
             bot, allowed_updates=["message", "callback_query"]

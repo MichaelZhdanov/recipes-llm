@@ -31,6 +31,8 @@ from assistant.bot.format import (
     EXPIRED_TEXT,
     FAILED_TEXT,
     GONE_TEXT,
+    GROCY_ALREADY_OFF_TEXT,
+    GROCY_ALREADY_ON_TEXT,
     GROCY_OFF_TEXT,
     GROCY_ON_TEXT,
     GROCY_UNAVAILABLE_TEXT,
@@ -54,6 +56,8 @@ from assistant.bot.format import (
     rate_buttons,
     reason_buttons,
     source_buttons,
+    start_buttons,
+    start_text,
     step_caption,
     steps_html,
     steps_refused_html,
@@ -178,14 +182,29 @@ class BotService:
             return Reply(GONE_TEXT)
         return self._answer(chat_id, question, progress, True, near=True)
 
-    def toggle_grocy(self, chat_id: int) -> str:
-        """/grocy: включить или выключить склад для этого чата (решение 70)."""
+    def start(self, chat_id: int) -> Reply:
+        """/start: приветствие и, если есть Grocy, предложение подключить склад."""
+        grocy = self.stock is not None
+        connected = grocy and self.store.grocy_enabled(chat_id)
+        return Reply(start_text(grocy, connected), start_buttons(grocy, connected))
+
+    def connect_grocy(self, chat_id: int) -> str:
+        """/grocy и кнопка «Подключить Grocy»: в MVP — общий склад на сервере."""
         if self.stock is None:
             return GROCY_UNAVAILABLE_TEXT
-        enabled = not self.store.grocy_enabled(chat_id)
-        self.store.set_grocy(chat_id, enabled)
-        logger.info("Grocy у чата: %s", "включён" if enabled else "выключен")
-        return GROCY_ON_TEXT if enabled else GROCY_OFF_TEXT
+        if self.store.grocy_enabled(chat_id):
+            return GROCY_ALREADY_ON_TEXT
+        self.store.set_grocy(chat_id, True)
+        logger.info("Grocy у чата подключён")
+        return GROCY_ON_TEXT
+
+    def disconnect_grocy(self, chat_id: int) -> str:
+        """/grocy_off: дальше — поиск по всем рецептам, как без склада."""
+        if self.stock is None or not self.store.grocy_enabled(chat_id):
+            return GROCY_ALREADY_OFF_TEXT
+        self.store.set_grocy(chat_id, False)
+        logger.info("Grocy у чата отключён")
+        return GROCY_OFF_TEXT
 
     def _stock_request(self, near: bool) -> StockRequest | None:
         """Склад из Grocy; None — Grocy недоступен (тогда ищем по всем рецептам)."""

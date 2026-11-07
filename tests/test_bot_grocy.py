@@ -12,6 +12,8 @@ from bot_helpers import FakeTelegram, press, update
 from assistant.bot.app import Handlers, build_dispatcher, make_bot
 from assistant.bot.format import (
     ASK_AGAIN_TEXT,
+    GROCY_ALREADY_OFF_TEXT,
+    GROCY_ALREADY_ON_TEXT,
     GROCY_OFF_TEXT,
     GROCY_ON_TEXT,
     GROCY_UNAVAILABLE_TEXT,
@@ -99,12 +101,15 @@ def service(
     )
 
 
-def test_toggle_needs_a_connected_grocy() -> None:
-    assert service(grocy=False).toggle_grocy(USER) == GROCY_UNAVAILABLE_TEXT
+def test_connect_and_disconnect_are_separate_and_idempotent() -> None:
+    assert service(grocy=False).connect_grocy(USER) == GROCY_UNAVAILABLE_TEXT
     bot_service = service()
 
-    assert bot_service.toggle_grocy(USER) == GROCY_ON_TEXT
-    assert bot_service.toggle_grocy(USER) == GROCY_OFF_TEXT
+    assert bot_service.disconnect_grocy(USER) == GROCY_ALREADY_OFF_TEXT
+    assert bot_service.connect_grocy(USER) == GROCY_ON_TEXT
+    assert bot_service.connect_grocy(USER) == GROCY_ALREADY_ON_TEXT
+    assert bot_service.disconnect_grocy(USER) == GROCY_OFF_TEXT
+    assert not bot_service.store.grocy_enabled(USER)
 
 
 def test_without_grocy_enabled_the_bot_answers_as_before() -> None:
@@ -118,7 +123,7 @@ def test_without_grocy_enabled_the_bot_answers_as_before() -> None:
 def test_new_conversation_asks_the_source_once_and_follow_ups_keep_it() -> None:
     answerer = RecordingAnswerer()
     bot_service = service(answerer)
-    bot_service.toggle_grocy(USER)
+    bot_service.connect_grocy(USER)
 
     asked = bot_service.ask(USER, "что на ужин")
     assert asked.text == SOURCE_QUESTION_TEXT and answerer.calls == []
@@ -139,7 +144,7 @@ def test_new_conversation_asks_the_source_once_and_follow_ups_keep_it() -> None:
 def test_all_recipes_choice_searches_without_the_stock() -> None:
     answerer = RecordingAnswerer()
     bot_service = service(answerer)
-    bot_service.toggle_grocy(USER)
+    bot_service.connect_grocy(USER)
     bot_service.ask(USER, "что на ужин")
 
     bot_service.choose_source(USER, "all")
@@ -151,7 +156,7 @@ def test_all_recipes_choice_searches_without_the_stock() -> None:
 def test_strict_answer_offers_near_and_near_lists_what_is_missing() -> None:
     answerer = RecordingAnswerer(answer(near_available=True))
     bot_service = service(answerer)
-    bot_service.toggle_grocy(USER)
+    bot_service.connect_grocy(USER)
     bot_service.ask(USER, "что испечь")
     strict = bot_service.choose_source(USER, "stock")
     assert strict.answer_id is not None
@@ -169,7 +174,7 @@ def test_strict_answer_offers_near_and_near_lists_what_is_missing() -> None:
 def test_grocy_down_is_said_honestly_and_search_goes_over_all_recipes() -> None:
     answerer = RecordingAnswerer()
     bot_service = service(answerer, stock=stock_reader(fail=True))
-    bot_service.toggle_grocy(USER)
+    bot_service.connect_grocy(USER)
     bot_service.ask(USER, "что на ужин")
 
     reply = bot_service.choose_source(USER, "stock")
@@ -209,3 +214,52 @@ def test_source_button_answers_in_place_of_a_status_and_disappears() -> None:
     assert (edits[-1].text or "").startswith("🍳 Вот что нашлось:")
     (removed,) = [m for m in telegram.calls if isinstance(m, EditMessageReplyMarkup)]
     assert removed.message_id == 102 and removed.reply_markup is None
+
+
+def test_start_offers_to_connect_with_a_button_and_help_explains_both_commands() -> (
+    None
+):
+    from aiogram.types import InlineKeyboardMarkup
+
+    from assistant.bot.format import HELP_TEXT, START_GROCY_OFFER_TEXT, START_TEXT
+
+    def run(bot_service: BotService, *raws: dict[str, Any]) -> FakeTelegram:
+        telegram = FakeTelegram()
+        bot = make_bot(TOKEN, session=telegram)
+        dispatcher = build_dispatcher(Handlers(bot_service))
+
+        async def scenario() -> None:
+            for raw in raws:
+                await dispatcher.feed_raw_update(bot, raw)
+
+        asyncio.run(scenario())
+        return telegram
+
+    bot_service = service()
+    telegram = run(
+        bot_service,
+        update("/start"),
+        update("/help", update_id=2),
+        press("grocy:on", message_id=101),
+        update("/start", update_id=3),
+        update("/grocy_off", update_id=4),
+    )
+
+    start, help_, connected, start_again, off = [
+        m for m in telegram.calls if isinstance(m, SendMessage)
+    ]
+    assert START_GROCY_OFFER_TEXT in (start.text or "")
+    assert isinstance(start.reply_markup, InlineKeyboardMarkup)
+    assert start.reply_markup.inline_keyboard[0][0].callback_data == "grocy:on"
+    assert "/grocy_off — отключить склад Grocy" in (help_.text or "")
+    assert "общий склад на сервере" in (help_.text or "")
+    assert connected.text == GROCY_ON_TEXT
+    # Подключён — под /start кнопки нет, а текст напоминает, как отключить.
+    assert start_again.reply_markup is None and "/grocy_off" in (start_again.text or "")
+    assert off.text == GROCY_OFF_TEXT
+    # Без Grocy на сервере — всё как раньше: ни предложения, ни команд склада.
+    plain = run(service(grocy=False), update("/start"), update("/help", update_id=2))
+    assert [m.text for m in plain.calls if isinstance(m, SendMessage)] == [
+        START_TEXT,
+        HELP_TEXT,
+    ]

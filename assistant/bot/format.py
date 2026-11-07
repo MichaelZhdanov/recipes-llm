@@ -38,6 +38,57 @@ HELP_TEXT = (
     "/new — забыть разговор и начать заново\n/human — позвать повара\n"
     "/bot — вернуться ко мне от повара\n/help — эта подсказка"
 )
+# Склад Grocy в /start и /help (решения автора 70–71): предложение подключить —
+# кнопкой или /grocy; в MVP подключается общий склад на сервере; отключить —
+# /grocy_off; без склада — поиск по всем рецептам, как обычно. Только когда
+# Grocy на этом сервере есть: иначе подключать нечего.
+START_GROCY_OFFER_TEXT = (
+    "🧺 Хотите, я буду подбирать рецепты из того, что есть у вас дома? Подключите "
+    "склад продуктов Grocy — кнопкой ниже или командой /grocy. Пока это демо: "
+    "подключится общий склад на сервере. Отключить — /grocy_off. Без склада я ищу "
+    "по всем рецептам, как обычно."
+)
+START_GROCY_ON_TEXT = (
+    "🧺 Склад Grocy подключён: на новый вопрос я спрошу, искать ли из того, что есть "
+    "дома, или по всем рецептам. Отключить — /grocy_off."
+)
+HELP_GROCY_TEXT = (
+    "Склад продуктов Grocy: /grocy подключает его (пока это демо — общий склад на "
+    "сервере), /grocy_off отключает. С подключённым складом на новый вопрос я спрошу, "
+    "искать ли из того, что есть дома, или по всем рецептам: сначала — рецепты "
+    "целиком из ваших продуктов, а если не хватает одного-четырёх — покажу и их, "
+    "с тем, что докупить. Без склада ищу по всем рецептам, как обычно."
+)
+GROCY_CONNECT_BUTTON: Button = ("🧺 Подключить Grocy", "grocy:on")
+
+
+def start_text(grocy: bool = False, connected: bool = False) -> str:
+    """/start; grocy — есть ли Grocy на сервере, connected — подключён ли у чата."""
+    if not grocy:
+        return START_TEXT
+    head, _, commands = START_TEXT.rpartition("\n\n")
+    about = START_GROCY_ON_TEXT if connected else START_GROCY_OFFER_TEXT
+    return f"{head}\n\n{about}\n\n{commands}"
+
+
+def start_buttons(grocy: bool = False, connected: bool = False) -> Keyboard:
+    """Под /start — «Подключить Grocy», если есть что подключать."""
+    return [[GROCY_CONNECT_BUTTON]] if grocy and not connected else []
+
+
+def help_text(grocy: bool = False) -> str:
+    """/help; grocy — есть ли Grocy на сервере."""
+    if not grocy:
+        return HELP_TEXT
+    head, _, commands = HELP_TEXT.rpartition("\n\n")
+    commands = commands.replace(
+        "/bot — вернуться ко мне от повара\n",
+        "/bot — вернуться ко мне от повара\n"
+        "/grocy — подключить склад Grocy\n/grocy_off — отключить склад Grocy\n",
+    )
+    return f"{head}\n\n{HELP_GROCY_TEXT}\n\n{commands}"
+
+
 NEW_TEXT = "🧹 Начинаем заново. Что приготовим?"
 BUSY_TEXT = (
     "⏳ Секунду, ещё отвечаю на прошлый вопрос — пришлю ответ, и спросите дальше."
@@ -95,13 +146,16 @@ TOPIC_EXPIRED_TEXT = "⏰ Обращение закрыто автоматиче
 
 # --- Склад Grocy (этап 6) ---
 GROCY_ON_TEXT = (
-    "🧺 Интеграция с Grocy включена. На новый вопрос я спрошу, искать ли из того, "
-    "что есть дома, или по всем рецептам. Выключить — /grocy."
+    "🧺 Склад Grocy подключён — пока это демо, общий склад на сервере. На новый "
+    "вопрос я спрошу, искать ли из того, что есть дома, или по всем рецептам. "
+    "Отключить — /grocy_off."
 )
-GROCY_OFF_TEXT = (
-    "Интеграция с Grocy выключена: ищу по всем рецептам. Включить — /grocy."
+GROCY_ALREADY_ON_TEXT = "Склад Grocy уже подключён. Отключить — /grocy_off."
+GROCY_OFF_TEXT = "Склад Grocy отключён — ищу по всем рецептам, как обычно. Подключить снова — /grocy."
+GROCY_ALREADY_OFF_TEXT = (
+    "Склад Grocy и так не подключён — ищу по всем рецептам. Подключить — /grocy."
 )
-GROCY_UNAVAILABLE_TEXT = "Склад Grocy не подключён — ищу по всем рецептам."
+GROCY_UNAVAILABLE_TEXT = "Склада Grocy на этом сервере нет — ищу по всем рецептам."
 SOURCE_QUESTION_TEXT = "Искать из того, что есть дома, или по всем рецептам?"
 SOURCE_BUTTONS: list[Button] = [
     ("🧺 Из того, что есть", "source:stock"),
