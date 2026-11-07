@@ -43,7 +43,7 @@ from assistant.retrieval.store import (
     IndexMismatchError,
     IndexMissingError,
     VectorStore,
-    mismatch,
+    manifest_reason,
 )
 from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 
@@ -75,21 +75,7 @@ def rebuild_reason(
         manifest = store.manifest()
     except IndexMissingError as error:
         return str(error)
-    if reason := mismatch(manifest, ref=ref, model=model):
-        return reason
-    if manifest.sample != sample or (sample is not None and manifest.seed != seed):
-        have = (
-            f"выборке из {manifest.sample} (сид {manifest.seed})"
-            if manifest.sample
-            else "всём датасете"
-        )
-        want = (
-            f"нужна выборка из {sample} (сид {seed})"
-            if sample
-            else "нужен весь датасет"
-        )
-        return f"индекс построен на {have}, а {want}"
-    return None
+    return manifest_reason(manifest, ref=ref, model=model, sample=sample, seed=seed)
 
 
 def _data(settings: Settings) -> int:

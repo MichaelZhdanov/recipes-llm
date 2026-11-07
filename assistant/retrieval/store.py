@@ -78,6 +78,33 @@ def mismatch(manifest: IndexManifest, *, ref: str, model: str) -> str | None:
     )
 
 
+def manifest_reason(
+    manifest: IndexManifest,
+    *,
+    ref: str,
+    model: str,
+    sample: int | None,
+    seed: int,
+) -> str | None:
+    """Чем паспорт индекса не подходит к настройкам — ревизия, модель, размер
+    выборки (у выборки — и сид), — или None, если подходит."""
+    if reason := mismatch(manifest, ref=ref, model=model):
+        return reason
+    if manifest.sample != sample or (sample is not None and manifest.seed != seed):
+        have = (
+            f"выборке из {manifest.sample} (сид {manifest.seed})"
+            if manifest.sample
+            else "всём датасете"
+        )
+        want = (
+            f"нужна выборка из {sample} (сид {seed})"
+            if sample
+            else "нужен весь датасет"
+        )
+        return f"индекс построен на {have}, а {want}"
+    return None
+
+
 @dataclass(frozen=True)
 class Hit:
     chunk: Chunk
