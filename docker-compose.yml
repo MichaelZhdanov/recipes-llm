@@ -2,8 +2,9 @@
 # Значения ${...} compose берёт из .env в этой папке.
 # Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
 # Каждый сервис получает только свои переменные через environment, без env_file.
-# Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот; Qdrant —
-# всегда. Локально по умолчанию api, на сервере deploy.sh включает только bot.
+# Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот, grocy —
+# склад «что есть дома»; Qdrant — всегда. Локально по умолчанию api,grocy, на
+# сервере deploy.sh включает bot,grocy.
 name: recipes-llm
 
 # Все поля assistant/config.py: API и бот — один и тот же ассистент. Пустое
@@ -27,13 +28,16 @@ x-settings: &settings
   CLOUD_RU_API_URL: ${CLOUD_RU_API_URL:-}
   VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
   VOYAGE_API_URL: ${VOYAGE_API_URL:-}
-  # Адрес внутри docker-сети: единственная переменная ассистента не из .env.
+  # Адреса внутри docker-сети (здесь и GROCY_API_URL ниже) — не из .env.
   QDRANT_URL: http://qdrant:6333
   DATASET_REVISION: ${DATASET_REVISION:-}
   DATA_PATH: ${DATA_PATH:-}
   INDEX_SAMPLE: ${INDEX_SAMPLE:-}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   ESCALATION_CHAT_ID: ${ESCALATION_CHAT_ID:-}
+  # Адрес Grocy внутри docker-сети; ключ — пользователя Grocy без прав.
+  GROCY_API_URL: http://grocy/api
+  GROCY_API_KEY: ${GROCY_API_KEY:-}
   LOG_LEVEL: ${LOG_LEVEL:-}
 
 services:
@@ -84,6 +88,49 @@ services:
       start_interval: 2s
       retries: 3
 
+  grocy:
+    # Склад «что есть дома» (этап 6). Официальный grocy/grocy-docker в архиве
+    # с 2026-02; неизменяемый тег сборки, а не 4.7.1 — тот пересобирается.
+    image: lscr.io/linuxserver/grocy:v4.7.1-ls346
+    profiles: [grocy]
+    restart: unless-stopped
+    ports:
+      # Веб-интерфейс Grocy — только для этой машины.
+      - "127.0.0.1:9283:80"
+    environment:
+      # uid и gid — как у пользователя образа ассистента (Dockerfile): сид
+      # пишет ключ в ту же базу SQLite, у файлов должен быть один владелец.
+      PUID: "10001"
+      PGID: "10001"
+      TZ: Europe/Moscow
+    volumes:
+      - grocy-data:/config
+    healthcheck:
+      # Первый запрос к / заодно создаёт базу Grocy (миграции).
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+
+  grocy-seed:
+    # Демо-склад, пользователь без прав и его ключ: make grocy-seed
+    # (assistant/grocy/seed.py). Отдельный профиль: make up его не поднимает.
+    build: .
+    profiles: [grocy-seed]
+    command: ["/app/.venv/bin/python", "-m", "assistant.grocy.seed"]
+    environment:
+      GROCY_URL: http://grocy
+      GROCY_DB: /grocy/data/grocy.db
+      GROCY_API_KEY: ${GROCY_API_KEY:-}
+      GROCY_ADMIN_PASSWORD: ${GROCY_ADMIN_PASSWORD:-}
+    volumes:
+      - grocy-data:/grocy
+    depends_on:
+      grocy:
+        condition: service_healthy
+
 volumes:
   qdrant-data:
   bot-data:
+  grocy-data:

@@ -94,4 +94,9 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     # У групп и каналов Telegram id отрицательный, поэтому int, а не положительное число.
     escalation_chat_id: int | None = None
+    # Grocy — склад «что есть дома» (этап 6), только чтение. Адрес — с хоста;
+    # контейнерам compose задаёт http://grocy/api сам. Ключ — пользователя Grocy
+    # без прав; его заводит make grocy-seed. Пусто — интеграции нет.
+    grocy_api_url: str = "http://localhost:9283/api"
+    grocy_api_key: SecretStr = SecretStr("")
     log_level: LogLevel = "INFO"

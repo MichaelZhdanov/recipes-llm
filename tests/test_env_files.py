@@ -18,7 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Адреса внутри docker-сети. В .env лежат адреса для запуска с хоста (localhost),
 # поэтому контейнеру ассистента compose задаёт эти значения сам.
-CONTAINER_OVERRIDES = {"QDRANT_URL": "http://qdrant:6333"}
+CONTAINER_OVERRIDES = {
+    "QDRANT_URL": "http://qdrant:6333",
+    "GROCY_API_URL": "http://grocy/api",
+}
 
 
 def load_compose() -> dict[str, Any]:
@@ -81,7 +84,21 @@ def test_api_and_bot_are_profiles_qdrant_always_runs() -> None:
     assert services["assistant"]["profiles"] == ["api"]
     assert services["bot"]["profiles"] == ["bot"]
     assert "profiles" not in services["qdrant"]
-    assert read_env_file(ROOT / ".env.example")["COMPOSE_PROFILES"] == "api"
+    assert read_env_file(ROOT / ".env.example")["COMPOSE_PROFILES"] == "api,grocy"
+
+
+def test_grocy_seed_is_separate_and_alone_gets_the_admin_password() -> None:
+    """Сид — свой профиль (make up его не поднимает); пароль admin Grocy
+    получает только он, а не ассистент и бот."""
+    services = load_compose()["services"]
+
+    assert services["grocy"]["profiles"] == ["grocy"]
+    assert services["grocy-seed"]["profiles"] == ["grocy-seed"]
+    assert "GROCY_ADMIN_PASSWORD" in services["grocy-seed"]["environment"]
+    for name in ("assistant", "bot"):
+        assert "GROCY_ADMIN_PASSWORD" not in services[name]["environment"]
+    # Сид пишет ключ в базу Grocy: uid как у пользователя образа (Dockerfile).
+    assert services["grocy"]["environment"]["PUID"] == "10001"
 
 
 def test_bot_keeps_its_database_in_a_volume_and_has_a_healthcheck() -> None:

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check ask search eval test lint format
+.PHONY: help up down data index index-if-needed index-check grocy-seed ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -18,9 +18,10 @@ INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)
 # init_env.py ещё раз: в старый .env он допишет секреты, появившиеся в новой
 # версии, заданные значения не трогает.
 # --wait ждёт, пока все healthcheck станут зелёными.
-up: .env ## поднять стек: Qdrant и профили из COMPOSE_PROFILES (.env): api, bot
+up: .env ## поднять стек: Qdrant и профили из COMPOSE_PROFILES (.env): api, bot, grocy
 	$(INIT_ENV)
 	docker compose up -d --build --wait --wait-timeout 300
+	@if [ -n "$$(docker compose ps -q grocy)" ]; then $(MAKE) --no-print-directory grocy-seed; fi
 	@docker compose ps --format '{{.Service}}: {{.Status}}'
 	@echo "HTTP API:   http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (профиль api)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
@@ -49,6 +50,9 @@ index-if-needed: .env ## построить индекс, только если 
 index-check: .env ## индекс подходит к настройкам? ничего не строит; код 3 — нужна сборка
 	docker compose up -d --wait qdrant
 	$(RUN) index --check
+
+grocy-seed: .env ## демо-склад Grocy: продукты, остатки, пользователь без прав и его ключ (идемпотентно)
+	docker compose --profile grocy run --rm --build grocy-seed
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
