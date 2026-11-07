@@ -204,6 +204,20 @@ services:
     volumes:
       - /:/host:ro,rslave
 
+  # Входы по SSH и баны fail2ban из логов сервера (assistant/hostlog.py) —
+  # тот же образ, профиль host. Каталог логов хоста — только на чтение: файл
+  # после ротации logrotate — новый inode, смонтированный файл остался бы старым.
+  hostlog:
+    build: .
+    profiles: [host]
+    restart: unless-stopped
+    logging: *logging
+    command: ["/app/.venv/bin/python", "-m", "assistant.hostlog"]
+    # auth.log и fail2ban.log читает только группа adm (gid 4 в Ubuntu).
+    group_add: ["4"]
+    volumes:
+      - /var/log:/host/log:ro
+
   # HTTPS для Grafana и Grocy (решение 82) — профиль tls, только на сервере и
   # только когда заданы оба домена (deploy.sh). Единственные публичные порты
   # стека: 80 — проверка домена Let's Encrypt и редирект, 443 — HTTPS.

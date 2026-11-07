@@ -42,3 +42,9 @@ scrape_configs:
   - job_name: node
     static_configs:
       - targets: [host.docker.internal:9100]
+  # Входы по SSH и баны fail2ban из логов сервера (assistant/hostlog.py).
+  - job_name: hostlog
+    dns_sd_configs:
+      - names: [hostlog]
+        type: A
+        port: 9109

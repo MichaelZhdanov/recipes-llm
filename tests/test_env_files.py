@@ -257,3 +257,12 @@ def test_node_exporter_sees_the_host_but_listens_only_on_docker0() -> None:
     # Публичный /metrics Grafana закрыт: метрики читает только Prometheus.
     caddyfile = (ROOT / "deploy/caddy/Caddyfile").read_text(encoding="utf-8")
     assert "respond /metrics 404" in caddyfile
+
+
+def test_hostlog_reads_host_logs_read_only_as_group_adm() -> None:
+    hostlog = load_compose()["services"]["hostlog"]
+
+    assert hostlog["profiles"] == ["host"]
+    assert hostlog["volumes"] == ["/var/log:/host/log:ro"]
+    assert hostlog["group_add"] == ["4"]
+    assert "ports" not in hostlog
