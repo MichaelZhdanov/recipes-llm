@@ -163,8 +163,10 @@ SOURCE_BUTTONS: list[Button] = [
 ]
 ASK_AGAIN_TEXT = "Напишите, пожалуйста, вопрос ещё раз — я его потерял."
 STOCK_DOWN_TEXT = "⚠️ Склад Grocy сейчас недоступен — ищу по всем рецептам."
-NEAR_OFFER_TEXT = "Есть рецепты, где не хватает от 1 до 4 продуктов. Показать?"
-NEAR_BUTTON = "🔎 Где не хватает 1–4 продуктов"
+# После строгого ответа — строка и кнопка «поискать ещё»: рецепты, где не хватает
+# 1–4 продуктов (формулировка автора).
+NEAR_OFFER_TEXT = "Есть рецепты, в которых не хватает пары продуктов."
+NEAR_BUTTON = "🔎 Поискать ещё"
 
 STEPS_STATUS_TEXT = (
     "🍳 Расписываю шаги и сверяю их с рецептом — это займёт около 20 секунд…"
@@ -297,14 +299,21 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
 MAX_CAPTION = 1000
 
 
-def page_steps_header(name: str, url: str, steps: int) -> str:
-    """Первое сообщение шагов со страницы: что за рецепт и откуда шаги."""
+def page_steps_header(
+    name: str, url: str, steps: int, missing: Sequence[str] = ()
+) -> str:
+    """Первое сообщение шагов со страницы: что за рецепт, откуда шаги и — для
+    рецепта из расширенного поиска по складу — чего не хватает."""
     link = f'<a href="{html.escape(url, quote=True)}">povarenok.ru</a>'
     head = f"📖 <b>{html.escape(name)}</b>"
     if not steps:
-        return f"{head}\nШагов на странице не нашлось — рецепт на {link}"
-    count = f"{steps} {_plural(steps, 'шаг', 'шага', 'шагов')}"
-    return f"{head} — {count} со страницы рецепта.\nИсточник: {link}"
+        text = f"{head}\nШагов на странице не нашлось — рецепт на {link}"
+    else:
+        count = f"{steps} {_plural(steps, 'шаг', 'шага', 'шагов')}"
+        text = f"{head} — {count} со страницы рецепта.\nИсточник: {link}"
+    if missing:
+        text += "\n🛒 Не хватает: " + html.escape(", ".join(missing))
+    return text
 
 
 def step_caption(number: int, text: str) -> str:

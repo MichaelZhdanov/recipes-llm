@@ -85,7 +85,11 @@ def stock_reader(fail: bool = False) -> Any:
 
 
 def service(
-    answerer: RecordingAnswerer | None = None, *, stock: Any = None, grocy: bool = True
+    answerer: RecordingAnswerer | None = None,
+    *,
+    stock: Any = None,
+    grocy: bool = True,
+    recipes: Any = None,
 ) -> BotService:
     store = Store(":memory:")
     http = httpx2.Client(transport=httpx2.MockTransport(lambda r: httpx2.Response(200)))
@@ -93,7 +97,7 @@ def service(
         answerer or RecordingAnswerer(),
         store,
         PageChecker(http, store),
-        recipes=lambda recipe_id: None,
+        recipes=recipes or (lambda recipe_id: None),
         make_steps=None,
         fetch_page=lambda url: None,
         fetch_photo=lambda url: None,
@@ -160,8 +164,11 @@ def test_strict_answer_offers_near_and_near_lists_what_is_missing() -> None:
     bot_service.ask(USER, "что испечь")
     strict = bot_service.choose_source(USER, "stock")
     assert strict.answer_id is not None
+    # Строка автора и под ней кнопка «Поискать ещё».
+    assert strict.text.endswith("Есть рецепты, в которых не хватает пары продуктов.")
     assert strict.text.endswith(NEAR_OFFER_TEXT)
     assert strict.buttons[-1] == [(NEAR_BUTTON, f"near:{strict.answer_id}")]
+    assert NEAR_BUTTON == "🔎 Поискать ещё"
 
     answerer.reply = answer(missing={1: ["мука пшеничная", "сахар"]})
     near = bot_service.near(USER, strict.answer_id)
@@ -263,3 +270,31 @@ def test_start_offers_to_connect_with_a_button_and_help_explains_both_commands()
         START_TEXT,
         HELP_TEXT,
     ]
+
+
+def test_steps_of_a_near_recipe_say_what_is_missing() -> None:
+    """«📖 Шаги» у рецепта из «поискать ещё»: в конце заголовка — чего не хватает."""
+    from chunk_helpers import make_chunk
+
+    salad = make_chunk(
+        "Салат-гарнир из перловой крупы", {"Перловка": "200 г"}, recipe_id=1
+    )
+    answerer = RecordingAnswerer(answer(near_available=True))
+    bot_service = service(answerer, recipes=lambda recipe_id: salad)
+    bot_service.connect_grocy(USER)
+    bot_service.ask(USER, "гарнир")
+    strict = bot_service.choose_source(USER, "stock")
+    assert strict.answer_id is not None
+    answerer.reply = answer(missing={1: ["крупа перловая", "укроп"]})
+    near = bot_service.near(USER, strict.answer_id)
+    assert near.answer_id is not None
+
+    header, *_ = bot_service.page_steps(USER, near.answer_id, salad.recipe_id)
+    plain, *_ = bot_service.page_steps(USER, strict.answer_id, salad.recipe_id)
+
+    assert isinstance(header, str) and header.startswith(
+        "📖 <b>Салат-гарнир из перловой крупы</b>"
+    )
+    assert header.endswith("🛒 Не хватает: крупа перловая, укроп")
+    # У строгого ответа ничего докупать не нужно — строки нет.
+    assert isinstance(plain, str) and "Не хватает" not in plain

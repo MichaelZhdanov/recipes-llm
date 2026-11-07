@@ -29,7 +29,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -39,7 +39,7 @@ from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS answers (
     vote_reason TEXT CHECK (vote_reason IN ('unclear', 'wrong', 'failed')),
     created_at REAL NOT NULL,
     voted_at REAL,
-    question TEXT
+    question TEXT,
+    missing TEXT
 );
 CREATE TABLE IF NOT EXISTS pages (
     url TEXT PRIMARY KEY,
@@ -176,6 +177,9 @@ class Store:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(answers)")}
         if "question" not in columns:
             self._db.execute("ALTER TABLE answers ADD COLUMN question TEXT")
+        # 5 → 6: чего не хватает рецептам ответа — для шагов со страницы.
+        if "missing" not in columns:
+            self._db.execute("ALTER TABLE answers ADD COLUMN missing TEXT")
 
     def close(self) -> None:
         self._db.close()
@@ -253,12 +257,14 @@ class Store:
         recipe_ids: Sequence[int],
         seconds: float,
         question: str = "",
+        missing: Mapping[int, Sequence[str]] | None = None,
     ) -> int:
-        """question — без ПДн (маскируется): по нему расширенный поиск по складу."""
+        """question — без ПДн (маскируется): по нему расширенный поиск по складу;
+        missing — чего не хватает рецептам расширенного поиска (recipe_id → продукты)."""
         with self._lock, self._db:
             cursor = self._db.execute(
                 "INSERT INTO answers (chat_id, status, reason, model, recipe_ids, seconds, "
-                "created_at, question) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, question, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     chat_id,
                     status,
@@ -268,9 +274,23 @@ class Store:
                     seconds,
                     self._clock(),
                     mask_pii(question).text if question else None,
+                    json.dumps({str(k): list(v) for k, v in missing.items()})
+                    if missing
+                    else None,
                 ),
             )
             return int(cursor.lastrowid or 0)
+
+    def missing_of(self, answer_id: int, chat_id: int, recipe_id: int) -> list[str]:
+        """Чего не хватает рецепту этого ответа; пусто — всё есть или не по складу."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT missing FROM answers WHERE id = ? AND chat_id = ?",
+                (answer_id, chat_id),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return []
+        return [str(name) for name in json.loads(row[0]).get(str(recipe_id), [])]
 
     def question_of(self, answer_id: int, chat_id: int) -> str | None:
         """Вопрос ответа этого чата; None — чужой, неизвестный или без вопроса."""

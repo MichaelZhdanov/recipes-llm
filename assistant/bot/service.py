@@ -254,6 +254,7 @@ class BotService:
             recipe_ids=[link.recipe_id for link in answer.sources],
             seconds=seconds,
             question=question,
+            missing=answer.missing,
         )
         # Ответ в истории — текстом со ссылками: по ним ассистент находит
         # рецепты для уточнений («а во втором сколько муки?»).
@@ -273,7 +274,7 @@ class BotService:
             answer_id, answer, alive, ai_steps=self.make_steps is not None
         )
         if answer.near_available:
-            # Целиком из склада мало или ничего — предложить, где не хватает 1–4.
+            # «Поискать ещё» — рецепты, где не хватает 1–4 продуктов (решение 72).
             text = f"{text}\n\n{NEAR_OFFER_TEXT}"
             buttons = [*buttons, *near_buttons(answer_id)]
         if self.operators and self.store.recent_statuses(chat_id) == [
@@ -425,7 +426,10 @@ class BotService:
         urls = [s.photo for s in steps if s.photo]
         with ThreadPoolExecutor(max_workers=max(1, min(len(urls), 10))) as pool:
             photos = dict(zip(urls, pool.map(self.fetch_photo, urls), strict=True))
-        parts: list[Part] = [page_steps_header(recipe.name, recipe.url, len(steps))]
+        missing = self.store.missing_of(answer_id, chat_id, recipe_id)
+        parts: list[Part] = [
+            page_steps_header(recipe.name, recipe.url, len(steps), missing)
+        ]
         for number, step in enumerate(steps, start=1):
             caption = step_caption(number, step.text)
             data = photos.get(step.photo) if step.photo else None

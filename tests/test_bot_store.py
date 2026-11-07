@@ -291,3 +291,23 @@ def test_answers_without_question_column_are_migrated(tmp_path: Path) -> None:
         question="суп",
     )
     assert db.question_of(new, 7) == "суп"
+
+
+def test_answer_remembers_what_its_recipes_lack() -> None:
+    db = store(Clock())
+    near = db.save_answer(
+        7,
+        status="answer",
+        reason=None,
+        model="m",
+        recipe_ids=[1, 2],
+        seconds=1,
+        missing={1: ["мука пшеничная", "сахар"]},
+    )
+    plain = db.save_answer(
+        7, status="answer", reason=None, model="m", recipe_ids=[1], seconds=1
+    )
+
+    assert db.missing_of(near, 7, 1) == ["мука пшеничная", "сахар"]
+    assert db.missing_of(near, 7, 2) == [] and db.missing_of(plain, 7, 1) == []
+    assert db.missing_of(near, 8, 1) == []  # чужой чат
