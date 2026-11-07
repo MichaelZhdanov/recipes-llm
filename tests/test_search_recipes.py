@@ -20,10 +20,13 @@ from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.search import Retriever
 from assistant.retrieval.store import VectorStore
 from assistant.tools.search_recipes import (
+    ESCALATION_REASONS,
     HISTORY_LIMIT,
     LENGTH_ATTEMPTS,
+    MAX_SUMMARY,
     NAME,
     SEARCH_RECIPES,
+    Escalation,
     SearchArgs,
     SearchPlanner,
     parse_arguments,
@@ -330,3 +333,40 @@ def test_several_queries_and_other_are_parsed_old_query_still_reads() -> None:
     assert args.query == "гречка с говядиной" and args.other
     assert old.all_queries == ("борщ",) and not old.other
     assert empty.all_queries == ("борщ?",)
+
+
+def test_escalation_reason_and_summary_are_parsed_unknown_ones_are_ignored() -> None:
+    def parse(**fields: object) -> SearchArgs:
+        arguments: dict[str, object] = {
+            "queries": ["кекс"],
+            "include": [],
+            "exclude": [],
+        }
+        return parse_arguments({**arguments, **fields}, VOCABULARY, question="кекс")
+
+    failed = parse(escalation=" cooking_failed ", summary="  Кекс осел; что не так?  ")
+    long = parse(escalation="health", summary="а" * (MAX_SUMMARY + 50))
+
+    assert failed.escalation == Escalation("cooking_failed", "Кекс осел; что не так?")
+    assert long.escalation is not None and len(long.escalation.summary) == MAX_SUMMARY
+    # Пусто, не из списка или не строка — не передавать: «если сомневаешься — нет».
+    assert parse(escalation="").escalation is None
+    assert parse(escalation="angry").escalation is None
+    assert parse(escalation=["health"]).escalation is None
+    assert parse().escalation is None
+    # Аллергия — только явное true; это не повод передавать.
+    assert parse(allergy=True).allergy and parse(allergy=True).escalation is None
+    assert not parse(allergy="true").allergy
+
+
+def test_schema_asks_for_escalation_and_allergy_every_time() -> None:
+    parameters = SEARCH_RECIPES["parameters"]
+    assert isinstance(parameters, dict)
+    escalation = parameters["properties"]["escalation"]
+
+    assert {"escalation", "allergy"} <= set(parameters["required"])
+    assert escalation["enum"][0] == ""
+    assert set(escalation["enum"][1:]) == ESCALATION_REASONS
+    # Примеры для GigaChat заполняют все обязательные поля.
+    for example in SEARCH_RECIPES["few_shot_examples"]:  # type: ignore[attr-defined]
+        assert set(parameters["required"]) <= set(example["params"])

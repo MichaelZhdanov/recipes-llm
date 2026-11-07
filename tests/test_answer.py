@@ -904,3 +904,52 @@ def test_saved_planner_replays_the_stored_parse_without_calling_the_model(
     assert llm.plans == []
     assert result.trace.args == saved
     assert [h.chunk.recipe_id for h in result.trace.hits] == [COOKIES.recipe_id]
+
+
+class PlannerSays(FakeLlm):
+    """Разбор вопроса с заданными полями поверх обычного FakeLlm."""
+
+    def __init__(self, content: dict[str, Any], **fields: object) -> None:
+        super().__init__(content)
+        self.fields = fields
+
+    def chat(self, messages: Sequence[Message], **kwargs: Any) -> Completion:
+        completion = super().chat(messages, **kwargs)
+        if kwargs.get("functions") is not None and completion.function_call:
+            completion.function_call["arguments"].update(self.fields)
+        return completion
+
+
+def test_escalation_in_the_parse_skips_search_and_answer(retriever: Retriever) -> None:
+    """Повод передать человеку — в том же вызове, что разбор (решение 65):
+    искать и отвечать не нужно, канал передаст разговор."""
+    llm = PlannerSays(
+        {"status": "answer", "message": "", "statements": []},
+        escalation="health",
+        summary="После ужина сыпь на руках; спрашивает, что делать.",
+    )
+
+    result = ask(retriever, llm, "после ужина сыпь на руках, что делать?")
+
+    assert result.answer.status == "escalate"
+    assert result.answer.escalation is not None
+    assert result.answer.escalation.reason == "health"
+    assert result.answer.escalation.summary.startswith("После ужина сыпь")
+    assert result.trace.hits == [] and result.trace.completion is None
+    assert len(llm.plans) == 1 and llm.calls == []
+    assert render_markdown(result.answer).startswith("Передаю человеку (повод health)")
+
+
+def test_allergy_is_an_ordinary_answer_with_a_flag(retriever: Retriever) -> None:
+    """Аллергия как условие — не передача, а поиск и ответ (решение 66)."""
+    llm = PlannerSays(
+        {"status": "not_found", "message": "", "statements": []},
+        escalation="",
+        allergy=True,
+    )
+
+    result = ask(retriever, llm, "аллергия на киви, что за десерт?")
+
+    assert result.answer.status != "escalate" and result.answer.escalation is None
+    assert result.answer.allergy is True
+    assert result.trace.hits

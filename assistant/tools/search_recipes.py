@@ -15,11 +15,20 @@
 
 Модель не выдумывает фильтр, которого нет в данных: даже если она напишет
 «куриное мясо», в Qdrant уйдут только имена, которые реально есть в рецептах.
+
+С `search_v5` тот же вызов решает, не передать ли разговор человеку
+(решение 65): поле `escalation` — смысловой повод (не получилось, непонятен
+рецепт, здоровье, ошибка в данных, просьба позвать человека) и `summary` —
+суть для оператора; лишнего вызова модели и задержки нет. Флаг `allergy` —
+пользователь назвал аллергию как условие подбора (решение 66): это не
+передача, а обычный поиск с аллергеном в exclude, бот добавит предупреждение.
+Остальные поводы (сбой, два «не нашёл» подряд, 👎) ловит код бота.
 """
 
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal, get_args
 
 from assistant.generation.gigachat import (
     DETERMINISTIC_TEMPERATURE,
@@ -33,7 +42,8 @@ from assistant.retrieval.filters import IngredientFilter
 NAME = "search_recipes"
 # v1 — только имена; v2 — имена с частотами, альтернативы одного продукта
 # в одной группе, query без опечаток (evals/reports/2026-11-05-stage2.md).
-PROMPT_VERSION = "search_v4"
+# v5 — поле escalation (повод и сводка для человека) и флаг allergy (этап 5).
+PROMPT_VERSION = "search_v5"
 # Сколько запросов модель может дать на один вопрос.
 MAX_QUERIES = 4
 # Число рецептов, которое модель может скопировать вместе с именем из словаря.
@@ -48,6 +58,13 @@ MAX_TOKENS = 1000
 # Зацикливание случайно: тот же запрос в следующий раз обычно проходит
 # (проверено на своих вопросах; repetition_penalty и maxItems его не убирают).
 LENGTH_ATTEMPTS = 3
+# Поводы передачи человеку, которые распознаёт модель (решение 65).
+EscalationReason = Literal[
+    "request", "cooking_failed", "unclear_recipe", "health", "data_issue"
+]
+ESCALATION_REASONS: frozenset[str] = frozenset(get_args(EscalationReason))
+# Сводка для оператора — одно-два предложения; длиннее — обрезается.
+MAX_SUMMARY = 500
 
 SEARCH_RECIPES: dict[str, object] = {
     "name": NAME,
@@ -82,8 +99,27 @@ SEARCH_RECIPES: dict[str, object] = {
                 "type": "boolean",
                 "description": "пользователь просит другие рецепты, не те, что уже были",
             },
+            "escalation": {
+                "type": "string",
+                "enum": ["", *sorted(ESCALATION_REASONS)],
+                "description": (
+                    "повод передать разговор живому повару-консультанту; "
+                    "пустая строка — не передавать"
+                ),
+            },
+            "summary": {
+                "type": "string",
+                "description": (
+                    "при поводе — суть обращения для человека в одном-двух "
+                    "предложениях; без повода — пустая строка"
+                ),
+            },
+            "allergy": {
+                "type": "boolean",
+                "description": "пользователь назвал аллергию или непереносимость продукта",
+            },
         },
-        "required": ["queries", "include", "exclude", "other"],
+        "required": ["queries", "include", "exclude", "other", "escalation", "allergy"],
     },
     # Примеры для GigaChat (поле её API). Без них модель не заполняла include
     # вовсе — проверено на своих вопросах, не из эталонного набора. Продукты
@@ -105,6 +141,8 @@ SEARCH_RECIPES: dict[str, object] = {
                     ],
                 ],
                 "exclude": ["кинза"],
+                "escalation": "",
+                "allergy": False,
             },
         },
         {
@@ -120,6 +158,8 @@ SEARCH_RECIPES: dict[str, object] = {
                     "ванильная эссенция",
                     "сахар ванильный",
                 ],
+                "escalation": "",
+                "allergy": False,
             },
         },
         {
@@ -140,6 +180,8 @@ SEARCH_RECIPES: dict[str, object] = {
                     "бренди",
                     "виски",
                 ],
+                "escalation": "",
+                "allergy": False,
             },
         },
         {
@@ -149,10 +191,46 @@ SEARCH_RECIPES: dict[str, object] = {
                 "include": [],
                 "exclude": [],
                 "other": False,
+                "escalation": "",
+                "allergy": False,
+            },
+        },
+        {
+            "request": "у меня аллергия на киви, какой десерт сделать?",
+            "params": {
+                "queries": ["десерт без киви"],
+                "include": [],
+                "exclude": ["киви"],
+                "other": False,
+                "escalation": "",
+                "allergy": True,
+            },
+        },
+        {
+            "request": "варенье по вашему рецепту засахарилось и горчит, что не так?",
+            "params": {
+                "queries": ["варенье"],
+                "include": [],
+                "exclude": [],
+                "other": False,
+                "escalation": "cooking_failed",
+                "summary": (
+                    "Сварил варенье по рецепту из ответа, оно засахарилось и горчит; "
+                    "спрашивает, что пошло не так."
+                ),
+                "allergy": False,
             },
         },
     ],
 }
+
+
+@dataclass(frozen=True)
+class Escalation:
+    """Повод передать разговор человеку и суть обращения для оператора."""
+
+    reason: EscalationReason
+    summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -166,6 +244,10 @@ class SearchArgs:
     queries: tuple[str, ...] = ()
     # Просит другие рецепты: уже показанные в поиск не попадают.
     other: bool = False
+    # Повод передать человеку (search_v5): поиска и ответа тогда нет.
+    escalation: Escalation | None = None
+    # Пользователь назвал аллергию: под ответом — предупреждение от кода.
+    allergy: bool = False
 
     @property
     def all_queries(self) -> tuple[str, ...]:
@@ -212,7 +294,19 @@ def parse_arguments(
         dropped=tuple(dict.fromkeys(dropped)),
         queries=queries,
         other=arguments.get("other") is True,
+        escalation=_escalation(arguments),
+        allergy=arguments.get("allergy") is True,
     )
+
+
+def _escalation(arguments: Mapping[str, object]) -> Escalation | None:
+    """Повод из аргументов модели; пусто или не из списка — не передавать."""
+    reason = arguments.get("escalation")
+    if not isinstance(reason, str) or reason.strip() not in ESCALATION_REASONS:
+        return None
+    summary = arguments.get("summary")
+    text = summary.strip()[:MAX_SUMMARY] if isinstance(summary, str) else ""
+    return Escalation(reason.strip(), text)  # type: ignore[arg-type]
 
 
 def system_prompt(vocabulary: Mapping[str, int], version: str = PROMPT_VERSION) -> str:

@@ -73,6 +73,7 @@ from assistant.tools.search_recipes import (
     HISTORY_LIMIT,
     NAME,
     SEARCH_RECIPES,
+    Escalation,
     SearchArgs,
     SearchPlanner,
     parse_arguments,
@@ -137,9 +138,12 @@ class AnswerStatement(BaseModel):
 
 
 class Answer(BaseModel):
-    """Ответ для пользователя: то, что видят CLI и `POST /ask`."""
+    """Ответ для пользователя: то, что видят CLI и `POST /ask`.
 
-    status: Literal["answer", "not_found", "chat"]
+    status "escalate" — разговор надо передать человеку (повод и сводка — в
+    escalation): поиска и ответа модели нет, передачу делает канал (бот)."""
+
+    status: Literal["answer", "not_found", "chat", "escalate"]
     reason: Reason | None
     # Ответ на болтовню или подсказка модели при «не нашёл»; без фактов о рецептах.
     message: str = ""
@@ -150,6 +154,9 @@ class Answer(BaseModel):
     model: str
     prompt_version: str
     dataset_revision: str
+    escalation: Escalation | None = None
+    # Пользователь назвал аллергию: канал добавит предупреждение (решение 66).
+    allergy: bool = False
 
 
 @dataclass(frozen=True)
@@ -382,6 +389,7 @@ def assemble(
         model=completion.model if completion else "",
         prompt_version=prompt_version,
         dataset_revision=ref,
+        allergy=args is not None and args.allergy,
     )
     trace = Trace(
         hits=hits,
@@ -617,6 +625,9 @@ class Answerer:
         _notify(progress, "search")
         started = self._clock()
         args = self._planner.plan(question, history, note)
+        if args.escalation is not None:
+            # Человеку: искать и отвечать не нужно (решение 65).
+            return self._escalated(args, self._clock() - started)
         shown = earlier_recipe_ids(history)
         # «А ещё?» — уже показанные рецепты не ищутся и не подмешиваются.
         skip = [*skip, *shown] if args.other else list(skip)
@@ -658,6 +669,29 @@ class Answerer:
             generation_seconds=self._clock() - retrieved if completion else 0.0,
             args=args,
         )
+
+    def _escalated(self, args: SearchArgs, seconds: float) -> AnswerResult:
+        answer = Answer(
+            status="escalate",
+            reason=None,
+            statements=[],
+            sources=[],
+            model="",
+            prompt_version=self.prompt_version,
+            dataset_revision=self._ref,
+            escalation=args.escalation,
+        )
+        trace = Trace(
+            hits=[],
+            sources=[],
+            completion=None,
+            checked=[],
+            retrieval_seconds=seconds,
+            generation_seconds=0.0,
+            args=args,
+            searches=(args,),
+        )
+        return AnswerResult(answer=answer, trace=trace)
 
     def _answer_auto(
         self, question: str, history: list[Message], progress: Progress | None
@@ -746,6 +780,9 @@ def render_markdown(answer: Answer) -> str:
     """Ответ текстом для консоли и чата: утверждения с [n] и ссылки на рецепты."""
     if answer.status == "chat":
         return answer.message
+    if answer.escalation is not None:
+        summary = f": {answer.escalation.summary}" if answer.escalation.summary else ""
+        return f"Передаю человеку (повод {answer.escalation.reason}){summary}"
     if answer.reason is not None:
         lines = [f"{REASON_TEXT[answer.reason]}."]
         if answer.message:
