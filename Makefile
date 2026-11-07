@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval test alerts-test lint format
+.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval gaps test alerts-test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -89,6 +89,11 @@ search: .env ## найти рецепты, без ответа: make search Q="�
 eval: .env ## прогон эталонного набора, отчёт в evals/reports/<дата>.md
 	docker compose up -d --wait qdrant
 	uv run --env-file .env python -m evals.run $(if $(LABEL),--label $(LABEL)) $(if $(STAGE),--stage $(STAGE)) $(if $(SPLIT),--split $(SPLIT)) $(ARGS)
+
+# Отчёт по базе бота (S1): «не нашёл», 👎, передачи человеку. На сервере —
+# docker compose exec bot /app/.venv/bin/python -m assistant.bot.gaps.
+gaps: ## пробелы базы: с чем бот не справился [ARGS="--days 7"]
+	uv run python -m assistant.bot.gaps $(ARGS)
 
 test: ## unit-тесты (pytest)
 	uv run pytest
