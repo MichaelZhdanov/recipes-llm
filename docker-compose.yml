@@ -217,6 +217,13 @@ services:
     group_add: ["4"]
     volumes:
       - /var/log:/host/log:ro
+    healthcheck:
+      # Проверка из Dockerfile ждёт /health HTTP API на 8080 — здесь свой /metrics.
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9109/metrics', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
   # HTTPS для Grafana и Grocy (решение 82) — профиль tls, только на сервере и
   # только когда заданы оба домена (deploy.sh). Единственные публичные порты

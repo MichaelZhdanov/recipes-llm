@@ -275,3 +275,20 @@ def test_hostlog_reads_host_logs_read_only_as_group_adm() -> None:
     assert hostlog["volumes"] == ["/var/log:/host/log:ro"]
     assert hostlog["group_add"] == ["4"]
     assert "ports" not in hostlog
+
+
+def test_services_from_our_image_check_their_own_health() -> None:
+    """HEALTHCHECK образа (Dockerfile) — /health HTTP API на 8080. Другой
+    долгоживущий сервис того же образа без своей проверки навсегда «unhealthy»,
+    и make up --wait роняет деплой (так было с hostlog, 2026-11-07)."""
+    services = load_compose()["services"]
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "127.0.0.1:8080/health" in dockerfile
+
+    ours = [n for n, s in services.items() if s.get("build") and n != "assistant"]
+    # grocy-seed — разовый (docker compose run --rm), проверка здоровья ему не нужна.
+    long_running = [n for n in ours if services[n].get("restart")]
+    assert sorted(long_running) == ["bot", "hostlog"]
+    for name in long_running:
+        assert "healthcheck" in services[name], name
+    assert "9109/metrics" in str(services["hostlog"]["healthcheck"]["test"])
