@@ -11,6 +11,10 @@
 шаги — пункты `li.cooking-bl` внутри `<ul itemprop="recipeInstructions">`;
 у шага может быть фото: крупное — в ссылке `a href` (640×480), миниатюра —
 в `img src`. Разбор — парсером, без модели: текст и фото берутся как есть.
+
+У старых рецептов (проверено на 22811 и 5841, 2026-11-07) пошаговой разметки
+нет: сразу после заголовка `<h2>Рецепт «…»:</h2>` идёт один `<div>`, где шаги —
+абзацы через `<br /><br />`, без фото. Тогда шаг — абзац, фото у шагов нет.
 Фото бот скачивает сам и отдаёт Telegram файлом: по ссылке Telegram
 забирает картинки povarenok через раз («failed to get HTTP URL content»).
 """
@@ -57,10 +61,30 @@ class _PageParser(HTMLParser):
         self._text: list[str] = []
         self._large: str | None = None
         self._small: str | None = None
+        # Старый формат: заголовок «Рецепт …», за ним — <div> с абзацами.
+        self._in_heading = False
+        self._heading: list[str] = []
+        self._after_heading = False
+        self._text_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
-        if tag == "ul" and attr.get("itemprop") == "recipeInstructions":
+        if self._after_heading:
+            # Решает первый элемент после заголовка: <ul> шагов — новый формат,
+            # <div> — старый, абзацами.
+            self._after_heading = False
+            if tag == "div" and not self.steps:
+                self._text_depth = 1
+                return
+        if self._text_depth:
+            if tag == "div":
+                self._text_depth += 1
+            elif tag == "br":
+                self._close_paragraph()
+            return
+        if tag == "h2":
+            self._in_heading, self._heading = True, []
+        elif tag == "ul" and attr.get("itemprop") == "recipeInstructions":
             self._in_instructions = True
         elif (
             self._in_instructions
@@ -78,13 +102,31 @@ class _PageParser(HTMLParser):
                 self.photo = _photo(attr.get("src"))
 
     def handle_data(self, data: str) -> None:
-        if self._in_step:
+        if self._in_step or self._text_depth:
             self._text.append(data)
+        elif self._in_heading:
+            self._heading.append(data)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "ul" and self._in_instructions:
+        if self._text_depth:
+            if tag == "div":
+                self._text_depth -= 1
+                if not self._text_depth:
+                    self._close_paragraph()
+            return
+        if tag == "h2" and self._in_heading:
+            self._in_heading = False
+            self._after_heading = "".join(self._heading).strip().startswith("Рецепт")
+        elif tag == "ul" and self._in_instructions:
             self._close_step()
             self._in_instructions = False
+
+    def _close_paragraph(self) -> None:
+        """Абзац старого формата — шаг без фото; пустые (между <br>) — пропуск."""
+        text = " ".join(" ".join(self._text).split())
+        if text:
+            self.steps.append(Step(text, None))
+        self._text = []
 
     def _close_step(self) -> None:
         if not self._in_step:

@@ -55,6 +55,47 @@ def test_photo_from_another_site_is_not_taken_and_no_markup_means_no_steps() -> 
     assert parse_page("<html><p>Страница без разметки</p></html>") == RecipePage(None)
 
 
+# Старый формат povarenok (так устроены, например, 22811 и 5841): пошаговой
+# разметки нет, шаги — абзацы одного <div> после заголовка «Рецепт …».
+OLD_PAGE = """
+<html><body>
+<div class="article-text" itemprop="description"><div>Суп на скорую руку.</div></div>
+<h2>Ингредиенты для «Суп»:</h2>
+<div class="ingredients-bl"><ul><li itemprop="recipeIngredient">Грибы</li></ul></div>
+<h2>Рецепт &laquo;Суп&raquo;:</h2>
+
+  <div>Грибы промойте и залейте водой.
+<br /> <br />
+Сварите картофель, добавьте <b>обжаренный</b> лук.
+<br /> <br />
+Приятного аппетита!</div>
+<div class="article-tags"><a href="https://www.povarenok.ru/recipes/destiny/2/">На обед</a></div>
+</body></html>
+"""
+
+
+def test_old_recipes_without_step_markup_give_paragraphs_as_steps() -> None:
+    """В логе бота: «шаги со страницы рецепта 22811: 0» — страница есть, а
+    разметки шагов у старых рецептов нет."""
+    assert parse_page(OLD_PAGE).steps == [
+        Step("Грибы промойте и залейте водой.", None),
+        Step("Сварите картофель, добавьте обжаренный лук.", None),
+        Step("Приятного аппетита!", None),
+    ]
+
+
+def test_only_a_div_right_after_the_recipe_heading_is_taken_as_steps() -> None:
+    # Другой заголовок перед <div> — не шаги (описание, ингредиенты, теги).
+    other = OLD_PAGE.replace("<h2>Рецепт &laquo;Суп&raquo;:</h2>", "<h2>Советы:</h2>")
+    # После заголовка «Рецепт» — новый формат: шаги только из разметки.
+    assert parse_page(other).steps == []
+    assert [s.text for s in parse_page(PAGE).steps] == [
+        "Смешайте муку с молоком.",
+        "Дайте тесту постоять.",
+        "Жарьте на сковороде.",
+    ]
+
+
 def client(status: int, body: bytes, charset: str = "windows-1251") -> httpx2.Client:
     return httpx2.Client(
         transport=httpx2.MockTransport(
