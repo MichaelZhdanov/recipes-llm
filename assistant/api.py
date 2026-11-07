@@ -1,9 +1,12 @@
 """HTTP API ассистента.
 
-Запуск: `uvicorn assistant.api:create_app --factory`.
+Запуск: `uvicorn assistant.api:app_from_env --factory` — настройки из
+окружения и JSON-логи; тесты собирают приложение `create_app` со своими.
 
 - `GET /health` — процесс жив; Qdrant, ключи и LLM здесь не нужны.
 - `POST /ask {"question": "…"}` — ответ со ссылками, тот же, что у `make ask`.
+  У каждого ответа — заголовок `X-Request-ID`: та же метка стоит на всех
+  записях лога по пути этого запроса.
   Если Qdrant, API эмбеддингов или LLM недоступны, ответ 503 с короткой
   причиной, подробности — в лог сервиса.
 
@@ -12,18 +15,20 @@
 """
 
 import logging
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Literal
 
 import httpx2
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from assistant import __version__
 from assistant.config import Settings
 from assistant.generation.answer import Answer
 from assistant.generation.gigachat import LlmError
+from assistant.logs import REQUEST_ID, setup_logging
 from assistant.service import (
     MAX_QUESTION_CHARS,
     SEARCH_ERRORS,
@@ -56,8 +61,8 @@ def create_app(
 ) -> FastAPI:
     """Собирает приложение. Глобального состояния нет: всё, что нужно, передаётся сюда.
 
-    Uvicorn с `--factory` вызывает функцию без аргументов, и настройки читаются
-    из окружения. Тесты передают свои `Settings` и заглушку вместо ассистента.
+    Без настроек они читаются из окружения. Тесты передают свои `Settings` и
+    заглушку вместо ассистента; логи настраивает `app_from_env`, не эта функция.
     """
     config = settings if settings is not None else Settings()
     lazy: LazyAnswerer | None = None
@@ -72,6 +77,20 @@ def create_app(
             lazy.close()
 
     app = FastAPI(title="Recipes LLM", version=__version__, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def request_id(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Метка запроса для лога (assistant/logs.py) и заголовок X-Request-ID."""
+        value = uuid.uuid4().hex[:12]
+        token = REQUEST_ID.set(value)
+        try:
+            response = await call_next(request)
+        finally:
+            REQUEST_ID.reset(token)
+        response.headers["X-Request-ID"] = value
+        return response
 
     @app.get("/health")
     def health() -> HealthResponse:
@@ -97,3 +116,10 @@ def create_app(
             raise HTTPException(503, "внешний сервис не отвечает") from error
 
     return app
+
+
+def app_from_env() -> FastAPI:
+    """Для uvicorn (`--factory`): настройки из окружения, логи — JSON-строками."""
+    settings = Settings()
+    setup_logging(settings)
+    return create_app(settings)

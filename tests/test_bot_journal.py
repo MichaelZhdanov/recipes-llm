@@ -26,7 +26,7 @@ from assistant.generation.answer import (
     Trace,
 )
 from assistant.generation.gigachat import LlmError, Message
-from assistant.logs import JOURNAL, MASK, setup_logging
+from assistant.logs import JOURNAL, MASK, REQUEST_ID, setup_logging
 from assistant.retrieval.filters import IngredientFilter
 from assistant.retrieval.store import Hit
 from assistant.tools.search_recipes import SearchArgs
@@ -138,6 +138,38 @@ def test_answer_event_has_parse_found_and_shown_but_no_personal_data() -> None:
     assert record["shown"] == [CHICKEN.recipe_id]
     assert record["model"] == "zai-org/GLM-5.1" and record["prompt"] == "recipes_v5"
     assert len(record["request_id"]) == 12
+
+
+class LoggingAnswerer(Answerer):
+    def answer(
+        self,
+        question: str,
+        history: Sequence[Message] = (),
+        progress: Progress | None = None,
+        stock: StockRequest | None = None,
+    ) -> AnswerResult:
+        logging.getLogger("assistant.http").warning("повтор запроса к API")
+        return super().answer(question, history, progress, stock)
+
+
+def test_log_lines_on_the_way_carry_the_journal_request_id() -> None:
+    """По request_id из журнала находятся все записи лога этого ответа."""
+    lines: list[str] = []
+    seen: list[str | None] = []
+
+    class Seen(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(REQUEST_ID.get())
+
+    handler = Seen()
+    logging.getLogger("assistant.http").addHandler(handler)
+    try:
+        service(LoggingAnswerer(), lines).ask(CHAT, "курица")
+    finally:
+        logging.getLogger("assistant.http").removeHandler(handler)
+
+    assert seen == [records(lines)[0]["request_id"]]
+    assert REQUEST_ID.get() is None  # после ответа метка снята
 
 
 def test_long_question_is_cut() -> None:

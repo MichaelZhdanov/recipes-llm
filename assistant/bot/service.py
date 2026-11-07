@@ -79,6 +79,7 @@ from assistant.generation.answer import (
 from assistant.generation.steps import Steps
 from assistant.grocy.client import GrocyError, StockItem
 from assistant.indexing.chunks import Chunk
+from assistant.logs import REQUEST_ID
 from assistant.service import DEPENDENCY_ERRORS, QuestionAnswerer
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,27 @@ class BotService:
         *,
         near: bool = False,
     ) -> Reply:
+        """Ответ под своей меткой request_id: её видят все записи лога по пути
+        ответа и строка журнала (assistant/logs.py)."""
+        request_id = uuid.uuid4().hex[:12]
+        token = REQUEST_ID.set(request_id)
+        try:
+            return self._answer_as(
+                request_id, chat_id, question, progress, from_stock, near=near
+            )
+        finally:
+            REQUEST_ID.reset(token)
+
+    def _answer_as(
+        self,
+        request_id: str,
+        chat_id: int,
+        question: str,
+        progress: Progress | None,
+        from_stock: bool = False,
+        *,
+        near: bool = False,
+    ) -> Reply:
         limited = self._limited(chat_id)
         if limited is not None:
             return limited
@@ -259,7 +281,7 @@ class BotService:
         note = STOCK_DOWN_TEXT if from_stock and stock is None else ""
         record = Record(
             chat_id,
-            uuid.uuid4().hex[:12],
+            request_id,
             question,
             ("near" if near else "stock") if stock else "all",
             len(stock.names) if stock else None,
