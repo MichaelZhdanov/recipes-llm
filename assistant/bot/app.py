@@ -21,6 +21,7 @@
   копирует сообщения (copyMessage) в обе стороны — оператор не видит, кто
   пишет, ассистент молчит. /close в теме, закрытие темы кнопкой Telegram или
   /bot у пользователя возвращают ассистента. Других групп бот не слушает.
+  Обращение без сообщений 12 часов закрывается само (`auto_close`).
 """
 
 import asyncio
@@ -66,6 +67,7 @@ from assistant.bot.format import (
     STEPS_STATUS_TEXT,
     TOO_LONG_TEXT,
     TOPIC_CLOSED_TEXT,
+    TOPIC_EXPIRED_TEXT,
     USER_LEFT_TEXT,
     Keyboard,
     status_text,
@@ -97,6 +99,8 @@ STALE_AFTER = 10 * 60
 STATUS_TIMEOUT = 5.0
 # Пауза между сообщениями шагов со страницы рецепта, с.
 STEP_PAUSE = 0.5
+# Как часто бот ищет обращения без сообщений (TICKET_IDLE), с.
+EXPIRE_EVERY = 10 * 60
 VOTES: dict[str, Vote] = {"up": "up", "down": "down"}
 REASONS: dict[str, VoteReason] = {
     "unclear": "unclear",
@@ -392,6 +396,7 @@ class Handlers:
                 message.message_id,
                 message_thread_id=ticket.thread_id,
             )
+            await asyncio.to_thread(self.service.store.touch_ticket, ticket.id)
         except TelegramBadRequest:
             # Тему удалили или закрыли, а служебное сообщение не дошло.
             logger.warning("тема обращения %s недоступна", ticket.id, exc_info=True)
@@ -407,6 +412,7 @@ class Handlers:
             return
         try:
             await bot.copy_message(ticket.chat_id, message.chat.id, message.message_id)
+            await asyncio.to_thread(self.service.store.touch_ticket, ticket.id)
         except TelegramForbiddenError:
             await message.reply("Пользователь недоступен: он остановил бота.")
 
@@ -451,6 +457,25 @@ class Handlers:
                 self.operators_chat, USER_LEFT_TEXT, message_thread_id=ticket.thread_id
             )
             await bot.close_forum_topic(self.operators_chat, ticket.thread_id)
+
+    async def expire(self, bot: Bot) -> None:
+        """Закрыть обращения без сообщений: пользователю — что он снова с ботом,
+        в тему — почему закрыто, саму тему — закрыть."""
+        expired = await asyncio.to_thread(self.service.expire_idle)
+        for reply, ticket in expired:
+            with contextlib.suppress(TelegramForbiddenError, TelegramBadRequest):
+                await bot.send_message(
+                    ticket.chat_id, reply.text, reply_markup=keyboard(reply.buttons)
+                )
+            if ticket.thread_id is None or self.operators_chat is None:
+                continue
+            with contextlib.suppress(TelegramBadRequest):
+                await bot.send_message(
+                    self.operators_chat,
+                    TOPIC_EXPIRED_TEXT,
+                    message_thread_id=ticket.thread_id,
+                )
+                await bot.close_forum_topic(self.operators_chat, ticket.thread_id)
 
     async def rate(self, callback: CallbackQuery) -> None:
         """👍/👎 разговору с поваром."""
@@ -562,6 +587,17 @@ async def heartbeat(
         await asyncio.sleep(every)
 
 
+async def auto_close(handlers: Handlers, bot: Bot, every: float = EXPIRE_EVERY) -> None:
+    """Раз в every секунд — закрыть обращения без сообщений (TICKET_IDLE)."""
+    while True:
+        try:
+            await handlers.expire(bot)
+        except Exception:
+            # Сбой одной проверки не должен остановить следующие.
+            logger.exception("автозакрытие обращений не сработало")
+        await asyncio.sleep(every)
+
+
 def recipe_lookup(store: VectorStore) -> RecipeLookup:
     def lookup(recipe_id: int) -> Chunk | None:
         found = store.recipes([recipe_id])
@@ -598,10 +634,10 @@ async def run(settings: Settings) -> None:
         operators=settings.escalation_chat_id is not None,
     )
     bot = make_bot(token)
-    dispatcher = build_dispatcher(
-        Handlers(service, operators_chat=settings.escalation_chat_id)
-    )
+    handlers = Handlers(service, operators_chat=settings.escalation_chat_id)
+    dispatcher = build_dispatcher(handlers)
     beat = asyncio.create_task(heartbeat(bot))
+    closer = asyncio.create_task(auto_close(handlers, bot))
     try:
         await bot.set_my_commands(COMMANDS)
         await dispatcher.start_polling(
@@ -609,6 +645,7 @@ async def run(settings: Settings) -> None:
         )
     finally:
         beat.cancel()
+        closer.cancel()
         await bot.session.close()
         answerer.close()
         pages_http.close()

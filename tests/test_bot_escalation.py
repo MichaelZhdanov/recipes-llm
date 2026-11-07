@@ -21,13 +21,14 @@ from aiogram.types import InlineKeyboardMarkup
 from bot_helpers import FakeTelegram, press, update
 
 from assistant.bot.app import Handlers, build_dispatcher, make_bot
-from assistant.bot.escalation import card_html, topic_name, wants_human
+from assistant.bot.escalation import TICKET_IDLE, card_html, topic_name, wants_human
 from assistant.bot.format import (
     ALLERGY_NOTE,
     ALREADY_WITH_HUMAN_TEXT,
     BACK_TO_BOT_TEXT,
     CLOSED_BY_OPERATOR_TEXT,
     ERROR_TEXT,
+    EXPIRED_TEXT,
     FAILED_TEXT,
     GONE_TEXT,
     HANDOFF_TEXT,
@@ -38,6 +39,7 @@ from assistant.bot.format import (
     NOT_WITH_HUMAN_TEXT,
     THANKS_TEXT,
     TOPIC_CLOSED_TEXT,
+    TOPIC_EXPIRED_TEXT,
     USER_LEFT_TEXT,
     answer_html,
 )
@@ -110,8 +112,18 @@ class ScriptedAnswerer:
         return AnswerResult(answer=next_answer, trace=trace)
 
 
-def service(*answers: Answer | Exception, operators: bool = True) -> BotService:
-    store = Store(":memory:")
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def service(
+    *answers: Answer | Exception, operators: bool = True, clock: Clock | None = None
+) -> BotService:
+    store = Store(":memory:", clock=clock or Clock())
     http = httpx2.Client(
         transport=httpx2.MockTransport(lambda request: httpx2.Response(200))
     )
@@ -417,3 +429,44 @@ def test_offered_button_hands_over_and_disappears() -> None:
     (topic,) = calls(telegram, CreateForumTopic)
     assert topic.name == "#1 · дважды не нашёл"
     assert HANDOFF_TEXT in [m.text for m in calls(telegram, SendMessage)]
+
+
+# --- Автозакрытие: 12 часов без сообщений ---
+
+
+def test_idle_ticket_is_closed_and_relays_reset_the_silence() -> None:
+    clock = Clock()
+    bot_service = service(clock=clock)
+    telegram = feed(bot_service, update("/human"))
+    clock.now += TICKET_IDLE - 60
+    feed(bot_service, topic_message("Как успехи с тестом?"), telegram=telegram)
+
+    clock.now += TICKET_IDLE - 60  # от открытия больше 12 часов, от сообщения — нет
+    assert bot_service.expire_idle() == []
+    clock.now += 120
+    ((reply, ticket),) = bot_service.expire_idle()
+
+    assert reply.text == EXPIRED_TEXT
+    assert reply.buttons == [
+        [("👍", f"rate:{ticket.id}:up"), ("👎", f"rate:{ticket.id}:down")]
+    ]
+    assert bot_service.store.open_ticket_of(USER) is None
+    assert bot_service.expire_idle() == []
+
+
+def test_expire_tells_the_user_and_closes_the_topic() -> None:
+    clock = Clock()
+    bot_service = service(clock=clock)
+    telegram = feed(bot_service, update("/human"))
+    clock.now += TICKET_IDLE + 1
+    bot = make_bot(TOKEN, session=telegram)
+
+    asyncio.run(Handlers(bot_service, operators_chat=OPS).expire(bot))
+
+    texts = [
+        (m.chat_id, m.text, m.message_thread_id) for m in calls(telegram, SendMessage)
+    ]
+    assert (USER, EXPIRED_TEXT, None) in texts
+    assert (OPS, TOPIC_EXPIRED_TEXT, 501) in texts
+    (close,) = calls(telegram, CloseForumTopic)
+    assert close.message_thread_id == 501

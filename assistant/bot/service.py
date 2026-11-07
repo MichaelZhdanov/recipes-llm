@@ -16,12 +16,18 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from assistant.bot.escalation import OFFERED_REASONS, card_html, wants_human
+from assistant.bot.escalation import (
+    OFFERED_REASONS,
+    TICKET_IDLE,
+    card_html,
+    wants_human,
+)
 from assistant.bot.format import (
     ALREADY_WITH_HUMAN_TEXT,
     BACK_TO_BOT_TEXT,
     CLOSED_BY_OPERATOR_TEXT,
     ERROR_TEXT,
+    EXPIRED_TEXT,
     FAILED_TEXT,
     GONE_TEXT,
     HANDOFF_TEXT,
@@ -251,6 +257,15 @@ class BotService:
             return None
         logger.info("обращение %s закрыл оператор", ticket.id)
         return Reply(CLOSED_BY_OPERATOR_TEXT, rate_buttons(ticket.id)), ticket
+
+    def expire_idle(self, idle: float = TICKET_IDLE) -> list[tuple[Reply, Ticket]]:
+        """Закрыть обращения без сообщений дольше idle: что сказать пользователю."""
+        expired = []
+        for ticket in self.store.idle_tickets(idle):
+            if self.store.close_ticket(ticket.id):
+                logger.info("обращение %s закрыто: нет сообщений", ticket.id)
+                expired.append((Reply(EXPIRED_TEXT, rate_buttons(ticket.id)), ticket))
+        return expired
 
     def rate(self, chat_id: int, ticket_id: int, vote: Vote) -> str:
         if not self.store.vote_ticket(ticket_id, chat_id, vote):

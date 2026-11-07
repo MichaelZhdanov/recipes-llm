@@ -170,3 +170,43 @@ def test_tickets_survive_reopening(tmp_path: Path) -> None:
     assert reopened.open_ticket_of(7) == Ticket(
         ticket.id, 7, 55, "health", "сыпь после торта", "open"
     )
+
+
+def test_idle_tickets_count_silence_from_the_last_message() -> None:
+    clock = Clock()
+    db = store(clock)
+    ticket = db.open_ticket(7, "request", "")
+    clock.now += 5 * 3600
+    db.touch_ticket(ticket.id)  # сообщение через 5 часов
+
+    clock.now += 11 * 3600  # 16 часов от открытия, 11 — от сообщения
+    assert db.idle_tickets(12 * 3600) == []
+    clock.now += 2 * 3600
+    assert [t.id for t in db.idle_tickets(12 * 3600)] == [ticket.id]
+    db.close_ticket(ticket.id)
+    assert db.idle_tickets(12 * 3600) == []
+
+
+def test_database_without_last_at_is_migrated(tmp_path: Path) -> None:
+    """База версии 3 (этап 5 до автозакрытия): CREATE TABLE IF NOT EXISTS
+    столбец не добавит — его добавляет миграция, время — от открытия."""
+    import sqlite3
+
+    path = tmp_path / "bot.sqlite3"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE tickets (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
+        "thread_id INTEGER, reason TEXT NOT NULL, summary TEXT NOT NULL, "
+        "status TEXT NOT NULL, vote TEXT, opened_at REAL NOT NULL, closed_at REAL);"
+        "INSERT INTO tickets (chat_id, reason, summary, status, opened_at) "
+        "VALUES (7, 'request', '', 'open', 100.0);"
+        "PRAGMA user_version = 3;"
+    )
+    old.commit()
+    old.close()
+
+    clock = Clock()  # 1000.0 — через 900 с после открытия
+    db = Store(path, clock=clock)
+
+    assert [t.id for t in db.idle_tickets(800)] == [1]
+    assert db.idle_tickets(1000) == []

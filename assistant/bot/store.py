@@ -14,7 +14,8 @@
   операторов, открыто или закрыто, оценка разговора. Открытое обращение у
   чата одно — это гарантирует уникальный индекс, а не код: пока оно открыто,
   сообщения чата идут человеку, ассистент молчит. Состояние в базе, поэтому
-  переживает перезапуск бота.
+  переживает перезапуск бота. `last_at` — последнее сообщение в любую
+  сторону: обращение без сообщений TICKET_IDLE закрывается само.
 
 Одно соединение на процесс под замком: запросы короткие, а бот отвечает
 из нескольких потоков.
@@ -34,7 +35,7 @@ from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
@@ -91,7 +92,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
     vote TEXT CHECK (vote IN ('up', 'down')),
     opened_at REAL NOT NULL,
-    closed_at REAL
+    closed_at REAL,
+    last_at REAL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS tickets_open_chat ON tickets (chat_id)
     WHERE status = 'open';
@@ -139,10 +141,19 @@ class Store:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(_SCHEMA)
+        self._migrate()
         self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._db.commit()
         self._lock = threading.Lock()
         self._clock = clock
+
+    def _migrate(self) -> None:
+        """Версия 3 → 4: в tickets нет last_at (база создана до автозакрытия).
+        CREATE TABLE IF NOT EXISTS столбцы в старую таблицу не добавляет."""
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(tickets)")}
+        if "last_at" not in columns:
+            self._db.execute("ALTER TABLE tickets ADD COLUMN last_at REAL")
+        self._db.execute("UPDATE tickets SET last_at = opened_at WHERE last_at IS NULL")
 
     def close(self) -> None:
         self._db.close()
@@ -287,10 +298,11 @@ class Store:
         """Новое обращение; если у чата уже есть открытое — оно и возвращается."""
         with self._lock, self._db:
             try:
+                now = self._clock()
                 cursor = self._db.execute(
-                    "INSERT INTO tickets (chat_id, reason, summary, status, opened_at) "
-                    "VALUES (?, ?, ?, 'open', ?)",
-                    (chat_id, reason, summary, self._clock()),
+                    "INSERT INTO tickets (chat_id, reason, summary, status, opened_at, "
+                    "last_at) VALUES (?, ?, ?, 'open', ?, ?)",
+                    (chat_id, reason, summary, now, now),
                 )
             except sqlite3.IntegrityError:
                 found = self._db.execute(
@@ -332,6 +344,24 @@ class Store:
                 (thread_id,),
             ).fetchone()
         return _ticket(row)
+
+    def touch_ticket(self, ticket_id: int) -> None:
+        """Сообщение в обращении — в любую сторону: отсчёт тишины заново."""
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE tickets SET last_at = ? WHERE id = ?",
+                (self._clock(), ticket_id),
+            )
+
+    def idle_tickets(self, idle: float) -> list[Ticket]:
+        """Открытые обращения без сообщений дольше idle секунд."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_TICKET_COLUMNS} FROM tickets "
+                "WHERE status = 'open' AND last_at < ? ORDER BY id",
+                (self._clock() - idle,),
+            ).fetchall()
+        return [ticket for row in rows if (ticket := _ticket(row)) is not None]
 
     def close_ticket(self, ticket_id: int) -> bool:
         """False — уже закрыто: /close и /bot могут прийти одновременно."""
