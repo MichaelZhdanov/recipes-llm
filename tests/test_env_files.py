@@ -84,21 +84,41 @@ def test_api_and_bot_are_profiles_qdrant_always_runs() -> None:
     assert services["assistant"]["profiles"] == ["api"]
     assert services["bot"]["profiles"] == ["bot"]
     assert "profiles" not in services["qdrant"]
-    assert read_env_file(ROOT / ".env.example")["COMPOSE_PROFILES"] == "api,grocy"
+    assert read_env_file(ROOT / ".env.example")["COMPOSE_PROFILES"] == "api"
 
 
-def test_grocy_seed_is_separate_and_alone_gets_the_admin_password() -> None:
-    """Сид — свой профиль (make up его не поднимает); пароль admin Grocy
-    получает только он, а не ассистент и бот."""
+def load_grocy_compose() -> dict[str, Any]:
+    with (ROOT / "deploy" / "grocy" / "docker-compose.yml").open(encoding="utf-8") as f:
+        compose: dict[str, Any] = yaml.safe_load(f)
+    return compose
+
+
+def test_grocy_is_a_separate_project_joined_by_a_shared_network() -> None:
+    """Склад Grocy — свой compose-проект (на сервере /opt/grocy); ассистент,
+    бот и сид видят его через внешнюю сеть grocy."""
+    grocy = load_grocy_compose()
     services = load_compose()["services"]
 
-    assert services["grocy"]["profiles"] == ["grocy"]
+    assert "grocy" not in services
+    assert grocy["name"] == "grocy"
+    assert grocy["networks"]["default"] == {"name": "grocy", "external": True}
+    assert load_compose()["networks"]["grocy"] == {"name": "grocy", "external": True}
+    for name in ("assistant", "bot", "grocy-seed"):
+        assert "grocy" in services[name]["networks"], name
+    # Сид пишет ключ в базу Grocy: uid как у пользователя образа (Dockerfile).
+    assert grocy["services"]["grocy"]["environment"]["PUID"] == "10001"
+    for port in grocy["services"]["grocy"]["ports"]:
+        assert port.startswith("127.0.0.1:"), port
+
+
+def test_grocy_seed_alone_gets_the_admin_password() -> None:
+    """Сид — свой профиль; пароль admin Grocy получает только он."""
+    services = load_compose()["services"]
+
     assert services["grocy-seed"]["profiles"] == ["grocy-seed"]
     assert "GROCY_ADMIN_PASSWORD" in services["grocy-seed"]["environment"]
     for name in ("assistant", "bot"):
         assert "GROCY_ADMIN_PASSWORD" not in services[name]["environment"]
-    # Сид пишет ключ в базу Grocy: uid как у пользователя образа (Dockerfile).
-    assert services["grocy"]["environment"]["PUID"] == "10001"
 
 
 def test_bot_keeps_its_database_in_a_volume_and_has_a_healthcheck() -> None:

@@ -51,11 +51,13 @@ main() {
     git fetch --quiet origin main
     git checkout --quiet --detach "$sha"
 
-    # На сервере — бот и склад Grocy: HTTP API наружу не нужен (решения автора
-    # 53 и 70). Переменная перекрывает COMPOSE_PROFILES из .env сервера. API от
-    # прошлых деплоев останавливается. Секреты Grocy make up сгенерирует сам.
+    # На сервере — только бот: HTTP API наружу не нужен (решение автора 53).
+    # Склад Grocy — отдельный проект в /opt/grocy (решение автора): make up
+    # кладёт туда его compose, поднимает и наполняет демо-складом; секреты Grocy
+    # генерирует сам. Переменные перекрывают значения из .env сервера. API от
+    # прошлых деплоев останавливается.
     echo "== стек"
-    export COMPOSE_PROFILES=bot,grocy
+    export COMPOSE_PROFILES=bot GROCY_DIR=/opt/grocy
     docker compose rm --stop --force assistant
     make --no-print-directory up
 

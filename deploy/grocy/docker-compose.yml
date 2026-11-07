@@ -1,0 +1,37 @@
+# Grocy — склад «что есть дома» (этап 6): отдельная внешняя система, свой
+# compose-проект (решение автора 2026-11-07). На сервере файл лежит в /opt/grocy,
+# локально — в data/grocy (GROCY_DIR); туда его кладёт make grocy-up, данные —
+# рядом, в ./config. С ассистентом Grocy связан только общей docker-сетью grocy:
+# бот ходит к нему по http://grocy/api, а наружу порт открыт только на 127.0.0.1.
+name: grocy
+
+services:
+  grocy:
+    # Официальный grocy/grocy-docker в архиве с 2026-02; неизменяемый тег
+    # сборки, а не 4.7.1 — тот пересобирается каждую неделю.
+    image: lscr.io/linuxserver/grocy:v4.7.1-ls346
+    restart: unless-stopped
+    ports:
+      # Веб-интерфейс Grocy — только для этой машины.
+      - "127.0.0.1:9283:80"
+    environment:
+      # uid и gid — как у пользователя образа ассистента (Dockerfile): сид
+      # пишет ключ в ту же базу SQLite, у файлов должен быть один владелец.
+      PUID: "10001"
+      PGID: "10001"
+      TZ: Europe/Moscow
+    volumes:
+      - ./config:/config
+    healthcheck:
+      # Первый запрос к / заодно создаёт базу Grocy (миграции).
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+
+networks:
+  default:
+    # Общая сеть с ассистентом; её создаёт make up и make grocy-up.
+    name: grocy
+    external: true

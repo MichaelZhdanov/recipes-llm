@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check grocy-seed ask search eval test lint format
+.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -11,6 +11,10 @@ help: ## показать список команд
 # -u — чтобы файл принадлежал текущему пользователю, а не root.
 INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)" $(UV_IMAGE) python scripts/init_env.py
 
+# Каталог склада Grocy (отдельный compose-проект): из окружения (deploy.sh задаёт
+# /opt/grocy) или из .env; пусто — без Grocy.
+GROCY_DIR ?= $(shell grep -s '^GROCY_DIR=' .env | cut -d= -f2-)
+
 # Файловая цель: выполняется, только если .env ещё нет.
 .env: ## создать .env со случайными секретами
 	$(INIT_ENV)
@@ -18,10 +22,12 @@ INIT_ENV = docker run --rm -v "$(CURDIR):/work" -w /work -u "$$(id -u):$$(id -g)
 # init_env.py ещё раз: в старый .env он допишет секреты, появившиеся в новой
 # версии, заданные значения не трогает.
 # --wait ждёт, пока все healthcheck станут зелёными.
-up: .env ## поднять стек: Qdrant и профили из COMPOSE_PROFILES (.env): api, bot, grocy
+up: .env ## поднять стек: Qdrant, профили из COMPOSE_PROFILES (api, bot) и склад Grocy в GROCY_DIR
 	$(INIT_ENV)
+	@docker network inspect grocy >/dev/null 2>&1 || docker network create grocy >/dev/null
+	@if [ -n "$(GROCY_DIR)" ]; then $(MAKE) --no-print-directory grocy-up; fi
 	docker compose up -d --build --wait --wait-timeout 300
-	@if [ -n "$$(docker compose ps -q grocy)" ]; then $(MAKE) --no-print-directory grocy-seed; fi
+	@if [ -n "$(GROCY_DIR)" ]; then $(MAKE) --no-print-directory grocy-seed; fi
 	@docker compose ps --format '{{.Service}}: {{.Status}}'
 	@echo "HTTP API:   http://localhost:$$(grep -s '^ASSISTANT_PORT=' .env | cut -d= -f2 | grep . || echo 8080)/docs (профиль api)"
 	@echo "Qdrant:     http://localhost:6333/dashboard"
@@ -51,8 +57,15 @@ index-check: .env ## индекс подходит к настройкам? ни
 	docker compose up -d --wait qdrant
 	$(RUN) index --check
 
+grocy-up: ## склад Grocy — свой compose-проект в GROCY_DIR (на сервере /opt/grocy)
+	@test -n "$(GROCY_DIR)" || { echo 'GROCY_DIR не задан (.env): склад Grocy не нужен'; exit 2; }
+	@docker network inspect grocy >/dev/null 2>&1 || docker network create grocy >/dev/null
+	mkdir -p "$(GROCY_DIR)"
+	cp deploy/grocy/docker-compose.yml "$(GROCY_DIR)/docker-compose.yml"
+	docker compose --project-directory "$(GROCY_DIR)" -f "$(GROCY_DIR)/docker-compose.yml" up -d --wait --wait-timeout 300
+
 grocy-seed: .env ## демо-склад Grocy: продукты, остатки, пользователь без прав и его ключ (идемпотентно)
-	docker compose --profile grocy run --rm --build grocy-seed
+	GROCY_DIR="$(GROCY_DIR)" docker compose run --rm --build grocy-seed
 
 # Вопрос передаётся как "$$Q": shell подставляет значение переменной, но не
 # выполняет его, поэтому кавычки и $ в вопросе ничего не сломают.
