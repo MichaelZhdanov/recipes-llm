@@ -9,7 +9,8 @@
 # процессов (ps), stdin — нет.
 #
 # Шаги: ключи API и модель ассистента в .env → код ровно того коммита, что
-# проверил CI → стек (Qdrant и бот) → индекс тот? → состояние сервисов.
+# проверил CI → fail2ban → стек (Qdrant, бот, наблюдаемость) → индекс тот? →
+# состояние сервисов.
 #
 # Индекс сам не строится: полная сборка — ≈ 200 ₽ эмбеддингов и около часа, а
 # снимок уже посчитан локально и загружается deploy/upload_index.sh. Индекса
@@ -55,6 +56,19 @@ main() {
     echo "== код коммита $sha"
     git fetch --quiet origin main
     git checkout --quiet --detach "$sha"
+
+    # fail2ban: перебор паролей SSH — тысячи попыток в сутки. Пакет Ubuntu — один
+    # раз, наш jail (сроки бана, порты 22, 80, 443) — на каждом деплое.
+    echo "== fail2ban"
+    if ! command -v fail2ban-client >/dev/null; then
+        apt-get -o DPkg::Lock::Timeout=300 update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 \
+            install -y -qq fail2ban
+    fi
+    install -m 644 deploy/fail2ban/recipes-llm.local /etc/fail2ban/jail.d/recipes-llm.local
+    systemctl enable --quiet --now fail2ban
+    fail2ban-client reload >/dev/null
+    fail2ban-client status sshd | grep -E "Currently banned|Total banned" || true
 
     # На сервере — только бот: HTTP API наружу не нужен (решение автора 53).
     # Склад Grocy — отдельный проект в /opt/grocy (решение автора): make up

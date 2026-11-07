@@ -173,6 +173,25 @@ def test_ci_allows_index_rebuild_only_when_variable_is_1() -> None:
     assert deploy.count("index-if-needed YES=1") == 1
 
 
+def test_fail2ban_bans_ssh_and_the_docker_published_https_ports() -> None:
+    """Порты Caddy опубликованы Docker: пакеты к ним идут через DNAT мимо INPUT,
+    поэтому правило бана — на prerouting до DNAT (проверено на пакете Ubuntu
+    1.1.0-9: nft list table inet f2b-table)."""
+    jail = (DEPLOY / "fail2ban" / "recipes-llm.local").read_text()
+    deploy = (DEPLOY / "deploy.sh").read_text()
+
+    assert "port = 22,80,443" in jail
+    assert 'chain_hook="prerouting", chain_priority="-150", blocktype="drop"' in jail
+    assert (
+        "maxretry = 5" in jail and "findtime = 10m" in jail and "bantime = 1h" in jail
+    )
+    assert "/etc/fail2ban/jail.d/recipes-llm.local" in deploy
+    # Ставится после checkout: копируется версия jail этого же коммита.
+    assert deploy.index('git checkout --quiet --detach "$sha"') < deploy.index(
+        "== fail2ban"
+    )
+
+
 def test_https_profile_only_when_both_domains_are_in_env(tmp_path: Path) -> None:
     """Caddy (профиль tls) — только с обоими доменами: иначе Caddyfile без
     адреса сайта. Домены — переменные Actions, деплой пишет их в .env."""

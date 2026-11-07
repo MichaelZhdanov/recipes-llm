@@ -1,0 +1,23 @@
+# fail2ban на сервере (этап 8): ставит и обновляет deploy/deploy.sh, копируя этот
+# файл в /etc/fail2ban/jail.d/. Пакет Ubuntu (1.1.0) уже включает jail sshd с
+# backend systemd и banaction nftables (jail.d/defaults-debian.conf); здесь —
+# сроки и что закрывать.
+
+[DEFAULT]
+# 5 неудачных входов за 10 минут — бан на час; повторный — вдвое дольше, до недели.
+maxretry = 5
+findtime = 10m
+bantime = 1h
+bantime.increment = true
+bantime.maxtime = 1w
+
+[sshd]
+enabled = true
+# Забаненный адрес не видит ни SSH (22), ни Caddy с Grafana и Grocy (80, 443).
+port = 22,80,443
+# Порты 80 и 443 опубликованы Docker: такие пакеты уходят в контейнер через
+# DNAT и цепочку FORWARD и мимо INPUT, где fail2ban ставит правило по
+# умолчанию. Поэтому правило — на hook prerouting с приоритетом -150, раньше
+# DNAT Docker (-100): одно правило закрывает и SSH хоста, и порты Caddy.
+# reject в prerouting nftables не принимает — drop.
+action = nftables[type=multiport, port="%(port)s", protocol="tcp", chain_hook="prerouting", chain_priority="-150", blocktype="drop"]
