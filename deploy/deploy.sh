@@ -67,7 +67,16 @@ main() {
     fi
     install -m 644 deploy/fail2ban/recipes-llm.local /etc/fail2ban/jail.d/recipes-llm.local
     systemctl enable --quiet --now fail2ban
-    fail2ban-client reload >/dev/null
+    # reload перечитывает jail, но не пересоздаёт уже созданную цепочку nftables:
+    # после установки пакета она стоит на input (только 22, reject). Не на
+    # prerouting — restart: действие запускается заново, баны fail2ban
+    # восстанавливает из своей базы.
+    if nft list chain inet f2b-table f2b-chain 2>/dev/null | grep -q "hook prerouting"; then
+        fail2ban-client reload >/dev/null
+    else
+        systemctl restart fail2ban
+        sleep 3
+    fi
     fail2ban-client status sshd | grep -E "Currently banned|Total banned" || true
 
     # На сервере — только бот: HTTP API наружу не нужен (решение автора 53).

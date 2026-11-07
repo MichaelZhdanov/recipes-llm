@@ -186,6 +186,12 @@ def test_fail2ban_bans_ssh_and_the_docker_published_https_ports() -> None:
         "maxretry = 5" in jail and "findtime = 10m" in jail and "bantime = 1h" in jail
     )
     assert "/etc/fail2ban/jail.d/recipes-llm.local" in deploy
+    # reload не пересоздаёт цепочку на input от первого запуска пакета (так было
+    # на сервере 2026-11-07): не на prerouting — restart.
+    assert 'grep -q "hook prerouting"' in deploy
+    assert deploy.index('grep -q "hook prerouting"') < deploy.index(
+        "systemctl restart fail2ban"
+    )
     # Ставится после checkout: копируется версия jail этого же коммита.
     assert deploy.index('git checkout --quiet --detach "$sha"') < deploy.index(
         "== fail2ban"
