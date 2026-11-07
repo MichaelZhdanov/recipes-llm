@@ -55,6 +55,7 @@ from assistant.generation.answer import (
     AnswerStatement,
     Progress,
     SourceLink,
+    StockRequest,
     Trace,
 )
 from assistant.generation.gigachat import Message
@@ -98,6 +99,7 @@ class FakeAnswerer:
         question: str,
         history: Sequence[Message] = (),
         progress: Progress | None = None,
+        stock: StockRequest | None = None,
     ) -> AnswerResult:
         self.histories.append(list(history))
         if question == SLOW:

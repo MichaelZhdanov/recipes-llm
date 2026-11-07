@@ -24,37 +24,47 @@ from assistant.bot.escalation import (
 )
 from assistant.bot.format import (
     ALREADY_WITH_HUMAN_TEXT,
+    ASK_AGAIN_TEXT,
     BACK_TO_BOT_TEXT,
     CLOSED_BY_OPERATOR_TEXT,
     ERROR_TEXT,
     EXPIRED_TEXT,
     FAILED_TEXT,
     GONE_TEXT,
+    GROCY_OFF_TEXT,
+    GROCY_ON_TEXT,
+    GROCY_UNAVAILABLE_TEXT,
     HANDOFF_TEXT,
     HEALTH_TEXT,
+    NEAR_OFFER_TEXT,
     NEW_TEXT,
     NO_OPERATORS_TEXT,
     NOT_FOUND_TWICE_TEXT,
     NOT_WITH_HUMAN_TEXT,
+    SOURCE_QUESTION_TEXT,
+    STOCK_DOWN_TEXT,
     THANKS_TEXT,
     WHAT_WRONG_TEXT,
     Keyboard,
     answer_buttons,
     answer_html,
     human_buttons,
+    near_buttons,
     page_steps_header,
     rate_buttons,
     reason_buttons,
+    source_buttons,
     step_caption,
     steps_html,
     steps_refused_html,
 )
 from assistant.bot.pages import PageChecker
 from assistant.bot.recipe_page import RecipePage
-from assistant.bot.store import SavedSteps, Store, Ticket, Vote, VoteReason
+from assistant.bot.store import SavedSteps, Source, Store, Ticket, Vote, VoteReason
 from assistant.generation import steps as steps_module
-from assistant.generation.answer import Progress, render_markdown
+from assistant.generation.answer import Progress, StockRequest, render_markdown
 from assistant.generation.steps import Steps
+from assistant.grocy.client import GrocyError, StockItem
 from assistant.indexing.chunks import Chunk
 from assistant.service import DEPENDENCY_ERRORS, QuestionAnswerer
 
@@ -95,6 +105,8 @@ PageFetcher = Callable[[str], RecipePage | None]
 PhotoFetcher = Callable[[str], bytes | None]
 # Что отправить: текст или фото с подписью.
 Part = str | tuple[bytes, str]
+# Что сейчас на складе: grocy.client.Grocy.stock.
+StockReader = Callable[[], list[StockItem]]
 # Кэш шагов сбрасывается, когда меняется любой из двух промптов.
 STEPS_VERSION = f"{steps_module.PROMPT_VERSION}+{steps_module.REVIEW_PROMPT_VERSION}"
 
@@ -112,10 +124,12 @@ class BotService:
         fetch_photo: PhotoFetcher,
         gigachat_note: bool = False,
         operators: bool = False,
+        stock: StockReader | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """operators — есть ли группа операторов (ESCALATION_CHAT_ID): без неё
-        бот честно говорит, что передать человеку сейчас не может."""
+        бот честно говорит, что передать человеку сейчас не может. stock —
+        чтение склада Grocy; None — Grocy не подключён (нет GROCY_API_KEY)."""
         self.answerer = answerer
         self.store = store
         self.pages = pages
@@ -125,6 +139,7 @@ class BotService:
         self.fetch_photo = fetch_photo
         self.gigachat_note = gigachat_note
         self.operators = operators
+        self.stock = stock
         self._clock = clock
 
     def ask(
@@ -135,10 +150,68 @@ class BotService:
             # Явная просьба — сразу человеку, без модели (решение 67).
             self.store.add_turn(chat_id, question, HANDOFF_TEXT)
             return self.handoff(chat_id, "request")
+        if self.stock is not None and self.store.grocy_enabled(chat_id):
+            source = self.store.source(chat_id)
+            if source is None:
+                # Новый разговор — сначала спросить, откуда искать (решение 71).
+                self.store.save_pending(chat_id, question)
+                return Reply(SOURCE_QUESTION_TEXT, source_buttons())
+            return self._answer(chat_id, question, progress, source == "stock")
+        return self._answer(chat_id, question, progress)
+
+    def choose_source(
+        self, chat_id: int, source: Source, progress: Progress | None = None
+    ) -> Reply:
+        """Кнопка «из того, что есть» / «по всем рецептам»: ответ на вопрос в ожидании."""
+        self.store.set_source(chat_id, source)
+        question = self.store.pop_pending(chat_id)
+        if question is None:
+            return Reply(ASK_AGAIN_TEXT)
+        return self._answer(chat_id, question, progress, source == "stock")
+
+    def near(
+        self, chat_id: int, answer_id: int, progress: Progress | None = None
+    ) -> Reply:
+        """Расширенный поиск: рецепты, которым не хватает 1–4 продуктов со склада."""
+        question = self.store.question_of(answer_id, chat_id)
+        if question is None or self.stock is None:
+            return Reply(GONE_TEXT)
+        return self._answer(chat_id, question, progress, True, near=True)
+
+    def toggle_grocy(self, chat_id: int) -> str:
+        """/grocy: включить или выключить склад для этого чата (решение 70)."""
+        if self.stock is None:
+            return GROCY_UNAVAILABLE_TEXT
+        enabled = not self.store.grocy_enabled(chat_id)
+        self.store.set_grocy(chat_id, enabled)
+        logger.info("Grocy у чата: %s", "включён" if enabled else "выключен")
+        return GROCY_ON_TEXT if enabled else GROCY_OFF_TEXT
+
+    def _stock_request(self, near: bool) -> StockRequest | None:
+        """Склад из Grocy; None — Grocy недоступен (тогда ищем по всем рецептам)."""
+        assert self.stock is not None
+        try:
+            items = self.stock()
+        except GrocyError as error:
+            logger.error("склад не прочитан: %s", error)
+            return None
+        return StockRequest(names=tuple(item.name for item in items), near=near)
+
+    def _answer(
+        self,
+        chat_id: int,
+        question: str,
+        progress: Progress | None,
+        from_stock: bool = False,
+        *,
+        near: bool = False,
+    ) -> Reply:
         started = self._clock()
+        stock = self._stock_request(near) if from_stock else None
+        note = STOCK_DOWN_TEXT if from_stock and stock is None else ""
         try:
             result = self.answerer.answer(
-                question, self.store.history(chat_id), progress
+                question, self.store.history(chat_id), progress, stock
             )
         except DEPENDENCY_ERRORS as error:
             # Текст ошибки — код HTTP и ответ API, без вопроса пользователя;
@@ -161,21 +234,29 @@ class BotService:
             model=answer.model,
             recipe_ids=[link.recipe_id for link in answer.sources],
             seconds=seconds,
+            question=question,
         )
         # Ответ в истории — текстом со ссылками: по ним ассистент находит
         # рецепты для уточнений («а во втором сколько муки?»).
         self.store.add_turn(chat_id, question, render_markdown(answer))
         logger.info(
-            "ответ %s: %s%s за %.1f с",
+            "ответ %s: %s%s%s за %.1f с",
             answer_id,
             answer.status,
             f" ({answer.reason})" if answer.reason else "",
+            " по складу" + (", расширенный" if near else "") if stock else "",
             seconds,
         )
         text = answer_html(answer, alive, gigachat_note=self.gigachat_note)
+        if note:
+            text = f"{note}\n\n{text}"
         buttons = answer_buttons(
             answer_id, answer, alive, ai_steps=self.make_steps is not None
         )
+        if answer.near_available:
+            # Целиком из склада мало или ничего — предложить, где не хватает 1–4.
+            text = f"{text}\n\n{NEAR_OFFER_TEXT}"
+            buttons = [*buttons, *near_buttons(answer_id)]
         if self.operators and self.store.recent_statuses(chat_id) == [
             "not_found",
             "not_found",

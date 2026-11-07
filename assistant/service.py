@@ -14,7 +14,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException
 
 from assistant.config import Settings
-from assistant.generation.answer import AnswerResult, Progress, make_answerer
+from assistant.generation.answer import (
+    AnswerResult,
+    Progress,
+    StockRequest,
+    make_answerer,
+)
 from assistant.generation.gigachat import LlmError, Message
 from assistant.generation.llm import make_http_client
 from assistant.retrieval.embeddings import EmbeddingError
@@ -40,6 +45,7 @@ class QuestionAnswerer(Protocol):
         question: str,
         history: Sequence[Message] = (),
         progress: Progress | None = None,
+        stock: StockRequest | None = None,
     ) -> AnswerResult: ...
 
 
@@ -63,6 +69,7 @@ class LazyAnswerer:
         question: str,
         history: Sequence[Message] = (),
         progress: Progress | None = None,
+        stock: StockRequest | None = None,
     ) -> AnswerResult:
         with self._lock:
             if self._answerer is None:
@@ -72,7 +79,7 @@ class LazyAnswerer:
                     llm_http=self._llm_http,
                     qdrant=self._qdrant,
                 )
-        return self._answerer.answer(question, history, progress)
+        return self._answerer.answer(question, history, progress, stock)
 
     def close(self) -> None:
         self._embeddings_http.close()

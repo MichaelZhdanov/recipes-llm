@@ -52,6 +52,7 @@ from assistant.generation.answer import (
     AnswerStatement,
     Progress,
     SourceLink,
+    StockRequest,
     Trace,
 )
 from assistant.generation.gigachat import LlmError, Message
@@ -96,6 +97,7 @@ class ScriptedAnswerer:
         question: str,
         history: Sequence[Message] = (),
         progress: Progress | None = None,
+        stock: StockRequest | None = None,
     ) -> AnswerResult:
         self.questions.append(question)
         next_answer = self.answers.pop(0) if self.answers else answer()

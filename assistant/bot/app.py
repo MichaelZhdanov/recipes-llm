@@ -22,6 +22,9 @@
   пишет, ассистент молчит. /close в теме, закрытие темы кнопкой Telegram или
   /bot у пользователя возвращают ассистента. Других групп бот не слушает.
   Обращение без сообщений 12 часов закрывается само (`auto_close`).
+- Склад Grocy (этап 6): /grocy включает его у своего чата; на новый вопрос
+  разговора бот спрашивает кнопками «из того, что есть» или «по всем
+  рецептам», под строгим ответом — кнопка «где не хватает 1–4 продуктов».
 """
 
 import asyncio
@@ -82,11 +85,12 @@ from assistant.bot.service import (
     RecipeLookup,
     Reply,
 )
-from assistant.bot.store import Store, Vote, VoteReason
+from assistant.bot.store import Source, Store, Vote, VoteReason
 from assistant.config import Settings
-from assistant.generation.answer import Stage
+from assistant.generation.answer import Progress, Stage
 from assistant.generation.llm import make_http_client
 from assistant.generation.steps import make_steps, make_steps_models
+from assistant.grocy import client as grocy_client
 from assistant.indexing.chunks import Chunk
 from assistant.retrieval.store import VectorStore
 from assistant.service import MAX_QUESTION_CHARS, LazyAnswerer
@@ -102,6 +106,7 @@ STEP_PAUSE = 0.5
 # Как часто бот ищет обращения без сообщений (TICKET_IDLE), с.
 EXPIRE_EVERY = 10 * 60
 VOTES: dict[str, Vote] = {"up": "up", "down": "down"}
+SOURCES: dict[str, Source] = {"stock": "stock", "all": "all"}
 REASONS: dict[str, VoteReason] = {
     "unclear": "unclear",
     "wrong": "wrong",
@@ -128,6 +133,21 @@ def without_votes(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup |
         row
         for row in markup.inline_keyboard
         if not any((button.callback_data or "").startswith("vote:") for button in row)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def without(
+    markup: InlineKeyboardMarkup | None, data: str
+) -> InlineKeyboardMarkup | None:
+    """Клавиатура без ряда с нажатой кнопкой: второй раз её не нажать.
+    У вопроса «откуда искать» обе кнопки в одном ряду — уходят обе."""
+    if markup is None:
+        return None
+    rows = [
+        row
+        for row in markup.inline_keyboard
+        if not any(button.callback_data == data for button in row)
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -188,7 +208,16 @@ class Handlers:
 
     async def _answer(self, message: Message, bot: Bot, text: str) -> None:
         chat_id = message.chat.id
-        status = await message.answer(status_text("search"))
+        await self._with_status(
+            bot, chat_id, lambda progress: self.service.ask(chat_id, text, progress)
+        )
+
+    async def _with_status(
+        self, bot: Bot, chat_id: int, call: Callable[[Progress], Reply]
+    ) -> None:
+        """Статус по стадиям и «печатает…», пока готовится ответ; ответ — на месте
+        статуса. call выполняется в потоке: ассистент синхронный."""
+        status = await bot.send_message(chat_id, status_text("search"))
         loop = asyncio.get_running_loop()
         shown: set[Stage] = {"search"}
 
@@ -206,9 +235,7 @@ class Handlers:
 
         async with ChatActionSender.typing(chat_id=chat_id, bot=bot):
             try:
-                reply = await asyncio.to_thread(
-                    self.service.ask, chat_id, text, progress
-                )
+                reply = await asyncio.to_thread(call, progress)
             except Exception:
                 # Ошибка в коде, а не во внешнем API: пользователь не должен
                 # смотреть на вечное «ищу рецепты…».
@@ -317,6 +344,65 @@ class Handlers:
                     logger.exception("шаги не собраны")
                     reply = ERROR_REPLY
             await status.edit_text(reply.text, reply_markup=keyboard(reply.buttons))
+        finally:
+            self.busy.discard(chat_id)
+
+    # --- Склад Grocy ---
+
+    async def grocy(self, message: Message) -> None:
+        """/grocy — включить или выключить интеграцию с Grocy для своего чата."""
+        text = await asyncio.to_thread(self.service.toggle_grocy, message.chat.id)
+        await message.answer(text)
+
+    async def source(self, callback: CallbackQuery, bot: Bot) -> None:
+        """«Из того, что есть» / «по всем рецептам» — ответ на вопрос в ожидании."""
+        value = (callback.data or "").partition(":")[2]
+        message = callback.message
+        if value not in SOURCES or message is None:
+            await callback.answer()
+            return
+        chat_id = message.chat.id
+        await self._callback_answer(
+            callback,
+            bot,
+            lambda progress: self.service.choose_source(
+                chat_id, SOURCES[value], progress
+            ),
+        )
+
+    async def near(self, callback: CallbackQuery, bot: Bot) -> None:
+        """Расширенный поиск по складу: где не хватает 1–4 продуктов."""
+        parsed = (callback.data or "").partition(":")[2]
+        message = callback.message
+        if not parsed.isdigit() or message is None:
+            await callback.answer()
+            return
+        chat_id = message.chat.id
+        await self._callback_answer(
+            callback,
+            bot,
+            lambda progress: self.service.near(chat_id, int(parsed), progress),
+        )
+
+    async def _callback_answer(
+        self, callback: CallbackQuery, bot: Bot, call: Callable[[Progress], Reply]
+    ) -> None:
+        """Кнопка, после которой готовится ответ: по одному на чат, кнопка исчезает."""
+        message = callback.message
+        assert message is not None
+        chat_id = message.chat.id
+        if chat_id in self.busy:
+            await callback.answer(BUSY_TEXT)
+            return
+        self.busy.add(chat_id)
+        try:
+            await callback.answer()
+            if isinstance(message, Message):
+                with contextlib.suppress(TelegramBadRequest):
+                    await message.edit_reply_markup(
+                        reply_markup=without(message.reply_markup, callback.data or "")
+                    )
+            await self._with_status(bot, chat_id, call)
         finally:
             self.busy.discard(chat_id)
 
@@ -526,6 +612,7 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.message.register(handlers.help, Command("help"))
     router.message.register(handlers.new, Command("new"))
     router.message.register(handlers.human, Command("human"))
+    router.message.register(handlers.grocy, Command("grocy"))
     router.message.register(handlers.question, F.text)
     router.message.register(handlers.other)
     router.callback_query.register(handlers.vote, F.data.startswith("vote:"))
@@ -535,6 +622,8 @@ def build_dispatcher(handlers: Handlers) -> Dispatcher:
     router.callback_query.register(handlers.page_steps, F.data.startswith("card:"))
     router.callback_query.register(handlers.human_button, F.data.startswith("human:"))
     router.callback_query.register(handlers.rate, F.data.startswith("rate:"))
+    router.callback_query.register(handlers.source, F.data.startswith("source:"))
+    router.callback_query.register(handlers.near, F.data.startswith("near:"))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     if handlers.operators_chat is not None:
@@ -572,6 +661,10 @@ COMMANDS = [
     BotCommand(command="bot", description="вернуться к ассистенту от повара"),
     BotCommand(command="help", description="что я умею"),
 ]
+# Пункт меню — только когда Grocy подключён (решение 70).
+GROCY_COMMAND = BotCommand(
+    command="grocy", description="включить или выключить интеграцию с Grocy"
+)
 
 
 async def heartbeat(
@@ -615,6 +708,16 @@ async def run(settings: Settings) -> None:
     pages_http = httpx2.Client()
     steps_http = make_http_client(settings)
     qdrant = QdrantClient(url=settings.qdrant_url, timeout=30)
+    grocy_http = grocy_client.make_http_client()
+    stock = (
+        grocy_client.Grocy(
+            api_url=settings.grocy_api_url,
+            api_key=settings.grocy_api_key,
+            client=grocy_http,
+        ).stock
+        if settings.grocy_api_key.get_secret_value()
+        else None
+    )
     # Шаги от ИИ проверяет Sonnet, как и ответ (принцип 1): без проверки ответа
     # (ANSWER_REVIEW=false) их не пишем — у рецепта без страницы нет кнопки.
     steps_models = (
@@ -632,6 +735,7 @@ async def run(settings: Settings) -> None:
         fetch_photo=lambda url: fetch_photo(pages_http, url),
         gigachat_note=settings.llm_provider == "gigachat",
         operators=settings.escalation_chat_id is not None,
+        stock=stock,
     )
     bot = make_bot(token)
     handlers = Handlers(service, operators_chat=settings.escalation_chat_id)
@@ -639,7 +743,9 @@ async def run(settings: Settings) -> None:
     beat = asyncio.create_task(heartbeat(bot))
     closer = asyncio.create_task(auto_close(handlers, bot))
     try:
-        await bot.set_my_commands(COMMANDS)
+        await bot.set_my_commands(
+            [*COMMANDS[:2], GROCY_COMMAND, *COMMANDS[2:]] if stock else COMMANDS
+        )
         await dispatcher.start_polling(
             bot, allowed_updates=["message", "callback_query"]
         )
@@ -650,5 +756,6 @@ async def run(settings: Settings) -> None:
         answerer.close()
         pages_http.close()
         steps_http.close()
+        grocy_http.close()
         qdrant.close()
         store.close()

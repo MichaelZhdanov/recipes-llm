@@ -93,6 +93,25 @@ EXPIRED_TEXT = (
 )
 TOPIC_EXPIRED_TEXT = "⏰ Обращение закрыто автоматически: 12 часов без сообщений."
 
+# --- Склад Grocy (этап 6) ---
+GROCY_ON_TEXT = (
+    "🧺 Интеграция с Grocy включена. На новый вопрос я спрошу, искать ли из того, "
+    "что есть дома, или по всем рецептам. Выключить — /grocy."
+)
+GROCY_OFF_TEXT = (
+    "Интеграция с Grocy выключена: ищу по всем рецептам. Включить — /grocy."
+)
+GROCY_UNAVAILABLE_TEXT = "Склад Grocy не подключён — ищу по всем рецептам."
+SOURCE_QUESTION_TEXT = "Искать из того, что есть дома, или по всем рецептам?"
+SOURCE_BUTTONS: list[Button] = [
+    ("🧺 Из того, что есть", "source:stock"),
+    ("📖 По всем рецептам", "source:all"),
+]
+ASK_AGAIN_TEXT = "Напишите, пожалуйста, вопрос ещё раз — я его потерял."
+STOCK_DOWN_TEXT = "⚠️ Склад Grocy сейчас недоступен — ищу по всем рецептам."
+NEAR_OFFER_TEXT = "Есть рецепты, где не хватает от 1 до 4 продуктов. Показать?"
+NEAR_BUTTON = "🔎 Где не хватает 1–4 продуктов"
+
 STEPS_STATUS_TEXT = (
     "🍳 Расписываю шаги и сверяю их с рецептом — это займёт около 20 секунд…"
 )
@@ -136,6 +155,13 @@ def _source_line(number: int, link: SourceLink, alive: bool) -> str:
     return f"{number}. 📖 <b>{name}</b> — страница рецепта на сайте недоступна"
 
 
+def _missing_line(missing: Sequence[str]) -> str:
+    """Чего не хватает рецепту из склада — считает код по строкам рецепта."""
+    if not missing:
+        return ""
+    return "\n    🛒 Не хватает: " + html.escape(", ".join(missing))
+
+
 def answer_html(
     answer: Answer, pages: Mapping[str, bool], *, gigachat_note: bool = False
 ) -> str:
@@ -154,6 +180,7 @@ def answer_html(
         statements = [html.escape(s.text) for s in answer.statements]
     sources = [
         _source_line(link.number, link, pages.get(link.url, False))
+        + _missing_line(answer.missing.get(link.recipe_id, []))
         for link in answer.sources
     ]
     note = (
@@ -236,6 +263,16 @@ def step_caption(number: int, text: str) -> str:
 
 def reason_buttons(answer_id: int) -> Keyboard:
     return [[(text, f"why:{answer_id}:{code}")] for text, code in REASON_BUTTONS]
+
+
+def source_buttons() -> Keyboard:
+    """Откуда искать при включённом Grocy: из того, что есть, или по всем."""
+    return [SOURCE_BUTTONS]
+
+
+def near_buttons(answer_id: int) -> Keyboard:
+    """Расширенный поиск по складу для вопроса этого ответа."""
+    return [[(NEAR_BUTTON, f"near:{answer_id}")]]
 
 
 def human_buttons(reason: str) -> Keyboard:
