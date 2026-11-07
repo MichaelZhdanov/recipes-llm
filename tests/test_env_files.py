@@ -149,19 +149,42 @@ def test_ports_are_published_only_on_localhost() -> None:
 def test_observability_runs_in_its_profiles_with_pinned_images_and_local_ports() -> (
     None
 ):
-    """Prometheus и Grafana — профиль observability (решение 80); образы —
-    точной версией, порты — только 127.0.0.1."""
+    """Prometheus и Grafana — профиль observability, Alertmanager — alerts
+    (решения 80–81); образы — точной версией, порты — только 127.0.0.1."""
     services = load_compose()["services"]
 
     assert services["prometheus"]["profiles"] == ["observability"]
     assert services["grafana"]["profiles"] == ["observability"]
-    for name in ("prometheus", "grafana"):
+    assert services["alertmanager"]["profiles"] == ["alerts"]
+    for name in ("prometheus", "grafana", "alertmanager"):
         image = services[name]["image"]
         assert ":" in image and not image.endswith(":latest"), image
         for port in services[name].get("ports", []):
             assert port.startswith("127.0.0.1:"), port
     # Порта метрик бота на хосте нет: Prometheus читает его из docker-сети.
     assert "ports" not in services["bot"]
+
+
+def test_alertmanager_gets_telegram_secrets_as_files_not_in_its_config() -> None:
+    compose = load_compose()
+    config = (ROOT / "observability/alertmanager/alertmanager.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert compose["secrets"] == {
+        "telegram_bot_token": {"environment": "TELEGRAM_BOT_TOKEN"},
+        "escalation_chat_id": {"environment": "ESCALATION_CHAT_ID"},
+    }
+    assert compose["services"]["alertmanager"]["secrets"] == [
+        "telegram_bot_token",
+        "escalation_chat_id",
+    ]
+    assert "bot_token_file: /run/secrets/telegram_bot_token" in config
+    assert "chat_id_file: /run/secrets/escalation_chat_id" in config
+    assert "bot_token:" not in config.replace("bot_token_file:", "")
+    # Grafana — только пароль admin, без ключей ассистента.
+    grafana_env = compose["services"]["grafana"]["environment"]
+    assert not any("API_KEY" in name or "TOKEN" in name for name in grafana_env)
 
 
 def test_dashboard_queries_only_metrics_the_code_exports() -> None:
@@ -184,7 +207,8 @@ def test_dashboard_queries_only_metrics_the_code_exports() -> None:
             encoding="utf-8"
         )
     )
-    exprs = [t["expr"] for p in dashboard["panels"] for t in p["targets"]]
+    rules = (ROOT / "observability/prometheus/alerts.yml").read_text(encoding="utf-8")
+    exprs = [t["expr"] for p in dashboard["panels"] for t in p["targets"]] + [rules]
 
     used = {m for e in exprs for m in re.findall(r"\b(recipes_\w+)", e)}
     assert used and used <= known, used - known

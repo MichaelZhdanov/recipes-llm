@@ -1,0 +1,24 @@
+# Alertmanager (этап 8, решение 81): алерты Prometheus → группа операторов в
+# Telegram. Токен бота и id группы — секреты compose из TELEGRAM_BOT_TOKEN и
+# ESCALATION_CHAT_ID (docker-compose.yml, secrets): в этом файле их нет.
+# Только на сервере (профиль alerts): локальный стек в Telegram не пишет.
+route:
+  receiver: telegram
+  group_by: [alertname]
+  # Подождать и собрать одновременные алерты в одно сообщение.
+  group_wait: 30s
+  group_interval: 5m
+  # Пока не починили — напоминать раз в 4 часа, а не каждые 5 минут.
+  repeat_interval: 4h
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /run/secrets/telegram_bot_token
+        chat_id_file: /run/secrets/escalation_chat_id
+        send_resolved: true
+        parse_mode: HTML
+        message: |-
+          {{ if eq .Status "firing" }}🔴{{ else }}✅ Починилось:{{ end }} <b>{{ .CommonAnnotations.summary }}</b>
+          {{ range .Alerts }}{{ if eq $.Status "firing" }}{{ .Annotations.description }}{{ end }}
+          {{ end }}

@@ -1,0 +1,75 @@
+# promtool test rules alerts_test.yml (make alerts-test, CI): алерт срабатывает,
+# когда должен, и молчит, когда всё в порядке. Время в тестах начинается с 0.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'recipes_dependency_errors_total{kind="balance", job="bot"}'
+        values: "0 0 1 1"
+      - series: 'recipes_requests_total{source="all", status="error", job="bot"}'
+        values: "0 1 2 3 4"
+      # Сердцебиение каждую минуту: time() - метрика = 0.
+      - series: 'recipes_telegram_heartbeat_timestamp_seconds{job="bot"}'
+        values: "0+60x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CloudRuBalance
+        exp_alerts:
+          - exp_labels: {severity: critical, kind: balance, job: bot}
+            exp_annotations:
+              summary: "Кончились рубли на cloud.ru"
+              description: "Модель или эмбеддинги отвечают 402/403 «Project not found»: бот не отвечает на вопросы. Пополните баланс — деньги доходят до API примерно за 5 минут."
+      - eval_time: 4m
+        alertname: AnswerFailures
+        exp_alerts:
+          - exp_labels: {severity: critical, source: all, status: error, job: bot}
+            exp_annotations:
+              summary: "Серия сбоев ответа"
+              description: "За 10 минут не собрались три ответа и больше: модель, эмбеддинги или Qdrant недоступны. Причина — в логе бота (docker logs recipes-llm-bot-1)."
+      # Бот живой — молчим.
+      - eval_time: 15m
+        alertname: BotSilent
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      # Сердцебиение остановилось на 60 с: через 5 минут — больше 300 с, ещё
+      # 5 минут «for» — алерт.
+      - series: 'recipes_telegram_heartbeat_timestamp_seconds{job="bot"}'
+        values: "0 60 60 60 60 60 60 60 60 60 60 60 60 60"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BotSilent
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: BotSilent
+        exp_alerts:
+          - exp_labels: {severity: critical, job: bot}
+            exp_annotations:
+              summary: "Бот не отвечает Telegram"
+              description: "Больше 5 минут нет ответа Telegram на getMe или Prometheus не видит бота: пользователи не получают ответов."
+
+  - interval: 1m
+    # Бота нет вовсе: метрики сердцебиения нет — absent().
+    input_series:
+      - series: 'recipes_dependency_errors_total{kind="grocy", job="bot"}'
+        values: "0 1"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BotSilent
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Бот не отвечает Telegram"
+              description: "Больше 5 минут нет ответа Telegram на getMe или Prometheus не видит бота: пользователи не получают ответов."
+      - eval_time: 2m
+        alertname: GrocyDown
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: grocy, job: bot}
+            exp_annotations:
+              summary: "Склад Grocy недоступен"
+              description: "Бот не смог прочитать склад и ищет по всем рецептам. Проверьте /opt/grocy (docker compose ps)."

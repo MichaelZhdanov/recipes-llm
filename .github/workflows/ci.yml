@@ -48,6 +48,9 @@ jobs:
       - name: Проверка docker-compose.yml
         run: docker compose config -q
 
+      - name: Правила алертов (promtool)
+        run: make alerts-test
+
       - name: Сборка образа ассистента
         run: docker compose build assistant
 

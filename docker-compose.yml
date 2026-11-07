@@ -3,8 +3,9 @@
 # Порты опубликованы только на 127.0.0.1: стек не виден из локальной сети.
 # Каждый сервис получает только свои переменные через environment, без env_file.
 # Профили (COMPOSE_PROFILES в .env): api — HTTP API, bot — Telegram-бот,
-# observability — Prometheus и Grafana; Qdrant — всегда. Локально по
-# умолчанию api, на сервере deploy.sh включает bot,observability.
+# observability — Prometheus и Grafana, alerts — Alertmanager → Telegram;
+# Qdrant — всегда. Локально по умолчанию api, на сервере deploy.sh включает
+# bot,observability,alerts.
 # Склад Grocy — отдельный compose-проект (deploy/grocy/, на сервере /opt/grocy):
 # ассистент и бот видят его через внешнюю docker-сеть grocy.
 name: recipes-llm
@@ -122,7 +123,8 @@ services:
 
   # --- Наблюдаемость (этап 8, F8) ---
   # Prometheus и Grafana — профиль observability (на сервере и локально,
-  # решение 80). Конфиги — observability/.
+  # решение 80); Alertmanager — профиль alerts, только на сервере: он пишет в
+  # настоящую группу операторов (решение 81). Конфиги — observability/.
   prometheus:
     image: docker.io/prom/prometheus:v3.15.1
     profiles: [observability]
@@ -160,11 +162,26 @@ services:
       # Только с этой машины; на сервере — ssh -L 3000:127.0.0.1:3000.
       - "127.0.0.1:3000:3000"
 
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.34.1
+    profiles: [alerts]
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./observability/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    # Токен бота и id группы — файлами в /run/secrets, не в конфиге.
+    secrets: [telegram_bot_token, escalation_chat_id]
+
 volumes:
   qdrant-data:
   bot-data:
   prometheus-data:
   grafana-data:
+  alertmanager-data:
 
 networks:
   # Общая сеть со складом Grocy (его compose — deploy/grocy/). Её создаёт make up.
@@ -172,3 +189,10 @@ networks:
     name: grocy
     external: true
 
+secrets:
+  # Для Alertmanager: compose берёт значения из переменных окружения (.env)
+  # и кладёт файлами в /run/secrets контейнера.
+  telegram_bot_token:
+    environment: TELEGRAM_BOT_TOKEN
+  escalation_chat_id:
+    environment: ESCALATION_CHAT_ID

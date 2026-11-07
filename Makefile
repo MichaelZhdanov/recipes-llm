@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval test lint format
+.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval test alerts-test lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -92,6 +92,13 @@ eval: .env ## прогон эталонного набора, отчёт в eval
 
 test: ## unit-тесты (pytest)
 	uv run pytest
+
+# Правила алертов проверяет promtool из того же образа Prometheus, что в стеке.
+alerts-test: ## тесты правил алертов Prometheus (promtool)
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool \
+		docker.io/prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
+	docker run --rm -v "$(CURDIR)/observability/prometheus:/etc/prometheus:ro" --entrypoint promtool \
+		docker.io/prom/prometheus:v3.15.1 test rules /etc/prometheus/alerts_test.yml
 
 lint: ## ruff check, ruff format --check, mypy, shellcheck
 	uv run ruff check .

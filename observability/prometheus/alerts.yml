@@ -1,0 +1,44 @@
+# Алерты в Telegram (решение 81): правило → Alertmanager → группа операторов.
+# Тексты — для человека, который увидит их в телефоне; проверка правил —
+# alerts_test.yml (`make alerts-test`, в CI).
+groups:
+  - name: recipes
+    rules:
+      - alert: CloudRuBalance
+        # 402 или 403 «Project not found» у модели или эмбеддингов
+        # (metrics.dependency_kind): бот не может отвечать, пока не пополнят.
+        expr: increase(recipes_dependency_errors_total{kind="balance"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Кончились рубли на cloud.ru"
+          description: "Модель или эмбеддинги отвечают 402/403 «Project not found»: бот не отвечает на вопросы. Пополните баланс — деньги доходят до API примерно за 5 минут."
+
+      - alert: AnswerFailures
+        expr: increase(recipes_requests_total{status="error"}[10m]) >= 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "Серия сбоев ответа"
+          description: "За 10 минут не собрались три ответа и больше: модель, эмбеддинги или Qdrant недоступны. Причина — в логе бота (docker logs recipes-llm-bot-1)."
+
+      - alert: BotSilent
+        # Сердцебиение — ответ Telegram на getMe раз в минуту (bot/app.py).
+        # Если бот лежит, метрики нет вовсе — absent().
+        expr: >
+          (time() - recipes_telegram_heartbeat_timestamp_seconds > 300)
+          or absent(recipes_telegram_heartbeat_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Бот не отвечает Telegram"
+          description: "Больше 5 минут нет ответа Telegram на getMe или Prometheus не видит бота: пользователи не получают ответов."
+
+      - alert: GrocyDown
+        expr: increase(recipes_dependency_errors_total{kind="grocy"}[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Склад Grocy недоступен"
+          description: "Бот не смог прочитать склад и ищет по всем рецептам. Проверьте /opt/grocy (docker compose ps)."
