@@ -39,7 +39,7 @@ from assistant.security.pii import mask_pii
 
 HISTORY_LIMIT = 10
 SESSION_TIMEOUT = 30 * 60
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 Vote = Literal["up", "down"]
 VoteReason = Literal["unclear", "wrong", "failed"]
@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS answers (
     created_at REAL NOT NULL,
     voted_at REAL,
     question TEXT,
-    missing TEXT
+    missing TEXT,
+    arm TEXT
 );
 CREATE TABLE IF NOT EXISTS pages (
     url TEXT PRIMARY KEY,
@@ -185,6 +186,9 @@ class Store:
         # 5 → 6: чего не хватает рецептам ответа — для шагов со страницы.
         if "missing" not in columns:
             self._db.execute("ALTER TABLE answers ADD COLUMN missing TEXT")
+        # 7 → 8: группа эксперимента (S4); NULL — эксперимент был выключен.
+        if "arm" not in columns:
+            self._db.execute("ALTER TABLE answers ADD COLUMN arm TEXT")
 
     def close(self) -> None:
         self._db.close()
@@ -263,13 +267,14 @@ class Store:
         seconds: float,
         question: str = "",
         missing: Mapping[int, Sequence[str]] | None = None,
+        arm: str | None = None,
     ) -> int:
         """question — без ПДн (маскируется): по нему расширенный поиск по складу;
         missing — чего не хватает рецептам расширенного поиска (recipe_id → продукты)."""
         with self._lock, self._db:
             cursor = self._db.execute(
                 "INSERT INTO answers (chat_id, status, reason, model, recipe_ids, seconds, "
-                "created_at, question, missing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, question, missing, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     chat_id,
                     status,
@@ -282,6 +287,7 @@ class Store:
                     json.dumps({str(k): list(v) for k, v in missing.items()})
                     if missing
                     else None,
+                    arm,
                 ),
             )
             return int(cursor.lastrowid or 0)

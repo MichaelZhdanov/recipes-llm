@@ -17,6 +17,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from assistant.bot import experiment
 from assistant.bot.escalation import (
     OFFERED_REASONS,
     TICKET_IDLE,
@@ -99,6 +100,8 @@ class Record:
     # Время начала (часы сервиса) и «просили склад, а Grocy не ответил».
     started: float = 0.0
     stock_down: bool = False
+    # Группа эксперимента S4; None — эксперимент выключен.
+    arm: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,7 @@ class BotService:
         operators: bool = False,
         stock: StockReader | None = None,
         journal: Journal | None = None,
+        test_answerer: QuestionAnswerer | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """operators — есть ли группа операторов (ESCALATION_CHAT_ID): без неё
@@ -173,6 +177,8 @@ class BotService:
         self.stock = stock
         # Журнал событий (journal.py); без ключа — случайный ключ процесса.
         self.journal = journal or Journal()
+        # Эксперимент S4 (experiment.py): ассистент тестовой группы; None — выключен.
+        self.test_answerer = test_answerer
         self._clock = clock
 
     def ask(
@@ -291,9 +297,15 @@ class BotService:
             len(stock.names) if stock else None,
             started,
             from_stock and stock is None,
+            self._arm(chat_id),
         )
         try:
-            result = self.answerer.answer(
+            answerer = (
+                self.test_answerer
+                if self.test_answerer is not None and record.arm == experiment.TEST
+                else self.answerer
+            )
+            result = answerer.answer(
                 question, self.store.history(chat_id), progress, stock
             )
         except DEPENDENCY_ERRORS as error:
@@ -329,6 +341,7 @@ class BotService:
             seconds=seconds,
             question=question,
             missing=answer.missing,
+            arm=record.arm,
         )
         # Ответ в истории — текстом со ссылками: по ним ассистент находит
         # рецепты для уточнений («а во втором сколько муки?»).
@@ -359,6 +372,12 @@ class BotService:
             text = f"{text}\n\n{NOT_FOUND_TWICE_TEXT}"
             buttons = [*buttons, *human_buttons("not_found_twice")]
         return Reply(text, buttons, answer_id)
+
+    def _arm(self, chat_id: int) -> str | None:
+        """Группа эксперимента по псевдониму из журнала; None — эксперимент выключен."""
+        if self.test_answerer is None:
+            return None
+        return experiment.arm(self.journal.user(chat_id))
 
     def _limited(self, chat_id: int) -> Reply | None:
         """Лимит частоты (решение 75): ответ «подождите» или None."""
@@ -404,6 +423,7 @@ class BotService:
             retrieval_seconds=round(trace.retrieval_seconds, 1) if trace else None,
             generation_seconds=round(trace.generation_seconds, 1) if trace else None,
             stock_down=record.stock_down,
+            **({"arm": record.arm} if record.arm else {}),
             **fields,
         )
 

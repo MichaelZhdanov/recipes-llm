@@ -735,6 +735,12 @@ async def run(settings: Settings) -> None:
         raise SystemExit("не задан TELEGRAM_BOT_TOKEN: токен бота — у @BotFather")
     store = Store(DATABASE)
     answerer = LazyAnswerer(settings)
+    # Эксперимент S4: второй ассистент — «модель решает» (auto); выключен по умолчанию.
+    test_answerer = (
+        LazyAnswerer(settings.model_copy(update={"answer_mode": "auto"}))
+        if settings.experiment
+        else None
+    )
     # Метрики (этап 8): /metrics для Prometheus в той же docker-сети.
     metrics = Metrics(usage=answerer.usage)
     metrics.serve()
@@ -770,6 +776,7 @@ async def run(settings: Settings) -> None:
         operators=settings.escalation_chat_id is not None,
         stock=stock,
         journal=Journal(settings.journal_key, listeners=[metrics.record]),
+        test_answerer=test_answerer,
     )
     bot = make_bot(token)
     handlers = Handlers(service, operators_chat=settings.escalation_chat_id)
@@ -788,6 +795,8 @@ async def run(settings: Settings) -> None:
         closer.cancel()
         await bot.session.close()
         answerer.close()
+        if test_answerer is not None:
+            test_answerer.close()
         pages_http.close()
         steps_http.close()
         grocy_http.close()

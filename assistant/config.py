@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     llm_effort: LlmEffort = "low"
     # Режим по умолчанию выберет сравнение always и auto в eval этапа 3.
     answer_mode: AnswerMode = "always"
+    # Эксперимент S4 (bot/experiment.py): половина пользователей — «модель
+    # решает» (auto), половина — answer_mode. Выключен (решение 87).
+    experiment: bool = False
     # Проверка ответа Sonnet перед отправкой и одна доработка (review.py).
     # Выключена: API Anthropic закрыт, а проверка GLM с узкой рубрикой зря
     # отправляла на доработку 15 % верных утверждений
