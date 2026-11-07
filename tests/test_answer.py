@@ -261,11 +261,26 @@ def test_prompt_has_system_rules_recipes_and_question(retriever: Retriever) -> N
     ask(retriever, llm, question="курица с рисом")
 
     system, user = llm.calls[0]
-    assert PROMPT_VERSION == "recipes_v5"
+    assert PROMPT_VERSION == "recipes_v6"
     assert system == {"role": "system", "content": load_prompt(PROMPT_VERSION)}
     assert user["role"] == "user"
     assert '<recipe id="1">\nКурица с рисом в духовке\n' in user["content"]
     assert user["content"].endswith("Вопрос пользователя: курица с рисом")
+
+
+def test_pantry_list_is_not_a_required_set_of_ingredients() -> None:
+    """recipes_v5 читала «вот что есть в холодильнике — из этого» как «только из
+    перечисленного» и отказывала: в каждом рецепте был лук или сметана
+    (2026-11-07). v6 различает «из X» и перечень того, что есть дома."""
+    prompt = load_prompt("recipes_v6")
+
+    assert (
+        "«из X», «с X», «есть X — что приготовить» — X есть в строках рецепта" in prompt
+    )
+    assert "перечень того, что есть дома" in prompt
+    assert "все продукты перечня в одном рецепте не нужны" in prompt
+    # Что докупить — только из строк рецепта, без выдумки.
+    assert "назови их по строкам рецепта" in prompt
 
 
 def test_recipe_cannot_close_its_block(retriever: Retriever) -> None:
