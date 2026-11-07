@@ -22,7 +22,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # Ключи API и токен бота выдают внешние сервисы, а секреты Grocy — наши:
 # ключ ассистента и пароль admin создаёт make grocy-seed по этим значениям.
 # На сервере они генерируются там же и с него не уходят.
-GENERATED_SECRETS: dict[str, int] = {"GROCY_API_KEY": 32, "GROCY_ADMIN_PASSWORD": 24}
+GENERATED_SECRETS: dict[str, int] = {
+    "GROCY_API_KEY": 32,
+    "GROCY_ADMIN_PASSWORD": 24,
+    # Ключ псевдонимов журнала бота: с сервера не уходит.
+    "JOURNAL_KEY": 32,
+}
 
 
 def _secret(key: str) -> str:

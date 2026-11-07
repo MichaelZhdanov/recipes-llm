@@ -11,6 +11,7 @@ import logging
 
 from pydantic import SecretStr
 
+from assistant.bot.journal import LOGGER as JOURNAL
 from assistant.config import Settings
 
 FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -41,8 +42,17 @@ class RedactingFormatter(logging.Formatter):
 
 
 def setup_logging(settings: Settings) -> None:
+    secrets = secrets_of(settings)
     handler = logging.StreamHandler()
-    handler.setFormatter(RedactingFormatter(secrets_of(settings)))
+    handler.setFormatter(RedactingFormatter(secrets))
     logging.basicConfig(level=settings.log_level, handlers=[handler], force=True)
+    # Журнал (journal.py) — чистые JSON-строки, без времени и уровня в начале,
+    # и всегда, даже при LOG_LEVEL=WARNING; секреты вычищаются так же.
+    journal = logging.StreamHandler()
+    journal.setFormatter(RedactingFormatter(secrets, fmt="%(message)s"))
+    journal_logger = logging.getLogger(JOURNAL)
+    journal_logger.handlers = [journal]
+    journal_logger.setLevel(logging.INFO)
+    journal_logger.propagate = False
     # httpx2 пишет на INFO каждый запрос с адресом — лишний шум в логе.
     logging.getLogger("httpx2").setLevel(logging.WARNING)

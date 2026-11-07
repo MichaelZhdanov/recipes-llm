@@ -99,4 +99,7 @@ class Settings(BaseSettings):
     # без прав; его заводит make grocy-seed. Пусто — интеграции нет.
     grocy_api_url: str = "http://localhost:9283/api"
     grocy_api_key: SecretStr = SecretStr("")
+    # Ключ псевдонимов в журнале бота (HMAC от chat_id, bot/journal.py);
+    # генерирует scripts/init_env.py. Пусто — случайный ключ процесса.
+    journal_key: SecretStr = SecretStr("")
     log_level: LogLevel = "INFO"

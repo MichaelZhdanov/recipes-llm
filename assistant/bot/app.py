@@ -76,6 +76,7 @@ from assistant.bot.format import (
     status_text,
 )
 from assistant.bot.health import HEARTBEAT, HEARTBEAT_EVERY
+from assistant.bot.journal import Journal
 from assistant.bot.pages import PageChecker
 from assistant.bot.recipe_page import fetch_page, fetch_photo
 from assistant.bot.service import (
@@ -757,6 +758,7 @@ async def run(settings: Settings) -> None:
         gigachat_note=settings.llm_provider == "gigachat",
         operators=settings.escalation_chat_id is not None,
         stock=stock,
+        journal=Journal(settings.journal_key),
     )
     bot = make_bot(token)
     handlers = Handlers(service, operators_chat=settings.escalation_chat_id)

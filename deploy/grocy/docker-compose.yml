@@ -11,6 +11,12 @@ services:
     # сборки, а не 4.7.1 — тот пересобирается каждую неделю.
     image: lscr.io/linuxserver/grocy:v4.7.1-ls346
     restart: unless-stopped
+    # Логи веб-сервера Grocy: json-file по умолчанию не ограничен.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     ports:
       # Веб-интерфейс Grocy — только для этой машины.
       - "127.0.0.1:9283:80"

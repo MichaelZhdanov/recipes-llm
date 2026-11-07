@@ -12,6 +12,7 @@
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -62,17 +63,35 @@ from assistant.bot.format import (
     steps_html,
     steps_refused_html,
 )
+from assistant.bot.journal import Journal, question_text, search_fields
 from assistant.bot.pages import PageChecker
 from assistant.bot.recipe_page import RecipePage
 from assistant.bot.store import SavedSteps, Source, Store, Ticket, Vote, VoteReason
 from assistant.generation import steps as steps_module
-from assistant.generation.answer import Progress, StockRequest, render_markdown
+from assistant.generation.answer import (
+    AnswerResult,
+    Progress,
+    StockRequest,
+    render_markdown,
+)
 from assistant.generation.steps import Steps
 from assistant.grocy.client import GrocyError, StockItem
 from assistant.indexing.chunks import Chunk
 from assistant.service import DEPENDENCY_ERRORS, QuestionAnswerer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Record:
+    """Что известно о вопросе до ответа — для журнала."""
+
+    chat_id: int
+    request_id: str
+    question: str
+    # all — по всем рецептам; stock — из того, что есть; near — «поискать ещё».
+    source: str
+    stock_items: int | None
 
 
 @dataclass(frozen=True)
@@ -129,6 +148,7 @@ class BotService:
         gigachat_note: bool = False,
         operators: bool = False,
         stock: StockReader | None = None,
+        journal: Journal | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """operators — есть ли группа операторов (ESCALATION_CHAT_ID): без неё
@@ -144,6 +164,8 @@ class BotService:
         self.gigachat_note = gigachat_note
         self.operators = operators
         self.stock = stock
+        # Журнал событий (journal.py); без ключа — случайный ключ процесса.
+        self.journal = journal or Journal()
         self._clock = clock
 
     def ask(
@@ -195,7 +217,7 @@ class BotService:
         if self.store.grocy_enabled(chat_id):
             return GROCY_ALREADY_ON_TEXT
         self.store.set_grocy(chat_id, True)
-        logger.info("Grocy у чата подключён")
+        self.journal.event("grocy", chat_id, enabled=True)
         return GROCY_ON_TEXT
 
     def disconnect_grocy(self, chat_id: int) -> str:
@@ -203,7 +225,7 @@ class BotService:
         if self.stock is None or not self.store.grocy_enabled(chat_id):
             return GROCY_ALREADY_OFF_TEXT
         self.store.set_grocy(chat_id, False)
-        logger.info("Grocy у чата отключён")
+        self.journal.event("grocy", chat_id, enabled=False)
         return GROCY_OFF_TEXT
 
     def _stock_request(self, near: bool) -> StockRequest | None:
@@ -228,6 +250,13 @@ class BotService:
         started = self._clock()
         stock = self._stock_request(near) if from_stock else None
         note = STOCK_DOWN_TEXT if from_stock and stock is None else ""
+        record = Record(
+            chat_id,
+            uuid.uuid4().hex[:12],
+            question,
+            ("near" if near else "stock") if stock else "all",
+            len(stock.names) if stock else None,
+        )
         try:
             result = self.answerer.answer(
                 question, self.store.history(chat_id), progress, stock
@@ -236,10 +265,14 @@ class BotService:
             # Текст ошибки — код HTTP и ответ API, без вопроса пользователя;
             # секреты из лога вычищает форматтер (logs.py).
             logger.error("ассистент не ответил: %s: %s", type(error).__name__, error)
+            self._journal(record, None, "error", error=type(error).__name__)
             return FAILURE_REPLY if self.operators else ERROR_REPLY
         answer = result.answer
         if answer.escalation is not None:
             # Повод из разбора вопроса: искать и отвечать не нужно (решение 65).
+            self._journal(
+                record, result, "escalate", escalation=answer.escalation.reason
+            )
             self.store.add_turn(chat_id, question, HANDOFF_TEXT)
             return self.handoff(
                 chat_id, answer.escalation.reason, answer.escalation.summary
@@ -259,13 +292,14 @@ class BotService:
         # Ответ в истории — текстом со ссылками: по ним ассистент находит
         # рецепты для уточнений («а во втором сколько муки?»).
         self.store.add_turn(chat_id, question, render_markdown(answer))
-        logger.info(
-            "ответ %s: %s%s%s за %.1f с",
-            answer_id,
+        self._journal(
+            record,
+            result,
             answer.status,
-            f" ({answer.reason})" if answer.reason else "",
-            " по складу" + (", расширенный" if near else "") if stock else "",
-            seconds,
+            answer_id=answer_id,
+            reason=answer.reason,
+            allergy=answer.allergy,
+            seconds=round(seconds, 1),
         )
         text = answer_html(answer, alive, gigachat_note=self.gigachat_note)
         if note:
@@ -286,6 +320,31 @@ class BotService:
             buttons = [*buttons, *human_buttons("not_found_twice")]
         return Reply(text, buttons, answer_id)
 
+    def _journal(
+        self,
+        record: Record,
+        result: AnswerResult | None,
+        status: str,
+        **fields: object,
+    ) -> None:
+        """Событие «ответ» в журнале: вопрос, разбор, найденное и показанное."""
+        trace = result.trace if result else None
+        self.journal.event(
+            "answer",
+            record.chat_id,
+            request_id=record.request_id,
+            question=question_text(record.question),
+            source=record.source,
+            stock_items=record.stock_items,
+            search=search_fields(trace.args if trace else None),
+            found=[hit.chunk.recipe_id for hit in trace.hits] if trace else [],
+            shown=[link.recipe_id for link in result.answer.sources] if result else [],
+            status=status,
+            model=result.answer.model if result else None,
+            prompt=result.answer.prompt_version if result else None,
+            **fields,
+        )
+
     def reset(self, chat_id: int) -> str:
         self.store.reset(chat_id)
         return NEW_TEXT
@@ -296,7 +355,7 @@ class BotService:
         """Подсказка на кнопке и, после 👎, вопрос «что не так?»."""
         if not self.store.vote(answer_id, chat_id, vote):
             return GONE_TEXT, None
-        logger.info("оценка ответа %s: %s", answer_id, vote)
+        self.journal.event("vote", chat_id, answer_id=answer_id, vote=vote)
         if vote == "down":
             return THANKS_TEXT, Reply(WHAT_WRONG_TEXT, reason_buttons(answer_id))
         return THANKS_TEXT, None
@@ -305,7 +364,7 @@ class BotService:
         """Причина 👎; «не получилось» — предложить повара."""
         if not self.store.vote_reason(answer_id, chat_id, reason):
             return Reply(GONE_TEXT)
-        logger.info("причина 👎 ответа %s: %s", answer_id, reason)
+        self.journal.event("vote", chat_id, answer_id=answer_id, reason=reason)
         if reason == "failed" and self.operators:
             return Reply(FAILED_TEXT, human_buttons("feedback"))
         return Reply(THANKS_TEXT)
@@ -332,7 +391,9 @@ class BotService:
     def open_ticket(self, chat_id: int, handoff: Handoff) -> tuple[Ticket, str]:
         """Обращение в базе и карточка для операторов (повод, суть, реплики)."""
         ticket = self.store.open_ticket(chat_id, handoff.reason, handoff.summary)
-        logger.info("обращение %s: %s", ticket.id, handoff.reason)
+        self.journal.event(
+            "ticket_opened", chat_id, ticket=ticket.id, reason=handoff.reason
+        )
         card = card_html(
             ticket.id, handoff.reason, handoff.summary, self.store.history(chat_id)
         )
@@ -348,7 +409,7 @@ class BotService:
         ticket = self.store.open_ticket_of(chat_id)
         if ticket is None or not self.store.close_ticket(ticket.id):
             return Reply(NOT_WITH_HUMAN_TEXT), None
-        logger.info("обращение %s закрыл пользователь", ticket.id)
+        self.journal.event("ticket_closed", chat_id, ticket=ticket.id, by="user")
         return Reply(BACK_TO_BOT_TEXT, rate_buttons(ticket.id)), ticket
 
     def close_by_operator(self, thread_id: int) -> tuple[Reply, Ticket] | None:
@@ -356,7 +417,9 @@ class BotService:
         ticket = self.store.ticket_of_thread(thread_id)
         if ticket is None or not self.store.close_ticket(ticket.id):
             return None
-        logger.info("обращение %s закрыл оператор", ticket.id)
+        self.journal.event(
+            "ticket_closed", ticket.chat_id, ticket=ticket.id, by="operator"
+        )
         return Reply(CLOSED_BY_OPERATOR_TEXT, rate_buttons(ticket.id)), ticket
 
     def expire_idle(self, idle: float = TICKET_IDLE) -> list[tuple[Reply, Ticket]]:
@@ -364,14 +427,16 @@ class BotService:
         expired = []
         for ticket in self.store.idle_tickets(idle):
             if self.store.close_ticket(ticket.id):
-                logger.info("обращение %s закрыто: нет сообщений", ticket.id)
+                self.journal.event(
+                    "ticket_closed", ticket.chat_id, ticket=ticket.id, by="idle"
+                )
                 expired.append((Reply(EXPIRED_TEXT, rate_buttons(ticket.id)), ticket))
         return expired
 
     def rate(self, chat_id: int, ticket_id: int, vote: Vote) -> str:
         if not self.store.vote_ticket(ticket_id, chat_id, vote):
             return GONE_TEXT
-        logger.info("оценка обращения %s: %s", ticket_id, vote)
+        self.journal.event("ticket_vote", chat_id, ticket=ticket_id, vote=vote)
         return THANKS_TEXT
 
     def steps(self, chat_id: int, answer_id: int, recipe_id: int) -> Reply:

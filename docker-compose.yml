@@ -8,6 +8,14 @@
 # ассистент и бот видят его через внешнюю docker-сеть grocy.
 name: recipes-llm
 
+# Логи контейнеров: json-file по умолчанию не ограничен и съел бы диск сервера
+# (журнал бота — строка на каждый вопрос). До 5 файлов по 10 МБ на сервис.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
 # Все поля assistant/config.py: API и бот — один и тот же ассистент. Пустое
 # значение означает значение по умолчанию из config.py.
 x-settings: &settings
@@ -39,12 +47,14 @@ x-settings: &settings
   # Адрес Grocy внутри docker-сети; ключ — пользователя Grocy без прав.
   GROCY_API_URL: http://grocy/api
   GROCY_API_KEY: ${GROCY_API_KEY:-}
+  JOURNAL_KEY: ${JOURNAL_KEY:-}
   LOG_LEVEL: ${LOG_LEVEL:-}
 
 services:
   qdrant:
     image: docker.io/qdrant/qdrant:v1.20.0
     restart: unless-stopped
+    logging: *logging
     ports:
       - "127.0.0.1:6333:6333"
     volumes:
@@ -64,6 +74,7 @@ services:
     build: .
     profiles: [api]
     restart: unless-stopped
+    logging: *logging
     ports:
       # HTTP API (/health, /ask) только для этой машины; порт меняется в .env
       # (ASSISTANT_PORT), если 8080 занят.
@@ -76,6 +87,7 @@ services:
     # Нужен TELEGRAM_BOT_TOKEN: без него бот сразу завершается.
     profiles: [bot]
     restart: unless-stopped
+    logging: *logging
     command: ["/app/.venv/bin/python", "-m", "assistant.bot"]
     environment: *settings
     networks: [default, grocy]
