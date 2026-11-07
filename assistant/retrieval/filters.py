@@ -6,7 +6,11 @@
 
 - `include` — группы альтернатив: в рецепте хотя бы одно имя из **каждой**
   группы. «Курица и рис» — `[[курица, филе куриное, …], [рис]]`;
-- `exclude` — ни одного из этих имён.
+- `exclude` — ни одного из этих имён;
+- `only` — все ингредиенты рецепта — из этого списка (подбор «из того, что
+  есть», этап 6): `must_not` + `MatchExcept` — «нет ингредиента вне списка».
+  Для массива Qdrant проверяет каждый элемент; проверено на полном индексе:
+  у 200 найденных рецептов нарушений 0.
 
 Имена — как в поле `ingredients` точки: в нижнем регистре, как их привёл
 сайт («лук репчатый», «филе куриное»). Сопоставлением слов пользователя с
@@ -31,6 +35,7 @@ def _names(items: Iterable[str]) -> tuple[str, ...]:
 class IngredientFilter:
     include: tuple[tuple[str, ...], ...] = ()
     exclude: tuple[str, ...] = ()
+    only: tuple[str, ...] = ()
 
     @classmethod
     def of(
@@ -45,7 +50,7 @@ class IngredientFilter:
         )
 
     def __bool__(self) -> bool:
-        return bool(self.include or self.exclude)
+        return bool(self.include or self.exclude or self.only)
 
     def to_qdrant(self) -> models.Filter | None:
         if not self:
@@ -63,4 +68,8 @@ class IngredientFilter:
             if self.exclude
             else []
         )
+        if self.only:
+            # «Есть ингредиент вне списка» — такой рецепт не подходит.
+            outside = models.MatchExcept(**{"except": list(self.only)})
+            must_not.append(models.FieldCondition(key=FIELD, match=outside))
         return models.Filter(must=must or None, must_not=must_not or None)
