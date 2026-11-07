@@ -57,7 +57,12 @@ from assistant.http import request_with_retries
 TIMEOUT = 180.0
 # Модели, которые принимают json_schema, но не соблюдают её (проверено 2026-11-06).
 SCHEMA_IN_PROMPT = frozenset({"deepseek-ai/DeepSeek-V4-Flash"})
-REASONING_TOKENS = 8000
+# Запас на рассуждения сверх max_tokens. 8 000 не хватало: на перечне «что есть
+# дома» GLM-5.1 low рассуждает до 15 000 токенов, и ответ обрывался (finish
+# length, 5 вызовов из 24 в evals/reports/2026-11-07-pantry.md); с 16 000 те же
+# вопросы отвечают. Это верхняя граница, а не расход. ≈ 125 токенов/с — полный
+# запас ≈ 145 с, в TIMEOUT укладывается.
+REASONING_TOKENS = 16000
 # ₽ за 1M токенов (вход, выход), каталог cloud.ru `GET /v1/models`, 2026-11-06.
 PRICE_RUB_PER_MTOK = {
     "deepseek-ai/DeepSeek-V4-Flash": (43.30, 86.58),

@@ -82,6 +82,8 @@ def test_schema_goes_in_openai_format_and_reasoning_stays_out_of_the_answer() ->
         "json_schema": {"name": "answer", "schema": SCHEMA, "strict": True},
     }
     assert body["max_tokens"] == 2000 + REASONING_TOKENS
+    # 8 000 обрывало ответы на перечнях «что есть дома» (pantry, 2026-11-07).
+    assert REASONING_TOKENS == 16000
     assert fake.requests[-1].headers["Authorization"] == "Bearer secret"
     assert completion.content == '{"supported": false}'
     assert completion.finish_reason == "stop"
