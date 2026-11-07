@@ -1,0 +1,217 @@
+- id: stock-001
+  category: stock
+  question: "че приготовить на завтрак, есть что-нибудь"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Завтрак: омлет, яичница, овсянка, гречневая каша, творожное. Яйца, молоко, масло, овсяные хлопья, гречка и творог дома есть, целиком из склада найдётся много. Не подходят ужины с мясом и супы."
+
+- id: stock-002
+  category: stock
+  question: "Подскажи что-нибудь на ужин"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Ужин: мясо, рыба, гарнир, запеканка. Из склада собирается (говядина, фарш, картофель, лосось, гречка, спагетти), целиком найдётся. Завтраки и сладкое не по смыслу."
+
+- id: stock-003
+  category: stock
+  question: "хочу перекусить чем-нибудь небольшим"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Перекус: бутерброд, закуска, салат из фруктов, творожные шарики, тосты. Из склада вероятно найдётся что-то простое; тяжёлые горячие блюда и большие торты не подходят."
+
+- id: stock-004
+  category: stock
+  question: "нужно быстро приготовить, минут за 15, времени нет"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "На скорую руку: омлет, жареные макароны, яичница, быстрый салат. Из склада найдётся (яйца, макароны, лук). Длинные блюда (холодец, запекать часами, тесто с расстойкой) не подходят."
+
+- id: stock-005
+  category: stock
+  question: "Хочется чего-нибудь лёгкого, не тяжёлого"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Лёгкое: овощные и фруктовые салаты, рыба на пару, лёгкие закуски. Из склада возможно (шпинат, руккола, огурец, помидоры черри, авокадо, фрукты). Жирное мясо, жареное во фритюре, торты не подходят."
+
+- id: stock-006
+  category: stock
+  question: "что к чаю подать, придут гости"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "К чаю: выпечка, печенье, десерты, сладости. Муки и сахара дома нет, поэтому целиком из склада найдутся разве что десерты из фруктов, мёда, орехов, творога; скорее всего нужен расширенный поиск (не хватает 1-4 продуктов, например муки или сахара). Закуски и мясные блюда не по смыслу."
+
+- id: stock-007
+  category: stock
+  question: "какой суп можно сварить"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Суп. Картофель, лук, морковь, говядина, фасоль, нут дома есть, но супы обычно требуют ещё лавровый лист, зелень, специи, томатную пасту. Целиком из склада найдётся мало, ожидается расширенный поиск (не хватает 1-4). Вторые блюда и салаты не подходят."
+
+- id: stock-008
+  category: stock
+  question: "сделй мне салатк какойто"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Салат. Из склада собирается: огурец, помидоры черри, руккола, шпинат, авокадо, фрукты, яйцо, тунец, нут, йогурт и сметана для заправки. Целиком найдётся. Супы и горячее не подходят."
+
+- id: stock-009
+  category: stock
+  question: "нужен гарнир к мясу"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Гарнир: картофель, гречка, рис, киноа, макароны, овощи. Всё это дома есть, целиком из склада найдётся. Салаты-закуски и сладкое не подходят."
+
+- id: stock-010
+  category: stock
+  question: "какойто десерт хочется, сладенького"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Десерт или выпечка. Целиком из склада возможны фруктовые десерты, творог с мёдом, банан с шоколадом; пироги, печенье и кексы без муки и сахара не соберутся, там ожидается расширенный поиск (не хватает 1-4). Несладкие блюда не подходят."
+
+- id: stock-011
+  category: stock
+  question: "хочу чтонибудь с рыбой"
+  style: typo
+  turns: []
+  expected_behavior: answer
+  expected_include: [[семга, форель, лосось, треска]]
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Рыба из имеющейся: семга, форель, лосось, треска (тунец консервированный тоже допустим по смыслу, но в группу не включён). Рецепт с другой рыбой, которой дома нет (щука, минтай), не подходит. Целиком из склада найдётся мало (чаще нужны лимон, зелень, мука), вероятен расширенный поиск."
+
+- id: stock-012
+  category: stock
+  question: "дай что-нить с курицей, но лук не надо, не ем его"
+  style: colloquial
+  turns: []
+  expected_behavior: answer
+  expected_include: [[бедро куриное, курица, филе куриное, грудка куриная]]
+  expected_exclude: [лук репчатый]
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Курица без лука. Дома только бедро куриное, но по смыслу годится любая курица. Рецепты с луком репчатым не подходят. Целиком из склада с одним бедром и без лука найдётся мало, скорее придётся докупать 1-4 продукта."
+
+- id: stock-013
+  category: stock
+  question: "Что-нибудь без молочного, у меня непереносимость лактозы"
+  style: plain
+  turns: []
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: [молоко, сметана, творог, йогурт, масло сливочное, сыр творожный, пармезан, сыр полутвердый]
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Без молочных продуктов (молоко, сметана, творог, йогурт, сливочное масло, сыры). Растительное молоко миндальное допустимо. Мяса, рыбы, овощей и круп дома достаточно, целиком из склада найдётся. Рецепты с любым молочным не подходят. Фраза про лактозу не медицинский вопрос о самочувствии, а условие рецепта."
+
+- id: stock-014
+  category: stock
+  question: "а без яиц?"
+  style: colloquial
+  turns:
+    - role: user
+      text: "что приготовить на завтрак"
+    - role: assistant
+      text: "Вот что нашёл:\n1. Французский омлет — https://www.povarenok.ru/recipes/show/160700/\n2. Омлет со шпинатом — https://www.povarenok.ru/recipes/show/125879/"
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: [яйцо куриное, яйцо перепелиное]
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Уточнение: завтрак без яиц (куриных и перепелиных). Подходят каши (овсяная, гречневая), творожное, йогурт с фруктами. Омлеты из прошлого ответа и любые рецепты с яйцом не подходят. Из склада найдётся (хлопья, гречка, творог, фрукты)."
+
+- id: stock-015
+  category: stock
+  question: "а что-нибудь посытнее?"
+  style: plain
+  turns:
+    - role: user
+      text: "что-нибудь лёгкое на ужин"
+    - role: assistant
+      text: "Вот что нашёл:\n1. Салат «Оранжевое утро» — https://www.povarenok.ru/recipes/show/25217/\n2. Просто шпинат — https://www.povarenok.ru/recipes/show/39946/"
+  expected_behavior: answer
+  expected_include: []
+  expected_exclude: []
+  expected_name: []
+  escalation_reason: null
+  must_include: []
+  must_not_include: []
+  notes: "Уточнение: ужин, но сытнее лёгких салатов. Подходят мясо, картофельная запеканка, котлеты, гречка с мясом, паста. Из склада найдётся (говядина, фарш, картофель, гречка, спагетти). Лёгкие салаты и овощные закуски не подходят."

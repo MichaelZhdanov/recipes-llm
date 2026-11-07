@@ -262,3 +262,13 @@ def test_retired_case_is_skipped_but_stays_in_the_file() -> None:
     assert set(RETIRED_CASES) <= everything
     assert not set(RETIRED_CASES) & loaded
     assert everything - loaded == set(RETIRED_CASES)
+
+
+def test_stock_cases_load_separately_from_the_main_set() -> None:
+    from evals.dataset import load_cases, load_stock_cases
+
+    stock = load_stock_cases()
+
+    assert stock and all(c.category == "stock" for c in stock)
+    # Основной прогон их не видит: у них свой замер по демо-складу.
+    assert not any(c.category == "stock" for c in load_cases())

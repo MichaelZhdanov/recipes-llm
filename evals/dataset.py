@@ -23,6 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DATASET_DIR = Path(__file__).parent / "dataset"
 HOLDOUT_DIR = DATASET_DIR / "holdout"
+# Вопросы в режиме «из того, что есть» (этап 6): основной прогон их не читает —
+# у них свой замер по демо-складу (evals/stock_eval.py).
+STOCK_DIR = DATASET_DIR / "stock"
 CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
 CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 RELEVANCE_CANARIES_FILE = DATASET_DIR / "judge" / "relevance_canaries.yaml"
@@ -39,6 +42,8 @@ Category = Literal[
     "escalation",
     "security",
     "follow_up",
+    # «Из того, что есть» — только в evals/dataset/stock/ (этап 6).
+    "stock",
 ]
 Behavior = Literal["answer", "abstain", "escalate", "no_search"]
 # Поводы передать разговор человеку — правила эскалации из PLAN.md (F5).
@@ -200,6 +205,11 @@ def _check_unique(ids: list[str]) -> None:
     repeated = sorted({item for item in ids if ids.count(item) > 1})
     if repeated:
         raise ValueError(f"повторяются id: {repeated}")
+
+
+def load_stock_cases(directory: Path = STOCK_DIR) -> list[Case]:
+    """Вопросы «из того, что есть»: отдельный каталог, без устаревших."""
+    return load_cases(directory) if directory.exists() else []
 
 
 # Кейсы, которые устарели по решению автора: как и канарейки, из файла не
