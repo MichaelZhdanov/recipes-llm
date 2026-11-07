@@ -26,6 +26,7 @@ HOLDOUT_DIR = DATASET_DIR / "holdout"
 # Вопросы в режиме «из того, что есть» (этап 6): основной прогон их не читает —
 # у них свой замер по демо-складу (evals/stock_eval.py).
 STOCK_DIR = DATASET_DIR / "stock"
+PANTRY_DIR = DATASET_DIR / "pantry"
 CANARIES_FILE = DATASET_DIR / "judge" / "canaries.yaml"
 CLARITY_CANARIES_FILE = DATASET_DIR / "judge" / "clarity_canaries.yaml"
 RELEVANCE_CANARIES_FILE = DATASET_DIR / "judge" / "relevance_canaries.yaml"
@@ -44,6 +45,9 @@ Category = Literal[
     "follow_up",
     # «Из того, что есть» — только в evals/dataset/stock/ (этап 6).
     "stock",
+    # Перечень «что есть в холодильнике» в самом вопросе — только в
+    # evals/dataset/pantry/ (recipes_v6).
+    "pantry",
 ]
 Behavior = Literal["answer", "abstain", "escalate", "no_search"]
 # Поводы передать разговор человеку — правила эскалации из PLAN.md (F5).
@@ -209,6 +213,11 @@ def _check_unique(ids: list[str]) -> None:
 
 def load_stock_cases(directory: Path = STOCK_DIR) -> list[Case]:
     """Вопросы «из того, что есть»: отдельный каталог, без устаревших."""
+    return load_cases(directory) if directory.exists() else []
+
+
+def load_pantry_cases(directory: Path = PANTRY_DIR) -> list[Case]:
+    """Вопросы «вот что есть дома — что приготовить»: отдельный каталог."""
     return load_cases(directory) if directory.exists() else []
 
 
