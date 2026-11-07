@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down data index index-if-needed index-check grocy-up grocy-seed ask search eval gaps test alerts-test trivy lint format
+.PHONY: help up down data index index-if-needed index-check index-download index-upload index-export grocy-up grocy-seed ask search eval gaps test alerts-test trivy lint format
 
 # Тот же образ, что в Dockerfile. Скрипты для запуска стека выполняются в нём,
 # а не хостовым python3: на разных машинах (и даже в разных shell) это разные версии.
@@ -52,9 +52,13 @@ data: .env ## скачать датасет на ревизии DATASET_REVISION
 
 # YES=1 — подтвердить сборку дороже 50 ₽; ARGS — прочие флаги, например
 # ARGS="--sample 10000" для сравнения моделей или ARGS=--no-quantization.
+# После сборки индекс всего датасета сам уходит снимком в релиз GitHub (нужен gh с
+# правом записи); выборка не выкладывается. Минус перед командой: не вышло
+# выложить (нет gh или прав — например, у проверяющего) — сборка всё равно удалась.
 index: .env ## построить индекс заново: make index [YES=1] [ARGS="--sample 10000"]
 	docker compose up -d --wait qdrant
 	$(RUN) index $(if $(YES),--yes) $(ARGS)
+	-$(RUN) index --upload
 
 # Для деплоя: ничего не делает, если индекс уже для этой ревизии и модели.
 index-if-needed: .env ## построить индекс, только если его нет или он не тот
@@ -64,6 +68,21 @@ index-if-needed: .env ## построить индекс, только если 
 index-check: .env ## индекс подходит к настройкам? ничего не строит; код 3 — нужна сборка
 	docker compose up -d --wait qdrant
 	$(RUN) index --check
+
+# Обычный способ получить индекс: снимок из релиза index на GitHub, бесплатно.
+# Индекс уже тот — ничего не делает; снимок уже в index/ — не качает заново.
+index-download: .env ## индекс из снимка в релизе GitHub (бесплатно); если индекс уже тот — ничего
+	docker compose up -d --wait qdrant
+	$(RUN) index --download
+
+index-upload: .env ## выложить индекс всего датасета в релиз GitHub (нужен gh); уже там — ничего
+	docker compose up -d --wait qdrant
+	$(RUN) index --upload
+
+# Деплой после пересборки на сервере: снимок — в index/, выкладывает раннер CI.
+index-export: .env ## снять снимок индекса в index/ для выкладки из CI (деплой)
+	docker compose up -d --wait qdrant
+	$(RUN) index --export
 
 grocy-up: ## склад Grocy — свой compose-проект в GROCY_DIR (на сервере /opt/grocy)
 	@test -n "$(GROCY_DIR)" || { echo 'GROCY_DIR не задан (.env): склад Grocy не нужен'; exit 2; }

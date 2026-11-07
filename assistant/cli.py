@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 
@@ -31,6 +32,11 @@ from assistant.indexing.dataset import (
     known_sha256,
     read_dataset,
 )
+from assistant.indexing.snapshot import (
+    SnapshotError,
+    download_index,
+    upload_index,
+)
 from assistant.retrieval.embeddings import (
     EmbeddingError,
     embedding_model,
@@ -50,6 +56,7 @@ from assistant.tools.search_recipes import SearchArgs, SearchPlanner
 # Ошибки, о которых пользователю достаточно одной строки без трассировки.
 _EXPECTED_ERRORS = (
     DatasetError,
+    SnapshotError,
     EmbeddingError,
     LlmError,
     IndexMissingError,
@@ -117,6 +124,48 @@ def index_check(
         return 0
     _log(f"нужна сборка индекса: {reason}")
     return INDEX_OUTDATED
+
+
+def index_download(
+    store: VectorStore,
+    settings: Settings,
+    *,
+    sample: int | None,
+    seed: int,
+    http: httpx2.Client,
+) -> int:
+    """index --download: индекс из снимка в релизе GitHub.
+
+    Идемпотентно: индекс в Qdrant уже подходит к настройкам — ничего не делает
+    и в сеть не ходит. Коды: 0 — индекс на месте, INDEX_OUTDATED — снимка для
+    этих настроек в релизе нет, нужна сборка; ошибка сети — 1.
+    """
+    model = embedding_model(settings)
+    reason = rebuild_reason(
+        store, ref=settings.dataset_revision, model=model, sample=sample, seed=seed
+    )
+    if reason is None:
+        print("индекс уже подходит к настройкам — скачивать нечего")
+        return 0
+    _log(f"индекс — из релиза GitHub: {reason}")
+    if not download_index(
+        store,
+        ref=settings.dataset_revision,
+        model=model,
+        sample=sample,
+        seed=seed,
+        http=http,
+        qdrant_url=settings.qdrant_url,
+        say=_log,
+    ):
+        _log("нужна сборка индекса: make index (весь датасет — ≈ 200 ₽ и около часа)")
+        return INDEX_OUTDATED
+    print(f"индекс из релиза: {store.active()}, рецептов {store.count()}")
+    return 0
+
+
+def _gh(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(list(args), capture_output=True, text=True, check=False)
 
 
 def _index(
@@ -282,6 +331,40 @@ def _ask(settings: Settings, question: str, as_json: bool) -> int:
     return 0
 
 
+def _index_command(args: argparse.Namespace, settings: Settings) -> int:
+    """Ветка index: скачать, выложить, проверить или построить."""
+    sample = args.sample if args.sample is not None else settings.index_sample
+    if args.download or args.upload or args.export or args.check:
+        store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
+        if args.check:
+            return index_check(store, settings, sample=sample, seed=args.seed)
+        with httpx2.Client(timeout=60) as http:
+            if args.download:
+                return index_download(
+                    store, settings, sample=sample, seed=args.seed, http=http
+                )
+            print(
+                upload_index(
+                    store,
+                    qdrant_url=settings.qdrant_url,
+                    http=http,
+                    run=_gh,
+                    publish_now=args.upload,
+                    say=_log,
+                )
+            )
+            return 0
+    return _index(
+        settings,
+        if_needed=args.if_needed,
+        sample=sample,
+        seed=args.seed,
+        yes=args.yes,
+        quantization=not args.no_quantization,
+        resume=args.resume,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m assistant.cli", description=__doc__
@@ -298,6 +381,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--check",
         action="store_true",
         help=f"только проверить: 0 — индекс подходит, {INDEX_OUTDATED} — нужна сборка",
+    )
+    index.add_argument(
+        "--download",
+        action="store_true",
+        help="индекс из снимка в релизе GitHub (бесплатно); индекс уже тот — ничего",
+    )
+    index.add_argument(
+        "--upload",
+        action="store_true",
+        help="индекс всего датасета — снимком в релиз GitHub (нужен gh с правом записи)",
+    )
+    index.add_argument(
+        "--export",
+        action="store_true",
+        help="только снять снимок в index/ для выкладки раннером CI (деплой)",
     )
     index.add_argument(
         "--sample",
@@ -340,28 +438,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "data":
             return _data(settings)
-        if args.command == "index" and args.check:
-            store = VectorStore(QdrantClient(url=settings.qdrant_url, timeout=60))
-            return index_check(
-                store,
-                settings,
-                sample=args.sample
-                if args.sample is not None
-                else settings.index_sample,
-                seed=args.seed,
-            )
         if args.command == "index":
-            return _index(
-                settings,
-                if_needed=args.if_needed,
-                sample=args.sample
-                if args.sample is not None
-                else settings.index_sample,
-                seed=args.seed,
-                yes=args.yes,
-                quantization=not args.no_quantization,
-                resume=args.resume,
-            )
+            return _index_command(args, settings)
         if args.command == "ask":
             return _ask(settings, args.question, args.json)
         if args.command == "search":
